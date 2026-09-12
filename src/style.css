@@ -1,0 +1,79 @@
+/**
+ * 全局字体栈（唯一真相）：三套字体各司其职，全站只允许引用这三个变量，
+ * 禁止在组件里手写 font-family 链。
+ *
+ * - --font-sans     正文/界面（Inter + 中文黑体）
+ * - --font-display  展示数字/大标题（Space Grotesk，回退到 sans）
+ * - --font-mono     数据/标签/代码（JetBrains Mono；中文回退与 sans 一致，
+ *                   保证 mono 上下文里的中文字形与正文统一）
+ *
+ * naive-ui 的 themeOverrides（src/theme.ts）同样引用这些变量。
+ */
+:root {
+  --font-sans:
+    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-display: "Space Grotesk", var(--font-sans);
+  --font-mono:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
+    "PingFang SC", "Microsoft YaHei", monospace;
+
+  /* 蓝图纸底色 token（与 src/theme.ts palette 同源）：
+     paper 页面底 < panel-soft 分组底 < panel 卡片底，靠灰阶差出层次 */
+  --paper: #f6f6f3;
+  --panel: #fdfdfb;
+  --panel-soft: #f4f3ee;
+  --hairline: #e8e6e1;
+  --scrollbar-thumb: rgba(16, 20, 24, 0.18);
+  --scrollbar-thumb-hover: rgba(16, 20, 24, 0.34);
+  --domain-accent: #087f5b;
+  --domain-accent-hover: #0b946a;
+  --domain-accent-soft: #e8f6f0;
+  --domain-accent-rgb: 8, 127, 91;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+::selection {
+  color: #fff;
+  background: var(--domain-accent);
+}
+
+/* ── 全局滚动条：细窄圆角、透明轨道、hover 加深 ──
+   webkit（Chrome/Edge/Safari）+ Firefox（scrollbar-width/color）双覆盖；
+   naive-ui 内部滚动容器（下拉/表格/抽屉）由 theme.ts 的 Scrollbar override 同步。 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-color: var(--scrollbar-thumb);
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
+  background-clip: padding-box;
+}

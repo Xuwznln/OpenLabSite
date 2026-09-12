@@ -1,0 +1,67 @@
+# 源码仓库保持私有；构建产物发布到公开仓库 OpenLab-site 的 gh-pages，
+# 由其 GitHub Pages 提供 https://xuwznln.github.io/OpenLab-site/。
+# 跨仓库推送凭据：OpenLab-site 的写权限 deploy key，存于本仓库 secret SITE_DEPLOY_KEY。
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  protocol:
+    name: Validate protocol module
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run protocol:check
+      - run: pnpm exec vue-tsc -b
+      - run: pnpm exec vitest run
+
+  deploy:
+    name: Build and publish web application
+    needs: protocol
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run protocol:build
+      - run: pnpm run app:build
+      - name: Publish to public site repository
+        env:
+          SITE_DEPLOY_KEY: ${{ secrets.SITE_DEPLOY_KEY }}
+        run: |
+          touch dist/.nojekyll
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$SITE_DEPLOY_KEY" > "$HOME/.ssh/site_deploy_key"
+          chmod 600 "$HOME/.ssh/site_deploy_key"
+          ssh-keyscan github.com >> "$HOME/.ssh/known_hosts" 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/site_deploy_key -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
+          publish_dir="$(mktemp -d)"
+          cp -a dist/. "$publish_dir/"
+          cd "$publish_dir"
+          git init --initial-branch=gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add --all
+          git commit -m "deploy: ${GITHUB_SHA}"
+          git remote add origin "git@github.com:Xuwznln/OpenLab-site.git"
+          git push --force origin gh-pages
