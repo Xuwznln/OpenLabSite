@@ -1,0 +1,842 @@
+{
+  "role": "host",
+  "peers": [
+    {
+      "connected_at": 1786627828.2142973,
+      "addr": "127.0.0.1:59983",
+      "node_id": "device:MockPump1",
+      "machine_name": "DESKTOP_A3GT1OF",
+      "role": "slave",
+      "device_ids": [
+        "MockPump1"
+      ],
+      "devices": {
+        "MockPump1": {
+          "id": "MockPump1",
+          "registry_name": "virtual_transfer_pump",
+          "display_name": "virtual_transfer_pump",
+          "actions": [
+            "auto-aspirate",
+            "auto-cleanup",
+            "auto-dispense",
+            "auto-empty_syringe",
+            "auto-fill_syringe",
+            "auto-initialize",
+            "auto-is_empty",
+            "auto-is_full",
+            "auto-pull_plunger",
+            "auto-push_plunger",
+            "auto-set_max_velocity",
+            "auto-stop_operation",
+            "set_position",
+            "transfer"
+          ],
+          "status_fields": [
+            "current_volume",
+            "max_velocity",
+            "position",
+            "remaining_capacity",
+            "status",
+            "transfer_rate"
+          ],
+          "action_value_mappings": {
+            "auto-aspirate": {
+              "feedback": {},
+              "goal": {},
+              "goal_default": {
+                "velocity": null,
+                "volume": null
+              },
+              "handles": {},
+              "placeholder_keys": {},
+              "result": {},
+              "schema": {
+                "description": "aspirate的参数schema",
+                "properties": {
+                  "feedback": {},
+                  "goal": {
+                    "properties": {
+                      "velocity": {
+                        "type": "number"
+                      },
+                      "volume": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "volume"
+                    ],
+                    "type": "object"
+                  },
+                  "result": {}
+                },
+                "required": [
+                  "goal"
+                ],
+                "title": "aspirate参数",
+                "type": "object"
+              },
+              "type": "UniLabJsonCommandAsync",
+              "displayname": "auto-aspirate",
+              "lock_resource": [],
+              "estimate_duration_fixed": 60.0,
+              "estimate_duration_express": ""
+            },
+            "auto-cleanup": {
+              "feedback": {},
+              "goal": {},
+              "goal_default": {},
+              "handles": {},
+              "placeholder_keys": {},
+              "result": {},
+              "schema": {
+                "description": "cleanup的参数schema",
+                "properties": {
+                  "feedback": {},
+                  "goal": {
+                    "properties": {},
+                    "required": [],
+                    "type": "object"
+                  },
+                  "result": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "goal"
+                ],
+                "title": "cleanup参数",
+                "type": "object"
+              },
+              "type": "UniLabJsonCommandAsync",
+              "displayname": "auto-cleanup",
+              "lock_resource": [],
+              "estimate_duration_fixed": 60.0,
+              "estimate_duration_express": ""
+            },
+            "auto-dispense": {
+              "feedback": {},
+              "goal": {},
+              "goal_default": {
+                "velocity": null,
+                "volume": null
+              },
+              "handles": {},
+              "placeholder_keys": {},
+              "result": {},
+              "schema": {
+                "description": "dispense的参数schema",
+                "properties": {
+                  "feedback": {},
+                  "goal": {
+                    "properties": {
+                      "velocity": {
+                        "type": "number"
+                      },
+                      "volume": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "volume"
+                    ],
+                    "type": "object"
+                  },
+                  "result": {}
+                },
+                "required": [
+                  "goal"
+                ],
+                "title": "dispense参数",
+                "type": "object"
+              },
+              "type": "UniLabJsonCommandAsync",
+              "displayname": "auto-dispense",
+              "lock_resource": [],
+              "estimate_duration_fixed": 60.0,
+              "estimate_duration_express": ""
+            },
+            "auto-empty_syringe": {
+              "feedback": {},
+              "goal": {},
+              "goal_default": {
+                "velocity": null
+              },
+              "handles": {},
+              "placeholder_keys": {},
+              "result": {},
+              "schema": {
+                "description": "empty_syringe的参数schema",
+                "properties": {
+                  "feedback": {},
+                  "goal": {
+                    "properties": {
+                      "velocity": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [],
+                    "type": "object"
+                  },
+                  "result": {}
+                },
+                "required": [
+                  "goal"
+                ],
+                "title": "empty_syringe参数",
+                "type": "object"
+              },
+              "type": "UniLabJsonCommandAsync",
+              "displayname": "auto-empty_syringe",
+              "lock_resource": [],
+              "estimate_duration_fixed": 60.0,
+              "estimate_duration_express": ""
+            },
+            "auto-fill_syringe": {
+              "feedback": {},
+              "goal": {},
+              "goal_default": {
+                "velocity": null
+              },
+              "handles": {},
+              "placeholder_keys": {},
+              "result": {},
+              "schema": {
+                "description": "fill_syringe的参数schema",
+                "properties": {
+                  "feedback": {},
+                  "goal": {
+                    "properties": {
+                      "velocity": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [],
+                    "type": "object"
+                  },
+                  "result": {}
+                },
+                "required": [
+                  "goal"
+                ],
+                "title": "fill_syringe参数",
+                "type": "object"
+              },
+              "type": "UniLabJsonCommandAsync",
+              "displayname": "auto-fill_syringe",
+              "lock_resource": [],
+              "estimate_duration_fixed": 60.0,
+              "estimate_duration_express": ""
+            },
+            "auto-initialize": {
+              "feedback": {},
+              "goal": {},
+              "goal_default": {},
+              "handles": {},
+              "placeholder_keys": {},
+              "result": {},
+              "schema": {
+                "description": "initialize的参数schema",
+                "properties": {
+                  "feedback": {},
+                  "goal": {
+                    "properties": {},
+                    "required": [],
+                    "type": "object"
+                  },
+                  "result": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "goal"
+                ],
+                "title": "initialize参数",
+                "type": "object"
+              },
+              "type": "UniLabJsonCommandAsync",
+              "displayname": "auto-initialize",
+              "lock_resource": [],
+              "estimate_duration_fixed": 60.0,
+              "estimate_duration_express": ""
+            },
+            "auto-is_empty": {
+              "feedback": {},
+              "goal": {},
+              "goal_default": {},
+              "handles": {},
+              "placeholder_keys": {},
+              "result": {},
+              "schema": {
+                "description": "is_empty的参数schema",
+                "properties": {
+                  "feedback": {},
+                  "goal": {
+                    "properties": {},
+                    "required": [],
+                    "type": "object"
+                  },
+                  "result": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "goal"
+                ],
+                "title": "is_empty参数",
+                "type": "object"
+              },
+              "type": "UniLabJsonCommand",
+              "displayname": "auto-is_empty",
+              "lock_resource": [],
+              "estimate_duration_fixed": 60.0,
+              "estimate_duration_express": ""
+            },
+            "auto-is_full": {
+              "feedback": {},
+              "goal": {},
+              "goal_default": {},
+              "handles": {},
+              "placeholder_keys": {},
+              "result": {},
+              "schema": {
+                "description": "is_full的参数schema",
+                "properties": {
+                  "feedback": {},
+                  "goal": {
+                    "properties": {},
+                    "required": [],
+                    "type": "object"
+                  },
+                  "result": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "goal"
+                ],
+                "title": "is_full参数",
+                "type": "object"
+              },
+              "type": "UniLabJsonCommand",
+              "displayname": "auto-is_full",
+              "lock_resource": [],
+              "estimate_duration_fixed": 60.0,
+              "estimate_duration_express": ""
+            },
+            "auto-pull_plunger": {
+              "feedback": {},
+              "goal": {},
+              "goal_default": {
+                "velocity": null,
+                "volume": null
+              },
+              "handles": {},
+              "placeholder_keys": {},
+              "result": {},
+              "schema": {
+                "description": "pull_plunger的参数schema",
+                "properties": {
+                  "feedback": {},
+                  "goal": {
+                    "properties": {
+                      "velocity": {
+                        "description": "拉取速度 (ml/s)",
+                        "type": "number"
+                      },
+                      "volume": {
+                        "description": "要拉取的体积 (ml)",
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "volume"
+                    ],
+                    "type": "object"
+                  },
+                  "result": {}
+                },
+                "required": [
+                  "goal"
+                ],
+                "title": "pull_plunger参数",
+                "type": "object"
+              },
+              "type": "UniLabJsonCommandAsync",
+              "displayname": "auto-pull_plunger",
+              "lock_resource": [],
+              "estimate_duration_fixed": 60.0,
+              "estimate_duration_express": ""
+            },
+            "auto-push_plunger": {
+              "feedback": {},
+              "goal": {},
+              "goal_default": {
+                "velocity": null,
+                "volume": null
+              },
+              "handles": {},
+              "placeholder_keys": {},
+              "result": {},
+              "schema": {
+                "description": "push_plunger的参数schema",
+                "properties": {
+                  "feedback": {},
+                  "goal": {
+                    "properties": {
+                      "velocity": {
+                        "description": "推出速度 (ml/s)",
+                        "type": "number"
+                      },
+                      "volume": {
+                        "description": "要推出的体积 (ml)",
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "volume"
+                    ],
+                    "type": "object"
+                  },
+                  "result": {}
+                },
+                "required": [
+                  "goal"
+                ],
+                "title": "push_plunger参数",
+                "type": "object"
+              },
+              "type": "UniLabJsonCommandAsync",
+              "displayname": "auto-push_plunger",
+              "lock_resource": [],
+              "estimate_duration_fixed": 60.0,
+              "estimate_duration_express": ""
+            },
+            "auto-set_max_velocity": {
+              "feedback": {},
+              "goal": {},
+              "goal_default": {
+                "velocity": null
+              },
+              "handles": {},
+              "placeholder_keys": {},
+              "result": {},
+              "schema": {
+                "description": "set_max_velocity的参数schema",
+                "properties": {
+                  "feedback": {},
+                  "goal": {
+                    "properties": {
+                      "velocity": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "velocity"
+                    ],
+                    "type": "object"
+                  },
+                  "result": {}
+                },
+                "required": [
+                  "goal"
+                ],
+                "title": "set_max_velocity参数",
+                "type": "object"
+              },
+              "type": "UniLabJsonCommand",
+              "displayname": "auto-set_max_velocity",
+              "lock_resource": [],
+              "estimate_duration_fixed": 60.0,
+              "estimate_duration_express": ""
+            },
+            "auto-stop_operation": {
+              "feedback": {},
+              "goal": {},
+              "goal_default": {},
+              "handles": {},
+              "placeholder_keys": {},
+              "result": {},
+              "schema": {
+                "description": "stop_operation的参数schema",
+                "properties": {
+                  "feedback": {},
+                  "goal": {
+                    "properties": {},
+                    "required": [],
+                    "type": "object"
+                  },
+                  "result": {}
+                },
+                "required": [
+                  "goal"
+                ],
+                "title": "stop_operation参数",
+                "type": "object"
+              },
+              "type": "UniLabJsonCommandAsync",
+              "displayname": "auto-stop_operation",
+              "lock_resource": [],
+              "estimate_duration_fixed": 60.0,
+              "estimate_duration_express": ""
+            },
+            "set_position": {
+              "feedback": {
+                "current_position": "current_position",
+                "progress": "progress",
+                "status": "status"
+              },
+              "goal": {
+                "max_velocity": "max_velocity",
+                "position": "position"
+              },
+              "goal_default": {
+                "position": 0.0,
+                "max_velocity": 5.0
+              },
+              "handles": {},
+              "placeholder_keys": {},
+              "result": {
+                "message": "message",
+                "return_info": "return_info",
+                "success": "success"
+              },
+              "schema": {
+                "title": "SetPumpPosition",
+                "description": "",
+                "type": "object",
+                "properties": {
+                  "goal": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "position": {
+                        "type": "number",
+                        "minimum": -1.7976931348623157e+308,
+                        "maximum": 1.7976931348623157e+308,
+                        "description": "目标位置 (ml)"
+                      },
+                      "max_velocity": {
+                        "type": "number",
+                        "minimum": -1.7976931348623157e+308,
+                        "maximum": 1.7976931348623157e+308,
+                        "description": "移动速度 (ml/s)"
+                      }
+                    },
+                    "title": "SetPumpPosition_Goal"
+                  },
+                  "feedback": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "status": {
+                        "type": "string"
+                      },
+                      "current_position": {
+                        "type": "number",
+                        "minimum": -1.7976931348623157e+308,
+                        "maximum": 1.7976931348623157e+308
+                      },
+                      "progress": {
+                        "type": "number",
+                        "minimum": -1.7976931348623157e+308,
+                        "maximum": 1.7976931348623157e+308
+                      }
+                    },
+                    "title": "SetPumpPosition_Feedback"
+                  },
+                  "result": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "return_info": {
+                        "type": "string"
+                      },
+                      "success": {
+                        "type": "boolean"
+                      },
+                      "message": {
+                        "type": "string"
+                      }
+                    },
+                    "title": "SetPumpPosition_Result"
+                  }
+                },
+                "required": [
+                  "goal"
+                ]
+              },
+              "type": "unilabos_msgs.action._set_pump_position.SetPumpPosition",
+              "displayname": "set_position",
+              "lock_resource": [],
+              "estimate_duration_fixed": 60.0,
+              "estimate_duration_express": ""
+            },
+            "transfer": {
+              "feedback": {
+                "current_status": "current_status",
+                "progress": "progress",
+                "transferred_volume": "transferred_volume"
+              },
+              "goal": {
+                "amount": "amount",
+                "from_vessel": "from_vessel",
+                "rinsing_repeats": "rinsing_repeats",
+                "rinsing_solvent": "rinsing_solvent",
+                "rinsing_volume": "rinsing_volume",
+                "solid": "solid",
+                "time": "time",
+                "to_vessel": "to_vessel",
+                "viscous": "viscous",
+                "volume": "volume"
+              },
+              "goal_default": {
+                "from_vessel": "",
+                "to_vessel": "",
+                "volume": 1.0,
+                "amount": "",
+                "time": 0.0,
+                "viscous": false,
+                "rinsing_solvent": "",
+                "rinsing_volume": 0.0,
+                "rinsing_repeats": 0,
+                "solid": false
+              },
+              "handles": {},
+              "placeholder_keys": {},
+              "result": {
+                "message": "message",
+                "return_info": "return_info",
+                "success": "success"
+              },
+              "schema": {
+                "title": "Transfer",
+                "description": "",
+                "type": "object",
+                "properties": {
+                  "goal": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "from_vessel": {
+                        "type": "string"
+                      },
+                      "to_vessel": {
+                        "type": "string"
+                      },
+                      "volume": {
+                        "type": "number",
+                        "minimum": -1.7976931348623157e+308,
+                        "maximum": 1.7976931348623157e+308
+                      },
+                      "amount": {
+                        "type": "string"
+                      },
+                      "time": {
+                        "type": "number",
+                        "minimum": -1.7976931348623157e+308,
+                        "maximum": 1.7976931348623157e+308
+                      },
+                      "viscous": {
+                        "type": "boolean"
+                      },
+                      "rinsing_solvent": {
+                        "type": "string"
+                      },
+                      "rinsing_volume": {
+                        "type": "number",
+                        "minimum": -1.7976931348623157e+308,
+                        "maximum": 1.7976931348623157e+308
+                      },
+                      "rinsing_repeats": {
+                        "type": "integer",
+                        "minimum": -2147483648,
+                        "maximum": 2147483647
+                      },
+                      "solid": {
+                        "type": "boolean"
+                      }
+                    },
+                    "title": "Transfer_Goal"
+                  },
+                  "feedback": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "progress": {
+                        "type": "number",
+                        "minimum": -1.7976931348623157e+308,
+                        "maximum": 1.7976931348623157e+308
+                      },
+                      "transferred_volume": {
+                        "type": "number",
+                        "minimum": -1.7976931348623157e+308,
+                        "maximum": 1.7976931348623157e+308
+                      },
+                      "current_status": {
+                        "type": "string"
+                      }
+                    },
+                    "title": "Transfer_Feedback"
+                  },
+                  "result": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "success": {
+                        "type": "boolean"
+                      },
+                      "message": {
+                        "type": "string"
+                      },
+                      "return_info": {
+                        "type": "string"
+                      }
+                    },
+                    "title": "Transfer_Result"
+                  }
+                },
+                "required": [
+                  "goal"
+                ]
+              },
+              "type": "unilabos_msgs.action._transfer.Transfer",
+              "displayname": "transfer",
+              "lock_resource": [],
+              "estimate_duration_fixed": 60.0,
+              "estimate_duration_express": ""
+            },
+            "_execute_driver_command": {
+              "type": "unilabos_msgs.action._str_single_input.StrSingleInput",
+              "goal": {
+                "string": "string"
+              },
+              "feedback": {},
+              "result": {},
+              "schema": {
+                "title": "StrSingleInput",
+                "description": "",
+                "type": "object",
+                "properties": {
+                  "goal": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "string": {
+                        "type": "string"
+                      }
+                    },
+                    "title": "StrSingleInput_Goal"
+                  },
+                  "feedback": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "title": "StrSingleInput_Feedback"
+                  },
+                  "result": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "return_info": {
+                        "type": "string"
+                      },
+                      "success": {
+                        "type": "boolean"
+                      }
+                    },
+                    "title": "StrSingleInput_Result"
+                  }
+                },
+                "required": [
+                  "goal"
+                ]
+              },
+              "goal_default": {
+                "string": ""
+              },
+              "handles": {}
+            },
+            "_execute_driver_command_async": {
+              "type": "unilabos_msgs.action._str_single_input.StrSingleInput",
+              "goal": {
+                "string": "string"
+              },
+              "feedback": {},
+              "result": {},
+              "schema": {
+                "title": "StrSingleInput",
+                "description": "",
+                "type": "object",
+                "properties": {
+                  "goal": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "string": {
+                        "type": "string"
+                      }
+                    },
+                    "title": "StrSingleInput_Goal"
+                  },
+                  "feedback": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "title": "StrSingleInput_Feedback"
+                  },
+                  "result": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "return_info": {
+                        "type": "string"
+                      },
+                      "success": {
+                        "type": "boolean"
+                      }
+                    },
+                    "title": "StrSingleInput_Result"
+                  }
+                },
+                "required": [
+                  "goal"
+                ]
+              },
+              "goal_default": {
+                "string": ""
+              },
+              "handles": {}
+            }
+          },
+          "resource_uuid": "79daf580-d18a-4861-a2b4-437aa30d637e"
+        }
+      },
+      "protocol_version": 1,
+      "capabilities": [
+        "material-query",
+        "ros-assist",
+        "device-discovery",
+        "device-rpc",
+        "service-rpc",
+        "topic-pubsub"
+      ],
+      "last_seen": 1786627828.2142973,
+      "connected": false,
+      "online": false
+    }
+  ],
+  "client": null,
+  "owner": "edge-microbackend",
+  "host_id": "DESKTOP_A3GT1OF",
+  "host_node_id": "host_node",
+  "protocol_version": 1,
+  "ros": {
+    "domain_id": 64,
+    "automatic_discovery_range": "SYSTEM_DEFAULT",
+    "static_peers": [
+      "198.18.0.1"
+    ],
+    "discovery_server": "198.18.0.1:7315",
+    "discovery_server_managed": true,
+    "discovery_server_disabled": false
+  }
+}

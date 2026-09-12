@@ -1,0 +1,74 @@
+{
+  "name": "@openlab/protocol",
+  "version": "2.0.0",
+  "description": "Typed, framework-agnostic client and machine-readable catalog for the Uni-Lab-OS microbackend HTTP API (OpenLab Edge protocol v1)",
+  "keywords": [
+    "openlab",
+    "uni-lab-os",
+    "unilabos",
+    "laboratory-automation",
+    "edge",
+    "api-client",
+    "typescript"
+  ],
+  "homepage": "https://github.com/Xuwznln/OpenLab/tree/main/packages/protocol#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Xuwznln/OpenLab.git",
+    "directory": "packages/protocol"
+  },
+  "bugs": {
+    "url": "https://github.com/Xuwznln/OpenLab/issues"
+  },
+  "license": "UNLICENSED",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "dist",
+    "openapi",
+    "CHANGELOG.md"
+  ],
+  "types": "./dist/index.d.ts",
+  "module": "./dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./catalog": {
+      "types": "./dist/catalog.d.ts",
+      "import": "./dist/catalog.js"
+    },
+    "./openapi": {
+      "types": "./dist/generated/openapi.d.ts",
+      "import": "./dist/generated/openapi.js"
+    },
+    "./openapi.json": "./openapi/unilabos-openapi.json",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "pnpm run clean && tsc -p tsconfig.json",
+    "check": "pnpm run build && node scripts/validate-contract.mjs",
+    "test": "vitest run",
+    "smoke": "node scripts/live-smoke.mjs",
+    "openapi:sync": "node scripts/sync-openapi.mjs",
+    "openapi:types": "node scripts/sync-openapi.mjs --types-only",
+    "prepack": "pnpm run check && pnpm run test"
+  },
+  "dependencies": {
+    "axios": "^1.18.1"
+  },
+  "devDependencies": {
+    "openapi-typescript": "^7.13.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
+  }
+}
