@@ -67,8 +67,8 @@ const sched = useSchedulerStore();   // sched.workflows / sched.activeTasks / sc
 | 运行一个设备动作 | `conn.api.domains.workflowBackend.createTask({ execution_kind: "ad_hoc_device_action", device_id, action_name, param })` |
 | 运行一条流程 | `sched.createTask(workflowUuid, "normal")` |
 | 读物料树 / 位点占用 | `conn.api.domains.materialsV1.instances(true)`、`.tree(uuid)` |
-| 入库一件可追踪物料（进入「在库物料」） | `conn.api.domains.materialsV1.instantiate(registryClass, name, barcode?)` |
-| 入库 / 补充计量库存（试剂、耗材批次） | `.inboundLot({ template_uuid, unit, quantity, batch_no?, expiry_at_ms?, lot_uuid? })`，模板目录用 `.templates({ includeDefinition: false })` |
+| 按件登记一件可追踪物料（进入「在库物料」，工作流 `kind: "material"` 需求选取） | `conn.api.domains.materialsV1.instantiate(registryClass, name, barcode?)` |
+| 按量登记 / 补充计量库存批次（散装试剂或耗材，工作流 `kind: "lot"` 需求预留与扣减） | `.inboundLot({ template_uuid, unit, quantity, batch_no?, expiry_at_ms?, lot_uuid? })`，模板目录用 `.templates({ includeDefinition: false })` |
 | 出库到位点 / 移动 / 转运 | `.move({...})`（同设备）/ `.transfer({...})`（跨设备） |
 | 设备实时属性 | `devices.byId(id)?.telemetry.properties` |
 | 属性历史曲线 | `conn.api.domains.telemetryV1.events({ device_uuid, event_type: "property_sample" })` |

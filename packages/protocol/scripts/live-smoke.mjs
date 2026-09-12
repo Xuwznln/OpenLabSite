@@ -3,6 +3,7 @@
  *
  *   node packages/protocol/scripts/live-smoke.mjs [http://127.0.0.1:8002] [--write]
  *   pnpm --filter @openlab/protocol smoke -- --write
+ *   pnpm --filter @openlab/protocol smoke -- http://127.0.0.1:8002 --write --step-only
  *
  * 读路径：每个域的列表接口都要 2xx 且形状符合类型的关键字段。
  * --write：创建并删除一条 Workflow 定义；出库一件物料、移动到空位点、删除；
@@ -49,11 +50,113 @@ record("system.health", health.status === "ok", `scheduler=${health.scheduler} e
 const executionReady = health.execution === "ready";
 const schedulerLocal = health.scheduler !== "remote";
 
+async function waitUntil(read, predicate) {
+  const deadline = Date.now() + 10_000;
+  do {
+    const value = await read();
+    if (predicate(value)) return value;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  } while (Date.now() < deadline);
+  throw new Error("等待工作流状态超时");
+}
+
+async function workflowStepSmoke() {
+  // 只用调度器原生 manual_confirm，不调用实际设备；三节点验证逐步与转自动。
+  const wf = await api.workflowBackend.createWorkflow({ name: `step-smoke-${Date.now()}`, tags: ["smoke"] });
+  let task;
+  try {
+    const nodes = [];
+    for (let i = 0; i < 3; i++) {
+      nodes.push({ uuid: crypto.randomUUID(), name: `确认 ${i + 1}`, type: "device_action",
+        material_uuid: crypto.randomUUID(), action_name: "manual_confirm", action_type: "UniLabJsonCommand",
+        meta_data: { target_device_id: "host_node" },
+        pose: { x: i * 250, y: 0 }, param: { assignee_user_ids: [], timeout_seconds: 60 },
+        execution_policy: { depends_on: i ? [nodes[i - 1].uuid] : [] } });
+    }
+    await api.workflowBackend.saveGraph(wf.uuid, { revision: wf.revision, nodes, edges: [] });
+    task = await api.workflowBackend.createTask({ workflow_uuid: wf.uuid, run_mode: "step" });
+    if (task.control_status !== "paused") throw new Error("逐步任务提交后未暂停");
+    const initial = await api.workflowBackend.task(task.uuid);
+    if (initial.control_revision !== 0) throw new Error("缺少逐步控制版本");
+    const first = { type: "step", expected_revision: 0, idempotency_key: crypto.randomUUID() };
+    await api.workflowBackend.commandTask(task.uuid, first);
+    const approveNext = async () => {
+      const records = await waitUntil(() => api.workflowBackend.taskManualConfirmations(task.uuid),
+        (items) => items.some((item) => item.status === "pending"));
+      const record = records.find((item) => item.status === "pending");
+      await api.workflowBackend.decideManualConfirmation(record.uuid, {
+        action: "approve", decision_idempotency_key: crypto.randomUUID(),
+      });
+    };
+    await approveNext();
+    const paused = await waitUntil(() => api.workflowBackend.task(task.uuid), (value) => value.control_status === "paused");
+    await api.workflowBackend.commandTask(task.uuid, first); // 已完成后的同键重放也不能多放行一步
+    const runs = await api.workflowBackend.taskNodeRuns(task.uuid);
+    if (runs.filter((run) => run.status === "succeeded").length !== 1
+      || runs.filter((run) => run.status === "pending").length !== 2) throw new Error("一次点击没有严格只推进一个动作");
+    await api.workflowBackend.commandTask(task.uuid, {
+      type: "resume", expected_revision: paused.control_revision, idempotency_key: crypto.randomUUID(),
+    });
+    await approveNext();
+    await approveNext();
+    const done = await waitUntil(() => api.workflowBackend.task(task.uuid), (value) => value.status === "succeeded");
+    if (done.run_mode !== "normal") throw new Error("切换自动失败");
+    return `task ${task.uuid}: 暂停 → 单点 → 幂等重放 → 自动 → succeeded`;
+  } finally {
+    if (task) {
+      for (const pending of await api.workflowBackend.taskManualConfirmations(task.uuid)) {
+        if (pending.status === "pending") await api.workflowBackend.decideManualConfirmation(pending.uuid, {
+          action: "reject", decision_idempotency_key: crypto.randomUUID(),
+        });
+      }
+    }
+    await api.workflowBackend.deleteWorkflow(wf.uuid);
+  }
+}
+
+async function runtimeLogsSmoke() {
+  const listing = await api.system.logSources();
+  expectKeys(listing, ["sources"], "log sources");
+  const readable = listing.sources.filter((source) => source.supported && (source.online || source.managed));
+  for (const source of readable) {
+    expectKeys(source, ["source_id", "role", "machine_name", "device_ids", "online", "managed", "supported"], "log source");
+    const first = await api.system.logs(source.source_id, { limit: 10 });
+    expectKeys(first, ["stream_id", "cursor", "lines", "reset", "has_more", "path", "pid"], "log batch");
+    if (first.source_id !== source.source_id || first.lines.length > 10) throw new Error("日志来源/限额不匹配");
+    // 相同游标交给两个读者：两边都可读取，不存在消费式游标或单客户端占用。
+    const [a, b] = await Promise.all([
+      api.system.logs(source.source_id, { cursor: first.cursor, limit: 10 }),
+      api.system.logs(source.source_id, { cursor: first.cursor, limit: 10 }),
+    ]);
+    if (a.stream_id === b.stream_id) {
+      const common = Math.min(a.lines.length, b.lines.length);
+      if (JSON.stringify(a.lines.slice(0, common)) !== JSON.stringify(b.lines.slice(0, common))) throw new Error("日志读取者互相干扰");
+    }
+  }
+  return `${readable.length} 个来源可读（Host / 受管 Slave / 外部 Slave）`;
+}
+
+if (args.includes("--logs-only")) {
+  await step("system runtime logs", runtimeLogsSmoke);
+  process.exit(results.some((item) => !item.ok) ? 1 : 0);
+}
+if (args.includes("--step-only")) {
+  if (!doWrite || !schedulerLocal || !executionReady) throw new Error("--step-only 需要 --write 与带执行面的本机调度微后端");
+  await step("workflow step → resume", workflowStepSmoke);
+  process.exit(results.some((item) => !item.ok) ? 1 : 0);
+}
+// 重置只测只读预览；即使 --write 也绝不清空使用者数据。
+await step("system.resetPreview", async () => {
+  const preview = await api.system.resetPreview();
+  expectKeys(preview, ["supported", "pending", "confirmation_token", "backup_path", "detail"], "reset");
+});
+
 await step("system.hostlinkPeers", async () => {
   const status = await api.system.hostlinkPeers();
   expectKeys(status, ["role", "peers", "client"], "hostlink");
   return `role=${status.role} peers=${status.peers.length}`;
 });
+await step("system runtime logs", runtimeLogsSmoke, { optional: !executionReady });
 await step("system.schedulerResources", async () => {
   const snapshot = await api.system.schedulerResources();
   expectKeys(snapshot, ["sequence", "requests", "ownerships", "handoffs"], "resources");
@@ -159,6 +262,7 @@ await step("debug.databases + first table", async () => {
 
 if (doWrite) {
   console.log("\n--- write flows ---");
+  if (schedulerLocal && executionReady) await step("workflow step → resume", workflowStepSmoke);
   if (schedulerLocal) {
     await step("workflow create → graph → delete", async () => {
       const wf = await api.workflowBackend.createWorkflow({ name: `smoke-${Date.now().toString(36)}`, tags: ["smoke"] });

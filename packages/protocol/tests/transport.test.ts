@@ -76,13 +76,28 @@ describe("system 协议与传输层", () => {
     const api = createSystemApi(mock.http);
     const called = await collectCalls(mock, {
       health: () => api.health(),
+      ping: () => api.ping(1.5),
       hostlinkPeers: () => api.hostlinkPeers(),
+      logSources: () => api.logSources(),
+      logs: () => api.logs("host"),
       schedulerResources: () => api.schedulerResources(),
       restartStatus: () => api.restartStatus(),
       requestRestart: () => api.requestRestart({ mode: "quiescent" }),
+      resetPreview: () => api.resetPreview(),
+      requestReset: () => api.requestReset({ confirmation_token: "test-only", confirmation: "清空全部数据" }),
       cancelRestart: () => api.cancelRestart(),
     });
     expect(called).toEqual(catalogOps("system"));
+  });
+
+  it("日志按来源与不透明游标读取，两个页面可以复用同一游标", async () => {
+    const mock = createMockHttp();
+    const api = createSystemApi(mock.http);
+    const cursor = `${"a".repeat(24)}:1024`;
+    await api.logs("slave:机器 A/1", { cursor, limit: 500 });
+    await api.logs("slave:机器 A/1", { cursor, limit: 500 });
+    expect(mock.calls[0]).toEqual(mock.calls[1]);
+    expect(mock.calls[0]).toMatchObject({ method: "GET", params: { source_id: "slave:机器 A/1", cursor, limit: 500 } });
   });
 
   it("health 允许同源能力探测使用短超时，但仍走 system 域路由", async () => {
@@ -212,7 +227,6 @@ describe("system 协议与传输层", () => {
       start: () => api.start(DUMMY_ID),
       stop: () => api.stop(DUMMY_ID),
       restart: () => api.restart(DUMMY_ID),
-      logs: () => api.logs(DUMMY_ID, 50),
     });
     expect(called).toEqual(catalogOps("device-processes"));
     const logs = mock.calls.find((call) => call.url.endsWith("/logs"));

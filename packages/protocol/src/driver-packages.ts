@@ -1,34 +1,48 @@
 /**
  * 驱动包（设备包）管理 —— `/api/v1/driver-packages`（仅带执行面的 Host 进程挂载）。
  *
- * 驱动包 = 含 `@device` / `@resource` 的 Python 分发（pip 规格、git URL 或本地目录）。
- * 微后端把它 pip 装进自己的解释器，记入 `<working_dir>/unilabos_data/driver_packages.json`
- * 台账；已启用的包目录在**下次启动**并入 `--devices` 扫描。所以完整流程是：
+ * 驱动包 = 含 `@device` / `@resource` 的 Python **源码树**，与 `unilab --devices <目录>` 同一套机制，
+ * 不经 pip 安装包体：
+ *
+ * - 来源是 GitHub 仓库地址（`https://github.com/<owner>/<repo>[@ref]`）、zip / tar.gz 归档地址或本机目录；
+ * - 远端来源下载解压到 `unilabos_data/driver_packages/<name>/<version>/`，本机目录原地登记；
+ * - 源码树 `pyproject.toml` 的 `[project].dependencies` 用 uv（回退 pip）预装进 Host 解释器；
+ * - 台账 `unilabos_data/driver_packages.json` 记录来源 / 版本 / sha256 / 要挂载的包目录 / 设备类；
+ *   已启用的包目录在**下次启动**并入 `--devices` 扫描。完整流程：
  *
  *   install（202，后台 operation）→ 轮询 operation 到 succeeded
  *   → `restart_required` 为 true → `system.requestRestart({ mode: "quiescent", scope: "process" })`
  *   → 等 health 恢复 → inventory 里 `mounted` / `loaded_device_ids` 变为真。
  *
- * 安装 / 卸载不在请求内同步执行：pip 可能跑几分钟，用 operation 记录进度与日志。
+ * 安装 / 卸载不在请求内同步执行：下载与依赖安装可能跑几分钟，用 operation 记录进度与日志。
  */
 import type { HttpTransport, JsonObject } from "./common.js";
 import type { DeviceProcess } from "./device-processes.js";
 
 export type DriverPackageOperationKind = "install" | "uninstall";
 export type DriverPackageOperationStatus = "running" | "succeeded" | "failed";
+export type DriverPackageSourceKind = "github" | "archive" | "local";
 
 export interface DriverPackage {
-  /** 分发名（pip 里的名字）。 */
+  /** 包名（pyproject `[project].name`；没有 pyproject 时是仓库名 / 请求给的 name）。 */
   name: string;
-  /** 安装时用的规格（name==1.2 / git+https://… / 本地目录）。 */
+  /** 安装来源（GitHub 仓库地址 / 归档地址 / 本机目录）。 */
   spec: string;
   version: string;
-  /** 顶层包目录（并入 --devices 扫描的路径）。 */
+  source_kind: DriverPackageSourceKind | (string & {});
+  /** 源码树根目录（含 pyproject.toml）；local 来源即用户给的目录。 */
+  package_root: string;
+  /** 顶层包目录（并入 --devices 扫描的路径，父目录进 sys.path）。 */
   package_dirs: string[];
   /** 安装后 AST 扫描到的 @device id。 */
   device_ids: string[];
+  /** 预装的第三方依赖（pyproject dependencies，去掉 unilabos 本体）。 */
+  dependencies: string[];
+  /** 归档 sha256；本机目录为空串。 */
+  sha256: string;
   /** 下次启动是否挂载。 */
   enabled: boolean;
+  /** 依赖用什么装的：uv / pip；无依赖为空串。 */
   installer: string;
   installed_at_ms: number;
   updated_at_ms: number;
@@ -48,15 +62,18 @@ export interface DriverPackageOperation {
   package_name: string;
   started_at_ms: number;
   finished_at_ms: number | null;
-  /** pip 输出与扫描结果（尾部 20 KB）。 */
+  /** 下载 / 解压 / 依赖安装 / 扫描日志（尾部 20 KB）。 */
   log: string;
   error: string | null;
   result: Record<string, unknown> | null;
 }
 
 export interface DriverPackageInventory {
+  /** 依赖装进的解释器。 */
   python: { executable: string; version: string };
   working_dir: string;
+  /** 远端来源落盘的根目录：`<working_dir>/driver_packages`。 */
+  packages_root: string;
   ledger_path: string;
   /** 本次启动实际扫描的设备目录（CLI --devices + 已启用驱动包）。 */
   scan_dirs: string[];
@@ -70,21 +87,20 @@ export interface DriverPackageInventory {
 }
 
 export interface DriverPackageInstallInput {
+  /** 安装来源：`https://github.com/<owner>/<repo>[@ref]`、zip / tar.gz 归档地址或本机目录。 */
   spec: string;
   /** 缺省 true：装完即启用（下次启动挂载）。 */
   enable?: boolean;
-  /** 缺省 false；true 时带 `pip install --upgrade`，用于重装 / 升级已装的同名包。 */
+  /** 缺省 false；true 时重新下载源码树并以 --upgrade 重装其依赖。 */
   upgrade?: boolean;
-  /**
-   * 已知的分发名（索引条目自带 `name`）。git / URL 规格在安装前看不出名字，
-   * 微后端靠它把包可靠登记进台账（重装同版本也照常登记）。
-   */
+  /** 已知的包名（索引条目自带 `name`）；源码树没有 pyproject 时微后端用它登记。 */
   name?: string;
 }
 
-/** 官方 / 社区目录里的一条可安装项（`spec` 直接喂给 install）。 */
+/** 官方 / 社区目录里的一条可安装项（`spec` 是安装来源，直接喂给 install）。 */
 export interface DriverPackageCatalogEntry {
   name: string;
+  /** GitHub 仓库地址或归档地址。 */
   spec: string;
   version: string;
   description: string;
@@ -164,7 +180,7 @@ export function createDriverPackagesApi(http: HttpTransport) {
         path: `${base}/${encodeURIComponent(name)}/enabled`,
         body: { enabled },
       }),
-    /** DELETE /driver-packages/{name} —— 202，pip uninstall 并移出台账。 */
+    /** DELETE /driver-packages/{name} —— 202，删除 unilabos_data 里的源码树（本机目录只移出台账）。 */
     uninstall: (name: string) =>
       http.request<DriverPackageOperation>({ method: "DELETE", path: `${base}/${encodeURIComponent(name)}` }),
     /** GET /driver-packages/{name}/graphs —— 随包设备图（demo 图）。 */

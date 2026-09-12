@@ -3,7 +3,8 @@
  *
  * 官方可安装目录放在独立仓库 https://github.com/Xuwznln/awesome-lab-devices 的 index.json，
  * 由**浏览器直接读取**（前端是静态站，索引与前端一起演进，Edge 不需要出网、也不需要配置），
- * 选中条目后把 `spec`（+ `name`）下发给连接中的微后端执行 `pip install`。
+ * 选中条目后把 `spec`（GitHub 仓库地址 / 归档地址，+ `name`）下发给连接中的微后端，由它把源码树
+ * 下载到 unilabos_data 并用 uv 预装依赖（不 pip install 包体）。
  *
  * 微后端自己的 `GET /driver-packages/catalog`（Edge 侧内网镜像 + 本地 driver_package_catalog.json）
  * 作为补充来源合并展示；同名以浏览器读到的官方索引为准。

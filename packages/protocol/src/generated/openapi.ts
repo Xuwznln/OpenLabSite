@@ -353,7 +353,11 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** Error Decisions */
+        /**
+         * Error Decisions
+         * @description 待人工决策的清单：执行面挂起的失败 attempt + 调度器在重启后接管的
+         *     执行态未知 / 决策上下文丢失的 attempt，两者报告同形。
+         */
         get: operations["error_decisions_api_v1_error_decisions_get"];
         put?: never;
         post?: never;
@@ -582,6 +586,40 @@ export type paths = {
         };
         /** Get Payload */
         get: operations["get_payload_api_v1_history_payloads__payload_uuid__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/hostlink/log-sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Sources */
+        get: operations["sources_api_v1_hostlink_log_sources_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/hostlink/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Logs */
+        get: operations["logs_api_v1_hostlink_logs_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1125,6 +1163,26 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/materials/snapshots/delta": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Apply Delta
+         * @description 设备增量上报：只带变了的节点 / 段，权威按段合并（乐观锁在节点内）。
+         */
+        post: operations["apply_delta_api_v1_materials_snapshots_delta_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/materials/templates": {
         parameters: {
             query?: never;
@@ -1171,7 +1229,11 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Transfer Material */
+        /**
+         * Transfer Material
+         * @description transfer 提交权威位置后同步等设备完成 unload/load 投影；设备在此期间会回头
+         *     读权威（tree.get），所以必须走线程池（def），不能占住事件循环。
+         */
         post: operations["transfer_material_api_v1_materials_transfer_post"];
         delete?: never;
         options?: never;
@@ -1190,6 +1252,49 @@ export type paths = {
         put?: never;
         /** Create Tree */
         post: operations["create_tree_api_v1_materials_trees_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ping": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ping
+         * @description HTTP 版 ping-pong：回显客户端时间戳并附服务端时钟，供链路时延 / 时钟偏差诊断。
+         *
+         *     与控制 WebSocket 的 PingNotice / PongNotice 字段同名；host_node 的 test_latency
+         *     对它所连的 Backend（本机进程或分体部署的 --role backend / 云端）逐次调用。
+         */
+        get: operations["ping_api_v1_ping_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/registry/digest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Registry Digest
+         * @description 权威持有的条目内容哈希索引：Host 上报前先取，只为权威没有的哈希附完整定义。
+         */
+        get: operations["get_registry_digest_api_v1_registry_digest_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1364,6 +1469,44 @@ export type paths = {
         get: operations["list_registry_reports_api_v1_registry_reports_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/registry/workflow-templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Registry Workflow Templates
+         * @description 生效的工作流模板（设备包 ``@workflow``）：前端模板面板与脚本实例化的数据源。
+         */
+        get: operations["list_registry_workflow_templates_api_v1_registry_workflow_templates_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Reset Preview */
+        get: operations["reset_preview_api_v1_reset_get"];
+        put?: never;
+        /** Reset Request */
+        post: operations["reset_request_api_v1_reset_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2068,6 +2211,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workflow-tasks/{task_uuid}/commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Command Workflow Task */
+        post: operations["command_workflow_task_api_v1_workflow_tasks__task_uuid__commands_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workflow-tasks/{task_uuid}/interventions": {
         parameters: {
             query?: never;
@@ -2268,6 +2428,26 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workflows/from-template": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Workflow From Template
+         * @description 注册表工作流模板 → 可运行工作流（角色绑定 + 类单实例自动解析，幂等 upsert）。
+         */
+        post: operations["create_workflow_from_template_api_v1_workflows_from_template_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 };
 export type webhooks = Record<string, never>;
 export type components = {
@@ -2317,7 +2497,7 @@ export type components = {
              * Command Type
              * @enum {string}
              */
-            command_type: "execute" | "cancel" | "release_failed" | "replace_result" | "reconcile_state";
+            command_type: "execute" | "cancel" | "release_failed" | "replace_result" | "resume_pending" | "reconcile_state";
             /** Endpoint Uuid */
             endpoint_uuid: string;
             /** Job Uuid */
@@ -2409,7 +2589,7 @@ export type components = {
             job_uuid?: string | null;
             /** Summary */
             summary?: {
-                [key: string]: components["schemas"]["JsonValue"];
+                [key: string]: unknown;
             };
             /** Traceparent */
             traceparent?: string | null;
@@ -2466,7 +2646,7 @@ export type components = {
              * Command Type
              * @enum {string}
              */
-            command_type: "execute_job" | "cancel_job" | "release_failed" | "replace_result" | "inventory_apply" | "reconcile";
+            command_type: "execute_job" | "cancel_job" | "release_failed" | "replace_result" | "resume_pending" | "inventory_apply" | "reconcile";
             /** Command Uuid */
             command_uuid: string;
             /** Job Uuid */
@@ -2484,7 +2664,7 @@ export type components = {
             session_uuid: string;
             /** Summary */
             summary?: {
-                [key: string]: components["schemas"]["JsonValue"];
+                [key: string]: unknown;
             };
             /** Traceparent */
             traceparent?: string | null;
@@ -2513,7 +2693,7 @@ export type components = {
             concurrency_mode: "exclusive" | "unbounded";
             /** Descriptor */
             descriptor?: {
-                [key: string]: components["schemas"]["JsonValue"];
+                [key: string]: unknown;
             };
             /** Descriptor Hash */
             descriptor_hash: string;
@@ -2595,7 +2775,7 @@ export type components = {
         DeviceRoute: {
             /** Config */
             config?: {
-                [key: string]: components["schemas"]["JsonValue"];
+                [key: string]: unknown;
             };
             /** Config Hash */
             config_hash: string;
@@ -2628,7 +2808,7 @@ export type components = {
         DeviceStateSnapshot: {
             /** Alarms */
             alarms?: {
-                [key: string]: components["schemas"]["JsonValue"];
+                [key: string]: unknown;
             }[];
             /**
              * Connection State
@@ -2642,11 +2822,11 @@ export type components = {
             observed_at_ms: number;
             /** Properties */
             properties?: {
-                [key: string]: components["schemas"]["JsonValue"];
+                [key: string]: unknown;
             };
             /** State */
             state?: {
-                [key: string]: components["schemas"]["JsonValue"];
+                [key: string]: unknown;
             };
             /** State Hash */
             state_hash?: string | null;
@@ -2667,7 +2847,10 @@ export type components = {
         };
         /**
          * DriverPackageInstallRequest
-         * @description pip 规格（name / name==1.2）、git URL（git+https://…）或本地目录。
+         * @description 安装来源：GitHub 仓库地址（https://github.com/<owner>/<repo>[@ref]）、zip / tar.gz 归档地址或本机目录。
+         *
+         *     源码树落到 unilabos_data/driver_packages/<name>/<version>/（本机目录原地登记），
+         *     依赖用 uv / pip 预装，不 pip install 包体。
          */
         DriverPackageInstallRequest: {
             /**
@@ -2677,7 +2860,7 @@ export type components = {
             enable: boolean;
             /**
              * Name
-             * @description 已知的分发名（索引条目自带）；git / URL 规格靠它可靠登记台账
+             * @description 已知的包名（索引条目自带）；源码树没有 pyproject 时用它登记
              * @default
              */
             name: string;
@@ -2685,7 +2868,7 @@ export type components = {
             spec: string;
             /**
              * Upgrade
-             * @description pip install --upgrade：重装 / 升级已装的同名包
+             * @description 重新下载源码树，并以 --upgrade 重装其依赖
              * @default false
              */
             upgrade: boolean;
@@ -2700,7 +2883,7 @@ export type components = {
             authority_epoch: string;
             /** Config */
             config?: {
-                [key: string]: components["schemas"]["JsonValue"];
+                [key: string]: unknown;
             };
             /** Device Routes */
             device_routes?: components["schemas"]["DeviceRoute"][];
@@ -2784,7 +2967,7 @@ export type components = {
             confirmed_scheduler_revision: number;
             /** Decision */
             decision?: {
-                [key: string]: components["schemas"]["JsonValue"];
+                [key: string]: unknown;
             };
             /** Decision Command Uuid */
             decision_command_uuid: string;
@@ -2823,7 +3006,7 @@ export type components = {
             required_scheduler_revision: number;
             /** Summary */
             summary?: {
-                [key: string]: components["schemas"]["JsonValue"];
+                [key: string]: unknown;
             };
         };
         /** ExecutionJobCancel */
@@ -2860,6 +3043,12 @@ export type components = {
              * @default 1
              */
             attempt_no: number;
+            /**
+             * Attempt Trigger
+             * @default initial
+             * @enum {string}
+             */
+            attempt_trigger: "initial" | "retry_decision" | "recovery" | "loop_iteration";
             /** Device Uuid */
             device_uuid: string;
             /** Endpoint Uuid */
@@ -2963,12 +3152,22 @@ export type components = {
         GraphUpsertRequest: {
             /** Description */
             description?: string | null;
+            /** Device Site Templates */
+            device_site_templates?: {
+                [key: string]: unknown[];
+            } | null;
             /** Meta Data */
             meta_data?: {
                 [key: string]: unknown;
             };
             /** Name */
             name: string;
+            /**
+             * On Existing
+             * @default replace
+             * @enum {string}
+             */
+            on_existing: "replace" | "adopt";
             /** Payload */
             payload: {
                 [key: string]: unknown;
@@ -3033,7 +3232,7 @@ export type components = {
             state_version?: number | null;
             /** Summary */
             summary?: {
-                [key: string]: components["schemas"]["JsonValue"];
+                [key: string]: unknown;
             };
             /** Supersedes Event Uuid */
             supersedes_event_uuid?: string | null;
@@ -3077,7 +3276,7 @@ export type components = {
             state_version?: number | null;
             /** Summary */
             summary?: {
-                [key: string]: components["schemas"]["JsonValue"];
+                [key: string]: unknown;
             };
             /** Supersedes Event Uuid */
             supersedes_event_uuid?: string | null;
@@ -3103,10 +3302,7 @@ export type components = {
             encoding: string;
             /** Expires At Ms */
             expires_at_ms?: number | null;
-            /**
-             * Inline Payload
-             * Format: binary
-             */
+            /** Inline Payload */
             inline_payload: string;
             /** Media Type */
             media_type: string;
@@ -3152,7 +3348,7 @@ export type components = {
             operation: string;
             /** Payload */
             payload?: {
-                [key: string]: components["schemas"]["JsonValue"];
+                [key: string]: unknown;
             };
             /** Preconditions */
             preconditions?: components["schemas"]["AggregatePrecondition"][];
@@ -3270,7 +3466,7 @@ export type components = {
             state_version?: number | null;
             /** Summary */
             summary?: {
-                [key: string]: components["schemas"]["JsonValue"];
+                [key: string]: unknown;
             };
             /** Supersedes Event Uuid */
             supersedes_event_uuid: string;
@@ -3306,7 +3502,7 @@ export type components = {
             site_uuid?: string | null;
             /** Snapshot */
             snapshot?: {
-                [key: string]: components["schemas"]["JsonValue"];
+                [key: string]: unknown;
             };
             /** Snapshot Hash */
             snapshot_hash: string;
@@ -3319,7 +3515,7 @@ export type components = {
             content_version: number;
             /** Data */
             data?: {
-                [key: string]: components["schemas"]["JsonValue"];
+                [key: string]: unknown;
             };
             /**
              * Observed At Ms
@@ -3372,7 +3568,7 @@ export type components = {
             class_name: string;
             /** Config */
             config?: {
-                [key: string]: components["schemas"]["JsonValue"];
+                [key: string]: unknown;
             };
             /** Created At Ms */
             created_at_ms: number;
@@ -3390,7 +3586,7 @@ export type components = {
             display_name: string;
             /** Extra */
             extra?: {
-                [key: string]: components["schemas"]["JsonValue"];
+                [key: string]: unknown;
             };
             /**
              * Icon Uri
@@ -3414,11 +3610,11 @@ export type components = {
             material_uuid: string;
             /** Meta Data */
             meta_data?: {
-                [key: string]: components["schemas"]["JsonValue"];
+                [key: string]: unknown;
             };
             /** Model */
             model?: {
-                [key: string]: components["schemas"]["JsonValue"];
+                [key: string]: unknown;
             };
             /** Name */
             name: string;
@@ -3433,7 +3629,7 @@ export type components = {
             resource_id: string;
             /** Resource Schema */
             resource_schema?: {
-                [key: string]: components["schemas"]["JsonValue"];
+                [key: string]: unknown;
             };
             /**
              * Resource Type
@@ -3488,7 +3684,7 @@ export type components = {
             cross_section_type: "rectangle" | "circle" | "rounded_rectangle";
             /** Extra */
             extra?: {
-                [key: string]: components["schemas"]["JsonValue"];
+                [key: string]: unknown;
             };
             /**
              * Layout
@@ -3578,7 +3774,7 @@ export type components = {
             composition?: components["schemas"]["JsonValue"][];
             /** Meta Data */
             meta_data?: {
-                [key: string]: components["schemas"]["JsonValue"];
+                [key: string]: unknown;
             };
             /** Name */
             name: string;
@@ -3623,6 +3819,26 @@ export type components = {
              */
             storage_kind: "inline" | "external";
         };
+        /** ResetRequest */
+        ResetRequest: {
+            /** Confirmation */
+            confirmation: string;
+            /** Confirmation Token */
+            confirmation_token: string;
+        };
+        /** ResetStatus */
+        ResetStatus: {
+            /** Backup Path */
+            backup_path: string;
+            /** Confirmation Token */
+            confirmation_token: string;
+            /** Detail */
+            detail: string;
+            /** Pending */
+            pending: boolean;
+            /** Supported */
+            supported: boolean;
+        };
         /**
          * ResourceTreeNotify
          * @description 前端在权威完成物料变更后，请求 edge hostnode 把变更分发到目标设备。
@@ -3655,8 +3871,8 @@ export type components = {
          * @description 安静点重启请求。
          *
          *     mode: quiescent 等执行端安静；immediate 跳过等待立即重启。
-         *     scope: auto 按运行形态选择；edge 通知 Edge 进程整进程重启（需
-         *     --role backend）；process 整进程重启。
+         *     scope: auto 按运行形态选择（调度权威进程 → edge，只重启 Host；其它 → process）；
+         *     edge 只重启 Host 进程，调度权威与管理端口常驻；process 本进程整体重启。
          */
         RestartRequest: {
             /**
@@ -3669,6 +3885,91 @@ export type components = {
              * @default auto
              */
             scope: string;
+        };
+        /** RuntimeLogBatch */
+        RuntimeLogBatch: {
+            /** Cursor */
+            cursor: string;
+            /**
+             * Has More
+             * @default false
+             */
+            has_more: boolean;
+            /** Lines */
+            lines: components["schemas"]["RuntimeLogLine"][];
+            /**
+             * Path
+             * @default
+             */
+            path: string;
+            /** Pid */
+            pid?: number | null;
+            /**
+             * Reset
+             * @default false
+             */
+            reset: boolean;
+            /** Source Id */
+            source_id: string;
+            /** Stream Id */
+            stream_id: string;
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
+        };
+        /** RuntimeLogLine */
+        RuntimeLogLine: {
+            /** Offset */
+            offset: number;
+            /** Text */
+            text: string;
+        };
+        /** RuntimeLogSource */
+        RuntimeLogSource: {
+            /**
+             * Detail
+             * @default
+             */
+            detail: string;
+            /** Device Ids */
+            device_ids?: string[];
+            /** Machine Name */
+            machine_name: string;
+            /**
+             * Managed
+             * @default false
+             */
+            managed: boolean;
+            /** Name */
+            name: string;
+            /**
+             * Node Id
+             * @default
+             */
+            node_id: string;
+            /** Online */
+            online: boolean;
+            /** Pid */
+            pid?: number | null;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "host" | "slave";
+            /** Source Id */
+            source_id: string;
+            /**
+             * Supported
+             * @default true
+             */
+            supported: boolean;
+        };
+        /** RuntimeLogSources */
+        RuntimeLogSources: {
+            /** Sources */
+            sources: components["schemas"]["RuntimeLogSource"][];
         };
         /** SiteRead */
         SiteRead: {
@@ -3691,13 +3992,13 @@ export type components = {
             description: string;
             /** Extra */
             extra?: {
-                [key: string]: components["schemas"]["JsonValue"];
+                [key: string]: unknown;
             };
             /** Label */
             label: string;
             /** Meta Data */
             meta_data?: {
-                [key: string]: components["schemas"]["JsonValue"];
+                [key: string]: unknown;
             };
             /** Occupied Material Uuid */
             occupied_material_uuid?: string | null;
@@ -3715,7 +4016,7 @@ export type components = {
             parent_link: string;
             /** Pose */
             pose?: {
-                [key: string]: components["schemas"]["JsonValue"];
+                [key: string]: unknown;
             };
             /**
              * Schema Version
@@ -3808,6 +4109,10 @@ export type components = {
         };
         /** ValidationError */
         ValidationError: {
+            /** Context */
+            ctx?: Record<string, never>;
+            /** Input */
+            input?: unknown;
             /** Location */
             loc: (string | number)[];
             /** Message */
@@ -3827,6 +4132,8 @@ export type components = {
             name: string;
             /** Tags */
             tags?: unknown[];
+            /** Workflow Uuid */
+            workflow_uuid?: string | null;
         };
         /**
          * WorkflowEdgeWrite
@@ -3849,6 +4156,24 @@ export type components = {
             target_node_uuid: string;
             /** Uuid */
             uuid: string;
+        };
+        /**
+         * WorkflowFromTemplateRequest
+         * @description 把注册表里的工作流模板（设备包 ``@workflow``）按角色绑定实例化成可运行的工作流。
+         *
+         *     ``bindings`` 是 ``{角色 id: device_id}``：设备角色缺省即其设备 id，类角色在物料
+         *     权威里恰有一个该类设备时自动填充，否则必须显式给出。同一模板 + 同一组绑定
+         *     反复调用幂等覆盖同一个工作流（脚本 / e2e 的"运行模板"入口）。
+         */
+        WorkflowFromTemplateRequest: {
+            /** Bindings */
+            bindings?: {
+                [key: string]: string;
+            };
+            /** Name */
+            name?: string | null;
+            /** Template Uuid */
+            template_uuid: string;
         };
         /**
          * WorkflowNodeWrite
@@ -3910,6 +4235,21 @@ export type components = {
             uuid: string;
             /** Workflow Node Template Uuid */
             workflow_node_template_uuid?: string | null;
+        };
+        /**
+         * WorkflowTaskCommandRequest
+         * @description step 放行一个动作；resume 切回自动。版本与幂等键防止跨页面重复放行。
+         */
+        WorkflowTaskCommandRequest: {
+            /** Expected Revision */
+            expected_revision: number;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "step" | "resume";
         };
         /**
          * WorkflowTaskCreateRequest
@@ -3986,6 +4326,8 @@ export type components = {
             name: string;
             /** Tags */
             tags?: unknown[];
+            /** Workflow Uuid */
+            workflow_uuid?: string | null;
         };
     };
     responses: never;
@@ -5195,6 +5537,59 @@ export interface operations {
             };
         };
     };
+    sources_api_v1_hostlink_log_sources_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeLogSources"];
+                };
+            };
+        };
+    };
+    logs_api_v1_hostlink_logs_get: {
+        parameters: {
+            query: {
+                cursor?: string;
+                limit?: number;
+                source_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeLogBatch"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     hostlink_peers_api_v1_hostlink_peers_get: {
         parameters: {
             query?: never;
@@ -6295,11 +6690,46 @@ export interface operations {
             };
         };
     };
+    apply_delta_api_v1_materials_snapshots_delta_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InventoryMutation"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_templates_api_v1_materials_templates_get: {
         parameters: {
             query?: {
-                /** @description false 时省略 registry 全量 definition（全注册表可达十几 MB），只返回名称 / 类型 / 分类 / 位点 / 版本等目录字段，供前端选择器使用。 */
+                /** @description 默认只返回名称 / uuid / 类型 / 分类 / 位点 / 版本 / definition_hash 等目录字段（前端选择器、存在性检查、变更判定够用）；true 时附带 registry 全量 definition（全注册表可达十几 MB），只在确实要读 definition 正文时开。 */
                 include_definition?: boolean;
+                /** @description 按模板 name 精确筛选：存在性检查 / 按名取 uuid 只回 0 或 1 条。 */
+                name?: string | null;
             };
             header?: never;
             path?: never;
@@ -6523,6 +6953,61 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ping_api_v1_ping_get: {
+        parameters: {
+            query?: {
+                client_timestamp?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_registry_digest_api_v1_registry_digest_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };
@@ -6803,6 +7288,81 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_registry_workflow_templates_api_v1_registry_workflow_templates_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    reset_preview_api_v1_reset_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResetStatus"];
+                };
+            };
+        };
+    };
+    reset_request_api_v1_reset_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResetStatus"];
                 };
             };
             /** @description Validation Error */
@@ -8407,6 +8967,41 @@ export interface operations {
             };
         };
     };
+    command_workflow_task_api_v1_workflow_tasks__task_uuid__commands_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_uuid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowTaskCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_task_interventions_api_v1_workflow_tasks__task_uuid__interventions_get: {
         parameters: {
             query?: {
@@ -8880,6 +9475,39 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["GraphWriteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_workflow_from_template_api_v1_workflows_from_template_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowFromTemplateRequest"];
             };
         };
         responses: {

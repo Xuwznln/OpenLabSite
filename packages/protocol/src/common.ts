@@ -287,8 +287,11 @@ export interface HealthResponse {
   status: string;
   /** `local` = 本进程持有调度权威；`remote` = 已接入云端/独立 Backend。 */
   scheduler: "local" | "remote" | (string & {});
-  /** `ready` = 本进程带设备执行面；`disabled` = 纯调度权威（--role backend）。 */
-  execution: "ready" | "disabled" | (string & {});
+  /**
+   * `ready` = 该地址提供设备执行面（本进程带 Host，或调度权威的 Host 子进程在线）；
+   * `restarting` = 调度权威在线但 Host 子进程正在重启；`disabled` = 纯调度权威（--role backend）。
+   */
+  execution: "ready" | "restarting" | "disabled" | (string & {});
 }
 
 export interface HealthRequestOptions {
@@ -388,6 +391,15 @@ export interface RestartRequestInput {
   scope?: RestartScope;
 }
 
+/** 全量重置预览/受理结果；202 不代表归档已完成，最终结果见服务端备份清单。 */
+export interface ResetPreview {
+  supported: boolean;
+  pending: boolean;
+  confirmation_token: string;
+  backup_path: string;
+  detail: string;
+}
+
 export interface RestartStatus {
   pending: boolean;
   mode: RestartMode | (string & {});
@@ -400,8 +412,56 @@ export interface RestartStatus {
   [key: string]: JsonValue | undefined;
 }
 
+/** GET /api/v1/ping：回显客户端时间戳 + 服务端时钟（链路时延 / 时钟偏差诊断）。 */
+export interface PingResponse {
+  client_timestamp: number | null;
+  /** 服务端 epoch 秒（浮点）。 */
+  server_timestamp: number;
+  scheduler: "local" | "remote" | (string & {});
+}
+
+/** 日志来源由 Host 提供，source_id 是不透明标识，不能当成本地文件路径。 */
+export interface RuntimeLogSource {
+  source_id: string;
+  name: string;
+  role: "host" | "slave";
+  machine_name: string;
+  node_id: string;
+  pid: number | null;
+  device_ids: string[];
+  online: boolean;
+  managed: boolean;
+  supported: boolean;
+  detail: string;
+}
+
+export interface RuntimeLogNotice {
+  source_ids: string[];
+  sources_changed: boolean;
+  all_sources: boolean;
+}
+
+export const RUNTIME_LOG_NOTICE_EVENT = "runtime.logs.changed";
+
+export interface RuntimeLogLine { offset: number; text: string }
+
+export interface RuntimeLogBatch {
+  source_id: string;
+  stream_id: string;
+  cursor: string;
+  lines: RuntimeLogLine[];
+  has_more: boolean;
+  reset: boolean;
+  truncated: boolean;
+  path: string;
+  pid: number | null;
+}
+
 export function createSystemApi(http: HttpTransport) {
   return {
+    resetPreview: () => http.request<ResetPreview>({ method: "GET", path: "/api/v1/reset" }),
+    requestReset: (body: { confirmation_token: string; confirmation: string }) =>
+      http.request<ResetPreview>({ method: "POST", path: "/api/v1/reset", body, timeoutMs: 150_000 }),
     /** GET /api/v1/health */
     health: (options: HealthRequestOptions = {}) =>
       http.request<HealthResponse>({
@@ -409,12 +469,30 @@ export function createSystemApi(http: HttpTransport) {
         path: "/api/v1/health",
         timeoutMs: options.timeoutMs ?? 4_000,
       }),
+    /** GET /api/v1/ping —— 浏览器 ↔ 微后端往返时延；host_node 的 test_latency 用同一端点测 Edge ↔ Backend */
+    ping: (clientTimestamp: number = Date.now() / 1000) =>
+      http.request<PingResponse>({
+        method: "GET",
+        path: "/api/v1/ping",
+        params: { client_timestamp: clientTimestamp },
+        timeoutMs: 4_000,
+      }),
     /** GET /api/v1/hostlink/peers —— host-slave TCP 组网在线状态 */
     hostlinkPeers: () =>
       http.request<HostLinkStatus>({
         method: "GET",
         path: "/api/v1/hostlink/peers",
         timeoutMs: 4_000,
+      }),
+    /** Host + 本机受管 Slave + 外部 Slave；不包含独立通信日志。 */
+    logSources: () => http.request<{ sources: RuntimeLogSource[] }>({
+      method: "GET", path: "/api/v1/hostlink/log-sources",
+    }),
+    /** 首次读取尾部；之后原样传回 cursor，重启 reset 后重新建立窗口。 */
+    logs: (sourceId: string, options: { cursor?: string; limit?: number } = {}) =>
+      http.request<RuntimeLogBatch>({
+        method: "GET", path: "/api/v1/hostlink/logs",
+        params: { source_id: sourceId, cursor: options.cursor, limit: options.limit ?? 300 },
       }),
     /**
      * GET /api/v1/scheduler/resources —— 本机调度资源快照。

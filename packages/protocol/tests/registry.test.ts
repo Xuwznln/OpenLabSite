@@ -67,6 +67,10 @@ describe("registry 协议客户端 ↔ catalog 契约", () => {
         mock.nextResponse = ok({ reports: [], total: 0, page: 1, page_size: 50 });
         return api.reports();
       },
+      workflowTemplates: () => {
+        mock.nextResponse = ok({ templates: [] });
+        return api.workflowTemplates();
+      },
     });
     // 数字段（版本号）归一成 `{}` 后应与 catalog 完全一致
     const normalized = new Set(

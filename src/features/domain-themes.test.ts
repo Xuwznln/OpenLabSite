@@ -27,6 +27,7 @@ describe("领域主题完整性（四模式）", () => {
       "history",
       "registry",
       "system",
+      "logs",
       "error-decisions",
       "status-incidents",
     ] as const;

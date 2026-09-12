@@ -375,9 +375,15 @@ export interface MaterialsV1InventoryLot {
   version: number;
 }
 
+/**
+ * 库存需求 / 分配的账目形态（不是物料种类）：`material` 是有 uuid、可放位点的实例（按件），
+ * `lot` 是 inventory_lot 的按量库存（散装试剂或耗材，按 lot FIFO 预留与扣减）。
+ */
+export type MaterialsV1InventoryKind = "material" | "lot";
+
 export interface MaterialsV1InventoryAllocation {
   key: string;
-  kind: "material" | "reagent";
+  kind: MaterialsV1InventoryKind;
   material_uuid?: string | null;
   template_uuid: string;
   lot_uuid?: string | null;
@@ -475,7 +481,27 @@ export function newCommandUuid(): string {
   return `${Date.now().toString(16)}-${Math.random().toString(16).slice(2, 10)}`;
 }
 
-/** 构造 materials.v1 写请求信封；浏览器发起的写操作 actor_type 固定为 frontend。 */
+/**
+ * 微后端 `KNOWN_ACTOR_TYPES`（unilabos.protocol.materials）：变更来源，落账本并渲染"来源" tag。
+ * 浏览器 / 操作员直接发起的写操作用 `human`（微后端契约要求前端显式携带，不依赖默认值 `edge`）。
+ */
+export const MATERIALS_ACTOR_TYPES = [
+  "human",
+  "graph",
+  "registry",
+  "device",
+  "virtual_device",
+  "scheduler",
+  "workflow",
+  "backend",
+  "edge",
+] as const;
+export type MaterialsActorType = (typeof MATERIALS_ACTOR_TYPES)[number];
+
+/** 浏览器写操作的 actor_type。 */
+export const BROWSER_ACTOR_TYPE: MaterialsActorType = "human";
+
+/** 构造 materials.v1 写请求信封；浏览器发起的写操作 actor_type 为 human（微后端契约）。 */
 export function materialsMutation<TPayload>(
   operation: string,
   payload: TPayload,
@@ -487,7 +513,7 @@ export function materialsMutation<TPayload>(
     command_uuid: commandUuid,
     effect_key: options.effectKey ?? `${operation}:${commandUuid}`,
     operation,
-    actor_type: options.actorType ?? "frontend",
+    actor_type: options.actorType ?? BROWSER_ACTOR_TYPE,
     actor_uuid: options.actorUuid ?? null,
     observed_at_ms: Date.now(),
     preconditions: options.preconditions ?? [],

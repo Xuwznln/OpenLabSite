@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 机器可读操作目录：浏览器会调用的每一条微后端路由。
  *
  * 与 Uni-Lab-OS `GET /api/openapi.json` 逐条对应；协议测试把各域客户端的实际
@@ -13,13 +13,19 @@
 import type { OperationContract } from "./common.js";
 
 export const OPERATIONS = [
+  { id: "system.reset.preview", domain: "system", method: "GET", path: "/api/v1/reset", summary: "全量重置范围及确认令牌", mutates: false, role: "any" },
+  { id: "system.reset.request", domain: "system", method: "POST", path: "/api/v1/reset", summary: "停机归档全部业务数据", mutates: true, role: "any" },
   // ── system：诊断路由（unilabos/server/api/runtime/diagnostics.py） ──
   { id: "system.health", domain: "system", method: "GET", path: "/api/v1/health", summary: "健康状态：scheduler local/remote、execution ready/disabled", mutates: false, role: "any" },
+  { id: "system.ping", domain: "system", method: "GET", path: "/api/v1/ping", summary: "HTTP ping-pong：回显客户端时间戳并附服务端时钟（链路时延 / 时钟偏差）", mutates: false, role: "any" },
   { id: "system.hostlink.peers", domain: "system", method: "GET", path: "/api/v1/hostlink/peers", summary: "HostLink 组网：host/slave 角色、在线 peer 与设备档案", mutates: false, role: "any" },
   { id: "system.scheduler.resources", domain: "system", method: "GET", path: "/api/v1/scheduler/resources", summary: "本机调度资源快照（503 = 调度权威在远端）", mutates: false, role: "any" },
   { id: "system.restart.status", domain: "system", method: "GET", path: "/api/v1/restart", summary: "安静点重启等待状态", mutates: false, role: "any" },
   { id: "system.restart.request", domain: "system", method: "POST", path: "/api/v1/restart", summary: "登记安静点重启（暂停派发，active job 清空后重启）", mutates: true, role: "any" },
   { id: "system.restart.cancel", domain: "system", method: "DELETE", path: "/api/v1/restart", summary: "取消等待中的重启并恢复派发", mutates: true, role: "any" },
+
+  { id: "system.log-sources.list", domain: "system", method: "GET", path: "/api/v1/hostlink/log-sources", summary: "Host 与各 Slave 日志来源目录", mutates: false, role: "host" },
+  { id: "system.logs.read", domain: "system", method: "GET", path: "/api/v1/hostlink/logs", summary: "有界增量读取进程日志（每个读取者独立游标）", mutates: false, role: "host" },
 
   // ── runtime-v1：runtime.db 只读投影 ──
   { id: "runtime-v1.sessions.list", domain: "runtime-v1", method: "GET", path: "/api/v1/runtime/sessions", summary: "Backend 控制会话列表", mutates: false, role: "any" },
@@ -37,6 +43,7 @@ export const OPERATIONS = [
 
   // ── workflow：Workflow Authority（本机调度时挂载） ──
   { id: "workflow.workflow.create", domain: "workflow", method: "POST", path: "/api/v1/workflows", summary: "创建 Workflow 定义", mutates: true, role: "any" },
+  { id: "workflow.workflow.from-template", domain: "workflow", method: "POST", path: "/api/v1/workflows/from-template", summary: "注册表工作流模板按角色绑定实例化为工作流（脚本入口；同模板同绑定幂等）", mutates: true, role: "any" },
   { id: "workflow.workflow.list", domain: "workflow", method: "GET", path: "/api/v1/workflows", summary: "Workflow 定义分页列表", mutates: false, role: "any" },
   { id: "workflow.workflow.get", domain: "workflow", method: "GET", path: "/api/v1/workflows/{workflow_uuid}", summary: "Workflow 定义详情", mutates: false, role: "any" },
   { id: "workflow.workflow.update", domain: "workflow", method: "PUT", path: "/api/v1/workflows/{workflow_uuid}", summary: "更新 Workflow 定义元数据", mutates: true, role: "any" },
@@ -46,6 +53,7 @@ export const OPERATIONS = [
   { id: "workflow.task.create", domain: "workflow", method: "POST", path: "/api/v1/workflow-tasks", summary: "提交运行：整图（workflow）或单点设备动作（ad_hoc_device_action）", mutates: true, role: "any" },
   { id: "workflow.task.list", domain: "workflow", method: "GET", path: "/api/v1/workflow-tasks", summary: "运行分页列表（status/workflow_uuid 过滤）", mutates: false, role: "any" },
   { id: "workflow.task.get", domain: "workflow", method: "GET", path: "/api/v1/workflow-tasks/{task_uuid}", summary: "运行详情", mutates: false, role: "any" },
+  { id: "workflow.task.command", domain: "workflow", method: "POST", path: "/api/v1/workflow-tasks/{task_uuid}/commands", summary: "逐步任务：放行一个动作或转为自动执行（版本校验与幂等）", mutates: true, role: "any" },
   { id: "workflow.task.jobs", domain: "workflow", method: "GET", path: "/api/v1/workflow-tasks/{task_uuid}/jobs", summary: "运行的全部 attempt（节点作业）平铺列表", mutates: false, role: "any" },
   { id: "workflow.task.node-runs", domain: "workflow", method: "GET", path: "/api/v1/workflow-tasks/{task_uuid}/node-runs", summary: "运行的节点运行视图：每节点一条，当前 attempt 结果 + attempts 历史", mutates: false, role: "any" },
   { id: "workflow.node-run.get", domain: "workflow", method: "GET", path: "/api/v1/workflow-node-runs/{run_uuid}", summary: "节点运行详情（含 attempts）", mutates: false, role: "any" },
@@ -72,6 +80,7 @@ export const OPERATIONS = [
   { id: "registry.entries.dismiss", domain: "registry", method: "POST", path: "/api/v1/registry/entries/{name}/dismiss", summary: "忽略挂起版本（生效版本不动，历史保留）", mutates: true, role: "any" },
   { id: "registry.entries.restore", domain: "registry", method: "POST", path: "/api/v1/registry/entries/{name}/restore/{version}", summary: "历史版本还原为新的生效版本", mutates: true, role: "any" },
   { id: "registry.reports.list", domain: "registry", method: "GET", path: "/api/v1/registry/reports", summary: "Edge 上报批次统计", mutates: false, role: "any" },
+  { id: "registry.workflow-templates.list", domain: "registry", method: "GET", path: "/api/v1/registry/workflow-templates", summary: "生效的设备包 @workflow 工作流模板（角色占位，插入画布时绑定设备）", mutates: false, role: "any" },
 
   // ── materials-v1：物料权威 ──
   { id: "materials-v1.templates.list", domain: "materials-v1", method: "GET", path: "/api/v1/materials/templates", summary: "资源模板列表（含 registry 全量定义）", mutates: false, role: "any" },
@@ -135,11 +144,11 @@ export const OPERATIONS = [
   // ── driver-packages：驱动包台账与安装（仅带执行面的 host；生效需 POST /restart） ──
   { id: "driver-packages.inventory", domain: "driver-packages", method: "GET", path: "/api/v1/driver-packages", summary: "驱动包台账 + 本次启动扫描目录 + 是否需重启", mutates: false, role: "host" },
   { id: "driver-packages.catalog", domain: "driver-packages", method: "GET", path: "/api/v1/driver-packages/catalog", summary: "官方 / 社区驱动包目录（远程索引 + 本地补充），供一键安装", mutates: false, role: "host" },
-  { id: "driver-packages.install", domain: "driver-packages", method: "POST", path: "/api/v1/driver-packages/install", summary: "pip 安装驱动包（pip 规格 / git URL / 本地目录），返回后台 operation", mutates: true, role: "host" },
+  { id: "driver-packages.install", domain: "driver-packages", method: "POST", path: "/api/v1/driver-packages/install", summary: "安装驱动包：GitHub 仓库 / 归档地址下载到 unilabos_data 或本机目录原地登记，uv 预装依赖，返回后台 operation", mutates: true, role: "host" },
   { id: "driver-packages.operations.list", domain: "driver-packages", method: "GET", path: "/api/v1/driver-packages/operations", summary: "最近的安装 / 卸载操作", mutates: false, role: "host" },
-  { id: "driver-packages.operations.get", domain: "driver-packages", method: "GET", path: "/api/v1/driver-packages/operations/{operation_id}", summary: "轮询单个操作的状态与 pip 日志", mutates: false, role: "host" },
+  { id: "driver-packages.operations.get", domain: "driver-packages", method: "GET", path: "/api/v1/driver-packages/operations/{operation_id}", summary: "轮询单个操作的状态与日志（下载 / 依赖安装 / 扫描）", mutates: false, role: "host" },
   { id: "driver-packages.set-enabled", domain: "driver-packages", method: "PUT", path: "/api/v1/driver-packages/{name}/enabled", summary: "启用 / 停用驱动包（下次启动生效）", mutates: true, role: "host" },
-  { id: "driver-packages.uninstall", domain: "driver-packages", method: "DELETE", path: "/api/v1/driver-packages/{name}", summary: "pip 卸载并移出台账，返回后台 operation", mutates: true, role: "host" },
+  { id: "driver-packages.uninstall", domain: "driver-packages", method: "DELETE", path: "/api/v1/driver-packages/{name}", summary: "删除 unilabos_data 里的源码树并移出台账，返回后台 operation", mutates: true, role: "host" },
   { id: "driver-packages.graphs.list", domain: "driver-packages", method: "GET", path: "/api/v1/driver-packages/{name}/graphs", summary: "驱动包随包设备图（data-files share/<包>/graph 或源码 graph/）", mutates: false, role: "host" },
   { id: "driver-packages.graphs.get", domain: "driver-packages", method: "GET", path: "/api/v1/driver-packages/{name}/graphs/{graph_name}", summary: "随包设备图的 node-link 载荷", mutates: false, role: "host" },
   { id: "driver-packages.graphs.launch", domain: "driver-packages", method: "POST", path: "/api/v1/driver-packages/{name}/graphs/{graph_name}/launch", summary: "把随包图作为受管设备进程拉起（同名进程存在则更新并重启）", mutates: true, role: "host" },
@@ -154,7 +163,6 @@ export const OPERATIONS = [
   { id: "device-processes.start", domain: "device-processes", method: "POST", path: "/api/v1/device-processes/{process_id}/start", summary: "拉起子进程（已在运行 409）", mutates: true, role: "host" },
   { id: "device-processes.stop", domain: "device-processes", method: "POST", path: "/api/v1/device-processes/{process_id}/stop", summary: "结束子进程（不触发看护重启）", mutates: true, role: "host" },
   { id: "device-processes.restart", domain: "device-processes", method: "POST", path: "/api/v1/device-processes/{process_id}/restart", summary: "停止后重新拉起", mutates: true, role: "host" },
-  { id: "device-processes.logs", domain: "device-processes", method: "GET", path: "/api/v1/device-processes/{process_id}/logs", summary: "子进程尾部日志（tail 行）", mutates: false, role: "host" },
 
   // ── lab-v1：实验室布局（区域 / 围墙像素格；runtime.db，一个 Host 一份） ──
   { id: "lab-v1.layout.get", domain: "lab-v1", method: "GET", path: "/api/v1/lab/layout", summary: "实验室布局文档（从未保存时 revision 0）", mutates: false, role: "any" },

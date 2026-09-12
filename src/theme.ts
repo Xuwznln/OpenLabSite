@@ -122,7 +122,9 @@ export const STATUS_META: Record<string, StatusMeta> = {
   succeeded: { label: "已完成", color: "#0B7A55", bg: "#E6F7F0" },
   failed: { label: "失败", color: "#B91C1C", bg: "#FDEBEB" },
   timeout: { label: "超时", color: "#B91C1C", bg: "#FDEBEB" },
-  canceled: { label: "已取消", color: "#6E7580", bg: "#EFEFEC" },
+  // 取消是人为中止，不是设备失败：橙色，与红色的失败 / 超时区分开
+  canceled: { label: "已取消", color: "#C2410C", bg: "#FDEEE4" },
+  canceling: { label: "取消中", color: "#C2410C", bg: "#FDEEE4" },
   interrupted: { label: "被中断", color: "#B45309", bg: "#FCF1E1" },
   paused: { label: "已暂停", color: "#B45309", bg: "#FCF1E1" },
   // node job
@@ -130,7 +132,7 @@ export const STATUS_META: Record<string, StatusMeta> = {
   ready: { label: "就绪", color: "#2E5BFF", bg: "#EAF0FF" },
   dispatched: { label: "已下发", color: "#B45309", bg: "#FCF1E1" },
   intervention_required: { label: "等待干预", color: "#B45309", bg: "#FCF1E1" },
-  cancel_requested: { label: "取消中", color: "#6E7580", bg: "#EFEFEC" },
+  cancel_requested: { label: "取消中", color: "#C2410C", bg: "#FDEEE4" },
   execution_unknown: { label: "执行态未知", color: "#B45309", bg: "#FCF1E1" },
   skipped: { label: "已跳过", color: "#6E7580", bg: "#EFEFEC" },
   // device / connection

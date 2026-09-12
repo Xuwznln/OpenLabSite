@@ -4,6 +4,20 @@
 最低兼容的 Uni-Lab-OS（`unilabos`）版本；规则见
 [docs/protocol/conventions.md §10](../../docs/protocol/conventions.md#10-版本与兼容)。
 
+## 未发布：Host / Slave 实时日志
+
+- 新增 `system.logSources()` / `system.logs()`：来源目录与有界增量只读查询，响应含独立游标、文件切换标记。
+- Host 及远端 Slave 需使用包含本功能的 Uni-Lab-OS 0.12.1 构建并重启；远端声明 `process-logs` 能力。
+- 旧 Host 降级为受管 Slave 尾部日志；没有新数据库、SSE 流或浏览器到 Slave 的直连端口。
+- OpenAPI / 目录 / 类型 / 测试 / live smoke 同步，详见 `docs/protocol/logs.md`。
+
+## 未发布：工作流逐步执行
+
+- 新增 `workflowBackend.commandTask()`：同一任务内单点放行 / 切回自动，版本校验与幂等键防重复。
+- Task 详情新增可选 `control_revision`；旧构建缺少此字段时前端禁用控制并提示升级。
+- 要求 Uni-Lab-OS 0.12.1 **包含 2026-09-13 逐步执行接口的构建**；版本号相同的旧构建不支持。
+- 没有数据库 schema 变更，复用 workflow_task_command；已同步 OpenAPI 快照、目录与客户端测试。
+
 ## 兼容矩阵
 
 | @openlab/protocol | 线上协议 | 最低 unilabos | 说明 |
@@ -24,7 +38,7 @@ server-databases、workflow）全部移除，不提供兼容层。
 - materials.v1 幂等写信封 `materialsMutation()`（`command_uuid` / `effect_key` / `preconditions`）与 `MutationResult` 类型。
 - 13 个域客户端：`system`、`runtimeV1`、`workflowBackend`、`registry`、`materialsV1`、`graphsV1`、
   `telemetryV1`、`historyV1`、`decisions`、`driverPackages`、`deviceProcesses`、`labV1`、`debug`。
-- 机器可读目录 `OPERATIONS`（126 条操作，含 2 条 SSE），`operationsOf()` / `findOperation()`，
+- 机器可读目录 `OPERATIONS`（127 条操作，含 2 条 SSE），`operationsOf()` / `findOperation()`，
   每条带 `role`（host / backend / any）与 `mutates`。
 - OpenAPI 契约快照 `openapi/unilabos-openapi.json`（`python -m unilabos.server.openapi_export` 导出，
   两种角色路由全集 + `x-openlab-role`）与生成类型 `@openlab/protocol/openapi`
@@ -34,12 +48,23 @@ server-databases、workflow）全部移除，不提供兼容层。
   内嵌 `attempts`）；`BackendWorkflowNodeJob` 按微后端当前行结构修正——attempt 是
   `attempt_no` / `trigger` / `workflow_node_run_uuid` / `retry_of_job_uuid` / `error_resolution`，
   `topological_index` / `executor_kind` / `execution_policy` / `execution_timeout_seconds` 移到节点运行上。
-- 驱动包域：安装 / 卸载为 202 长操作（`operation` 轮询）、`upgrade` 与 `name` 提示、Edge 侧目录、
-  随包设备图 `graphs` / `graph` / `launchGraph`。
+- 驱动包域：驱动包是**源码树**而不是 pip 分发——`spec` 是 GitHub 仓库地址 / 归档地址 / 本机目录，
+  微后端下载到 `unilabos_data/driver_packages/<name>/<version>/`（本机目录原地登记）、按目录挂载
+  （同 `--devices`）、只用 uv 预装 `pyproject` 依赖；`DriverPackage` 带 `source_kind` / `package_root` /
+  `dependencies` / `sha256`，inventory 带 `packages_root`。安装 / 卸载为 202 长操作（`operation` 轮询），
+  `upgrade` 重新下载并升级依赖，`name` 在源码树无 pyproject 时兜底；Edge 侧目录；随包设备图
+  `graphs` / `graph` / `launchGraph`。
 - 受管设备进程域：规格 CRUD、`start` / `stop` / `restart`、`logs`、`deviceClasses`。
+- lab-v1 域：实验室布局（区域 / 围墙像素格）`layout()` / `saveLayout()` / `resetLayout()`，runtime.db
+  单行文档，`revision` 乐观锁（409），从未保存返回 `revision 0`。
 - 校验脚本 `scripts/validate-contract.mjs`（域白名单、角色约束、禁止控制面路由、SSE 清单）与
   `scripts/live-smoke.mjs`（对真实微后端跑全部读路径与关键写流程）。
 
 ### 移除
 
 - `@openlab/protocol` 1.x 的全部实体 / 表契约 API 与 fixtures；`SERVER_DATABASE_KEYS` 保留为四库键常量。
+# 未发布：全量重置
+
+- system 增加 resetPreview / requestReset，与微后端 GET/POST /api/v1/reset 同步。
+- 需要包含 ResetController 的微后端版本；不支持的旧服务按缺失能力降级。
+- 202 只代表受理，完成后服务退出；备份清单为最终凭据。

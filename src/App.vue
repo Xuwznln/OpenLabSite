@@ -107,6 +107,7 @@ const NAV_GROUPS_BASE = [
       { key: "registry", to: "/registry", icon: LayersOutline },
       { key: "packages", to: "/packages", icon: ExtensionPuzzleOutline },
       { key: "system", to: "/system", icon: SpeedometerOutline },
+      { key: "logs", to: "/logs", icon: TerminalOutline },
       { key: "entities", to: "/data", icon: ServerOutline },
     ],
   },
@@ -146,6 +147,7 @@ const ROUTE_KEYS: Array<[prefix: string, key: string]> = [
   ["/registry", "registry"],
   ["/packages", "packages"],
   ["/system", "system"],
+  ["/logs", "logs"],
   ["/error-decisions", "error-decisions"],
   ["/status-incidents", "status-incidents"],
   ["/cases", "cases"],
@@ -167,7 +169,10 @@ const pageTitle = computed(() => {
 });
 const currentThemeOverrides = computed(() => domainThemeOverrides(domain.config));
 
-const alertBadge = computed(() => decisions.pendingErrorCount + decisions.openInterventionCount);
+// 异常审批角标：动作异常 + 工作流干预 + 等人确认的人工确认单
+const alertBadge = computed(
+  () => decisions.pendingErrorCount + decisions.openInterventionCount + decisions.pendingConfirmationCount,
+);
 
 // ── 全局命令面板 + 扫码直达 ──
 const showPalette = ref(false);

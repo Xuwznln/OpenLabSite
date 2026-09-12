@@ -114,6 +114,8 @@ const CONTROL_PLANE_OPERATIONS = new Set([
   "POST /api/v1/materials/reservations/{}/release",
   "POST /api/v1/materials/snapshots/apply",
   "POST /api/v1/materials/snapshots/compare",
+  "POST /api/v1/materials/snapshots/delta",
+  "GET /api/v1/registry/digest",
   "POST /api/v1/resource-templates",
 ]);
 const HTTP_METHODS = ["get", "post", "put", "patch", "delete"];

@@ -1,7 +1,13 @@
 <script setup lang="ts">
-/** 学科模式切换：只改导航词条、强调色与领域工具，不改任何协议。 */
+/**
+ * 学科模式切换：只改导航词条、强调色与领域工具，不改任何协议。
+ * 右侧的「站点」目录读 awesome-lab-sites 索引，列出其他前端站点 / 学科入口。
+ */
 import { LAB_THEME_IDS, LAB_THEMES, type LabThemeId } from "../features/domain-themes";
 import { useDomainThemeStore } from "../stores/domain-theme";
+import SiteCatalog from "./SiteCatalog.vue";
+
+withDefaults(defineProps<{ sites?: boolean }>(), { sites: true });
 
 const domain = useDomainThemeStore();
 
@@ -11,25 +17,34 @@ function select(theme: LabThemeId) {
 </script>
 
 <template>
-  <div class="domain-switcher" role="radiogroup" aria-label="实验主题" title="切换学科模式（导航词条、强调色与领域工具）">
-    <button
-      v-for="theme in LAB_THEME_IDS"
-      :key="theme"
-      type="button"
-      class="domain-option"
-      :class="{ active: domain.activeId === theme }"
-      :title="LAB_THEMES[theme].name"
-      :aria-checked="domain.activeId === theme"
-      role="radio"
-      @click="select(theme)"
-    >
-      <span class="domain-glyph" :style="{ background: LAB_THEMES[theme].accent }" />
-      <span class="domain-label">{{ LAB_THEMES[theme].shortName }}</span>
-    </button>
+  <div class="domain-cluster">
+    <div class="domain-switcher" role="radiogroup" aria-label="实验主题" title="切换学科模式（导航词条、强调色与领域工具）">
+      <button
+        v-for="theme in LAB_THEME_IDS"
+        :key="theme"
+        type="button"
+        class="domain-option"
+        :class="{ active: domain.activeId === theme }"
+        :title="LAB_THEMES[theme].name"
+        :aria-checked="domain.activeId === theme"
+        role="radio"
+        @click="select(theme)"
+      >
+        <span class="domain-glyph" :style="{ background: LAB_THEMES[theme].accent }" />
+        <span class="domain-label">{{ LAB_THEMES[theme].shortName }}</span>
+      </button>
+    </div>
+    <SiteCatalog v-if="sites" />
   </div>
 </template>
 
 <style scoped>
+.domain-cluster {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .domain-switcher {
   display: inline-flex;
   gap: 2px;

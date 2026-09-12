@@ -64,8 +64,10 @@ in the diagnostics page.
   `history`);
 - runs either as a Host (devices + optional local Workflow Authority) or as a standalone
   scheduling authority (`--role backend`, adds Registry Authority);
-- on a Host, also manages device drivers: `driver-packages` installs pip / git / local
-  packages into its own interpreter and mounts them on the next (safe) restart;
+- on a Host, also manages device drivers: `driver-packages` fetches driver source trees (GitHub
+  repository, archive URL or local directory) into `unilabos_data/driver_packages/`, pre-installs
+  their `pyproject` dependencies with `uv`, and mounts the trees like `--devices` on the next (safe)
+  restart — the package itself is never `pip install`ed;
   `device-processes` runs configured devices as supervised local Slave child processes
   (crash isolation, backoff restarts, per-process logs) that join the Host over HostLink
   (`docs/protocol/driver-packages.md`). The list of *what* can be installed is not the

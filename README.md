@@ -28,8 +28,9 @@ microbackend.
 |  | 运行监控 | runtime jobs, telemetry, history and materials change streams |
 | Workflows | 实验流程 · 编排画布 · 任务排程 | Workflow Authority (definitions, graph, tasks, node jobs, authoring, SSE) |
 | Alerts | 异常审批 · 状态告警 | error-decisions, status-incidents, open interventions |
-| System | 执行历史 · 注册表 · 驱动包 · 系统诊断 · 数据库浏览 | history.v1, Registry Authority, driver-packages + device-processes (pip install, safe restart, supervised local Slave processes), HostLink / scheduler / restart, read-only four-database browser |
+| System | 执行历史 · 注册表 · 驱动包 · 系统诊断 · 数据库浏览 | history.v1, Registry Authority, driver-packages + device-processes (source trees fetched from GitHub into `unilabos_data`, deps via uv, safe restart, supervised local Slave processes), HostLink / scheduler / restart, read-only four-database browser |
 | Tools | 领域工具 | molar-mass, DNA/PCR, CIF viewer (frontend-only) |
+| System | 实时日志 | Host / managed Slave / remote Slave, bounded HTTP cursor reads, level/search filters, pause/follow/copy/download |
 
 Pages are role-aware: connecting to a `--role backend` scheduling authority shows the
 workflow and registry surfaces and clearly marks device/telemetry/decision pages as living on
@@ -133,10 +134,21 @@ nothing else needs to be configured.
 
 The "驱动包" page lists installable device driver packages from
 [awesome-lab-devices](https://github.com/Xuwznln/awesome-lab-devices) (`index.json`, read directly
-by the browser) and sends the chosen `spec` to the connected microbackend, which runs `pip install`
-in its own interpreter. Override the index with `VITE_OPENLAB_DEVICE_INDEX_URL` at build time or
+by the browser) and sends the chosen `spec` (a GitHub repository URL) to the connected microbackend,
+which downloads the source tree into `unilabos_data/driver_packages/`, mounts it like `--devices`, and
+pre-installs its `pyproject` dependencies with `uv` (no `pip install` of the package itself). Override
+the index with `VITE_OPENLAB_DEVICE_INDEX_URL` at build time or
 temporarily in the page (intranet mirror / fork). Lab-private packages can be listed on the Edge side
 in `unilabos_data/driver_package_catalog.json` using the same JSON shape.
+
+### Site index
+
+The "站点" catalog next to the domain switcher lists front-end sites from
+[awesome-lab-sites](https://github.com/Xuwznln/awesome-lab-sites) (`index.json`, read directly by
+the browser): the general OpenLab site, per-domain entry points (`?theme=organic|biology|materials`
+on the same deployment, applied at startup), and community forks. Override the index with
+`VITE_OPENLAB_SITE_INDEX_URL` at build time. The `unilab` microbackend landing page reads the same
+index for its "推荐前端" cards.
 
 ## Deployment
 
@@ -175,7 +187,8 @@ is [`conventions.md §11`](./docs/protocol/conventions.md#11-契约治理新增�
 
 - **Web application**: `pnpm run build` produces `dist/` for static hosting (GitHub Pages workflow
   in `.github/workflows/`). The site fetches the driver package index from
-  [awesome-lab-devices](https://github.com/Xuwznln/awesome-lab-devices) at runtime.
+  [awesome-lab-devices](https://github.com/Xuwznln/awesome-lab-devices) and the site index from
+  [awesome-lab-sites](https://github.com/Xuwznln/awesome-lab-sites) at runtime.
 - **`@openlab/protocol`**: bump `version` in `packages/protocol/package.json` and
   `OPENLAB_PROTOCOL_VERSION` in `packages/protocol/src/common.ts` (a test keeps them equal), add a
   [CHANGELOG](./packages/protocol/CHANGELOG.md) entry with the minimum compatible unilabos version,

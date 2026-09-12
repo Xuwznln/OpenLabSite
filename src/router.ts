@@ -118,6 +118,12 @@ export const router = createRouter({
       meta: { title: "系统诊断", overline: "Diagnostics" },
     },
     {
+      path: "/logs",
+      name: "runtime-logs",
+      component: () => import("./views/RuntimeLogsView.vue"),
+      meta: { title: "实时日志", overline: "Runtime Logs" },
+    },
+    {
       path: "/data",
       name: "data-browser",
       component: () => import("./views/DataBrowserView.vue"),

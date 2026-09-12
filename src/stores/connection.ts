@@ -11,14 +11,14 @@
  */
 
 import { defineStore } from "pinia";
-import { computed, ref, watch } from "vue";
-import { ApiError, createEdgeApi, type EdgeApi, type HealthResponse } from "@openlab/protocol";
-import { bindWorkflowInvalidations } from "../features/workflow-invalidation";
+import { computed, onScopeDispose, ref, watch } from "vue";
+import { ApiError, createEdgeApi, RUNTIME_LOG_NOTICE_EVENT, type RuntimeLogNotice, type EdgeApi, type HealthResponse } from "@openlab/protocol";
+import { bindWorkflowInvalidations, WORKFLOW_INVALIDATION_EVENT_TYPES } from "../features/workflow-invalidation";
+import { openNoticeSource, type NoticeSource } from "../features/shared-notice";
 import { describeError, isOfflineError } from "../features/errors";
 import { classifyTarget } from "../features/insecure-target";
 
 const STORAGE_KEY = "openlab:base-url";
-const LEGACY_STORAGE_KEYS = ["unilab-edge-ui:base-url"];
 const RECENT_KEY = "openlab:recent-base-urls";
 
 export const DEFAULT_LOCAL_EDGE_URL = "http://127.0.0.1:8002";
@@ -36,13 +36,15 @@ export type CapabilityState = "unknown" | "available" | "unsupported";
  */
 function createNoticeChannel(
   resolveUrl: () => string,
-  bind: (source: EventSource, invalidate: () => void) => () => void,
+  bind: (source: NoticeSource, invalidate: () => void) => () => void,
+  types: string[],
+  connected: () => void = () => {},
 ) {
   const revision = ref(0);
   const state = ref<NoticeState>(
     typeof EventSource === "undefined" ? "unsupported" : "connecting",
   );
-  let source: EventSource | null = null;
+  let source: NoticeSource | null = null;
   let unbind: (() => void) | null = null;
   let debounce: ReturnType<typeof setTimeout> | null = null;
 
@@ -57,11 +59,12 @@ function createNoticeChannel(
   function start() {
     if (source || typeof EventSource === "undefined") return;
     state.value = "connecting";
-    source = new EventSource(resolveUrl());
+    source = openNoticeSource(resolveUrl(), types);
     source.onopen = () => {
       state.value = "live";
       // 建连/重连后必须重新经 HTTP 校准，不能把通知 payload 当成数据真相。
       signal();
+      connected();
     };
     source.onerror = () => {
       state.value = "retry";
@@ -87,7 +90,7 @@ function createNoticeChannel(
 const MATERIALS_INVALIDATION_EVENT = "materials.changed";
 
 function bindMaterialsInvalidations(
-  source: EventSource,
+  source: NoticeSource,
   invalidate: () => void,
 ): () => void {
   const listener: EventListener = () => invalidate();
@@ -134,15 +137,8 @@ function readRecent(): string[] {
 }
 
 export const useConnectionStore = defineStore("connection", () => {
-  const legacyUrl = LEGACY_STORAGE_KEYS.map((key) => localStorage.getItem(key)).find(Boolean);
   const storedUrl = localStorage.getItem(STORAGE_KEY);
-  let initialUrl = normalizeBaseUrl(storedUrl ?? legacyUrl ?? DEFAULT_BASE_URL) || DEFAULT_BASE_URL;
-  // 旧版本在开发模式默认走 dev 代理（页面同源）；代理如今默认关闭，这个残留地址
-  // 在 dev server 上永远打不到 /api，直接回到直连默认值。
-  if (import.meta.env.DEV && !DEV_PROXY_ACTIVE && initialUrl === PAGE_ORIGIN) {
-    initialUrl = DEFAULT_BASE_URL;
-    localStorage.setItem(STORAGE_KEY, initialUrl);
-  }
+  const initialUrl = normalizeBaseUrl(storedUrl ?? DEFAULT_BASE_URL) || DEFAULT_BASE_URL;
   if (!storedUrl) localStorage.setItem(STORAGE_KEY, initialUrl);
 
   const baseUrl = ref(initialUrl);
@@ -175,13 +171,33 @@ export const useConnectionStore = defineStore("connection", () => {
   });
 
   // ── 失效通知通道（SSE；数据真相仍是 HTTP） ──────────────────
+  const logListeners = new Set<(notice: RuntimeLogNotice) => void>();
+  const publishLogs = (notice: RuntimeLogNotice) => { for (const listener of logListeners) listener(notice); };
+  function onLogNotice(listener: (notice: RuntimeLogNotice) => void) {
+    logListeners.add(listener);
+    return () => { logListeners.delete(listener); };
+  }
   const workflowChannel = createNoticeChannel(
     () => api.value.domains.workflowBackend.eventsUrl(),
-    (source, invalidate) => bindWorkflowInvalidations(source, invalidate),
+    (source, invalidate) => {
+      const unbind = bindWorkflowInvalidations(source, invalidate);
+      const logs: EventListener = (event) => {
+        try {
+          const notice = JSON.parse((event as MessageEvent<string>).data) as RuntimeLogNotice;
+          if (Array.isArray(notice.source_ids) && notice.source_ids.every(id => typeof id === "string")
+            && typeof notice.sources_changed === "boolean" && typeof notice.all_sources === "boolean") publishLogs(notice);
+        } catch { /* 非法通知不当作日志正文；重连会重新校准。 */ }
+      };
+      source.addEventListener(RUNTIME_LOG_NOTICE_EVENT, logs);
+      return () => { unbind(); source.removeEventListener(RUNTIME_LOG_NOTICE_EVENT, logs); };
+    },
+    [...WORKFLOW_INVALIDATION_EVENT_TYPES, RUNTIME_LOG_NOTICE_EVENT],
+    () => publishLogs({ source_ids: [], sources_changed: true, all_sources: true }),
   );
   const materialsChannel = createNoticeChannel(
     () => api.value.domains.materialsV1.eventsUrl(),
     bindMaterialsInvalidations,
+    [MATERIALS_INVALIDATION_EVENT],
   );
   const noticeChannels = [workflowChannel, materialsChannel];
 
@@ -248,8 +264,20 @@ export const useConnectionStore = defineStore("connection", () => {
 
   let pollTimer: ReturnType<typeof setInterval> | null = null;
 
+  function suspendNotices() {
+    for (const channel of noticeChannels) channel.stop();
+  }
+
+  function resumeNotices() {
+    if (pollTimer === null) return;
+    for (const channel of noticeChannels) channel.start();
+    void checkHealth();
+  }
+
   function startPolling(intervalMs = 5000) {
     if (pollTimer !== null) return;
+    window.addEventListener("pagehide", suspendNotices);
+    window.addEventListener("pageshow", resumeNotices);
     void checkHealth();
     for (const channel of noticeChannels) channel.start();
     pollTimer = setInterval(() => void checkHealth(), intervalMs);
@@ -259,18 +287,22 @@ export const useConnectionStore = defineStore("connection", () => {
       void detectSameOriginBackend().then((hit) => {
         if (!hit) return;
         sameOriginBackend.value = true;
-        if (!storedUrl && !legacyUrl && baseUrl.value === initialUrl) setBaseUrl(PAGE_ORIGIN);
+        if (!storedUrl && baseUrl.value === initialUrl) setBaseUrl(PAGE_ORIGIN);
       });
     }
   }
 
   function stopPolling() {
+    window.removeEventListener("pagehide", suspendNotices);
+    window.removeEventListener("pageshow", resumeNotices);
     if (pollTimer !== null) {
       clearInterval(pollTimer);
       pollTimer = null;
     }
     for (const channel of noticeChannels) channel.stop();
   }
+
+  onScopeDispose(stopPolling);
 
   watch(baseUrl, () => {
     health.value = null;
@@ -304,6 +336,8 @@ export const useConnectionStore = defineStore("connection", () => {
     workflowNoticeState,
     materialsNoticeRevision,
     materialsNoticeState,
+    logsNoticeState: workflowChannel.state,
+    onLogNotice,
     api,
     setBaseUrl,
     checkHealth,

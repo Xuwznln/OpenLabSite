@@ -5,7 +5,7 @@
  * 数据全部来自 driver-packages 域（Host 专有；--role backend 返回 404 → 降级提示）。
  * 安装是后台 operation：这里每 1.5s 轮询日志直到终态；台账变化后 inventory 的
  * `restart_required` 为 true，页面顶部给出「安静点重启」——走 system.requestRestart
- * （mode=quiescent, scope=process），等执行端安静、进程重启、health 恢复后自动刷新。
+ * （mode=quiescent, scope=auto），默认部署只重启 Host，权威进程保持在线。
  *
  * 「启动」：示例设备包随包带设备图（`share/<包>/graph/*.json`），装完后一键把每张
  * 纯设备图作为受管设备进程拉起（driverPackages.launchGraph），不需要重启 Host；
@@ -37,6 +37,7 @@ import {
 import DeviceProcessesPanel from "../components/DeviceProcessesPanel.vue";
 import DriverPackageCatalog from "../components/DriverPackageCatalog.vue";
 import PageHeader from "../components/PageHeader.vue";
+import FullResetPanel from "../components/FullResetPanel.vue";
 import StatusPill from "../components/StatusPill.vue";
 import { describeError } from "../features/errors";
 import { useConnectionStore } from "../stores/connection";
@@ -92,7 +93,7 @@ async function refreshRestart() {
 async function install(specValue?: string, upgrade = false, name = "") {
   const value = (specValue ?? spec.value).trim();
   if (!value) {
-    message.warning("填写 pip 规格（name==1.2）、git URL（git+https://…）或本地目录");
+    message.warning("填写 GitHub 仓库地址（https://github.com/org/repo[@ref]）、zip / tar.gz 归档地址或本机目录");
     return;
   }
   installing.value = true;
@@ -104,7 +105,7 @@ async function install(specValue?: string, upgrade = false, name = "") {
       name,
     });
     logOpen.value = true;
-    message.info(`已开始${upgrade ? "重装 / 升级" : "安装"} ${value}，pip 输出会实时显示在下方`);
+    message.info(`已开始${upgrade ? "重装 / 升级" : "安装"} ${value}，下载与依赖安装日志会实时显示在下方`);
     if (!specValue) spec.value = "";
   } catch (error) {
     message.error(`安装请求失败：${describeError(error)}`);
@@ -121,6 +122,12 @@ async function uninstall(pkg: DriverPackage) {
   } catch (error) {
     message.error(`卸载请求失败：${describeError(error)}`);
   }
+}
+
+function uninstallByName(name: string) {
+  const pkg = packages.value.find((item) => item.name === name);
+  if (pkg) void uninstall(pkg);
+  else message.warning("驱动包台账已变化，请刷新后重试");
 }
 
 async function toggleEnabled(pkg: DriverPackage, enabled: boolean) {
@@ -202,9 +209,9 @@ const restarting = ref(false);
 async function requestRestart(mode: "quiescent" | "immediate") {
   restarting.value = true;
   try {
-    restart.value = await conn.api.domains.system.requestRestart({ mode, scope: "process" });
+    restart.value = await conn.api.domains.system.requestRestart({ mode, scope: "auto" });
     restartPhase.value = "requested";
-    message.info(mode === "quiescent" ? "已登记安静点重启：暂停新派发，等执行中的作业结束后重启进程" : "正在立即重启进程");
+    message.info(mode === "quiescent" ? "已登记安静点重启：等待作业结束后重启 Host；默认部署下调度权威保持在线" : "正在重启 Host 执行端");
   } catch (error) {
     message.error(`重启请求失败：${describeError(error)}`);
   } finally {
@@ -222,21 +229,21 @@ async function cancelRestart() {
   }
 }
 
-// 进程真的下线又回来后刷新台账，restart_required 会回到 false
-watch(
-  () => conn.online,
-  (online) => {
-    if (restartPhase.value === "requested" && !online) restartPhase.value = "down";
-    if (restartPhase.value === "down" && online) {
-      restartPhase.value = "back";
-      void refresh();
-      void refreshRestart();
-      message.success("进程已重启，驱动包台账已重新加载");
-      setTimeout(() => (restartPhase.value = "idle"), 6000);
-    }
-    if (online && !inventory.value) void refresh();
-  },
-);
+// Host 真的下线又回来后刷新台账，restart_required 会回到 false。
+// 两种形态：连的是 Host 本体时 online 会翻一次；连的是调度权威（默认拓扑）时端口
+// 一直在线，Host 子进程重启体现为 health.execution ready → restarting → ready。
+const hostUp = computed(() => conn.online && conn.health?.execution !== "restarting");
+watch(hostUp, (up) => {
+  if (restartPhase.value === "requested" && !up) restartPhase.value = "down";
+  if (restartPhase.value === "down" && up) {
+    restartPhase.value = "back";
+    void refresh();
+    void refreshRestart();
+    message.success("Host 已重启，驱动包台账已重新加载");
+    setTimeout(() => (restartPhase.value = "idle"), 6000);
+  }
+  if (up && !inventory.value) void refresh();
+});
 
 // ── 表格 ─────────────────────────────────────────────────────
 
@@ -288,11 +295,24 @@ const columns: DataTableColumns<DriverPackage> = [
         : h("span", { class: "dim" }, "未扫描到 @device"),
   },
   {
-    title: "包目录",
-    key: "package_dirs",
+    title: "源码树",
+    key: "package_root",
     minWidth: 220,
     ellipsis: { tooltip: true },
-    render: (row) => h("span", { class: "mono small" }, row.package_dirs.join("; ") || "—"),
+    render: (row) =>
+      h("div", { class: "pkg-name" }, [
+        h("span", { class: "mono small", title: row.package_root }, row.package_root || row.package_dirs.join("; ") || "—"),
+        h(
+          "span",
+          { class: "dim small" },
+          [
+            row.source_kind === "local" ? "本机目录（原地登记）" : row.source_kind === "github" ? "GitHub 下载" : row.source_kind === "archive" ? "归档下载" : "",
+            row.dependencies?.length ? `依赖 ${row.dependencies.length} 项（${row.installer || "未装"}）` : "无第三方依赖",
+          ]
+            .filter(Boolean)
+            .join(" · "),
+        ),
+      ]),
   },
   { title: "安装时间", key: "installed_at_ms", width: 160, render: (row) => fmtMs(row.installed_at_ms) },
   {
@@ -302,9 +322,10 @@ const columns: DataTableColumns<DriverPackage> = [
     render: (row) => h(NSwitch, { size: "small", value: row.enabled, "onUpdate:value": (value: boolean) => void toggleEnabled(row, value) }),
   },
   {
-    title: "",
+    title: "操作",
     key: "actions",
     width: 190,
+    fixed: "right",
     render: (row) =>
       h("div", { class: "row-actions" }, [
         h(
@@ -326,7 +347,7 @@ const columns: DataTableColumns<DriverPackage> = [
             size: "tiny",
             quaternary: true,
             disabled: !row.spec,
-            title: row.spec ? `pip install --upgrade ${row.spec}` : "台账里没有记录安装规格",
+            title: row.spec ? `重新下载 ${row.spec} 并升级其依赖` : "台账里没有记录安装来源",
             onClick: () => void install(row.spec, true, row.name),
           },
           { default: () => "升级" },
@@ -336,7 +357,10 @@ const columns: DataTableColumns<DriverPackage> = [
           { onPositiveClick: () => void uninstall(row) },
           {
             trigger: () => h(NButton, { size: "tiny", type: "error", quaternary: true }, { default: () => "卸载" }),
-            default: () => `pip uninstall ${row.name} 并移出台账？其驱动的设备重启后不可用。`,
+            default: () =>
+              row.source_kind === "local"
+                ? `把本机目录 ${row.name} 移出台账（不删文件）？其驱动的设备重启后不可用。`
+                : `删除 unilabos_data 里 ${row.name} 的源码树并移出台账？其驱动的设备重启后不可用。`,
           },
         ),
       ]),
@@ -378,6 +402,8 @@ onUnmounted(() => {
       </template>
     </PageHeader>
 
+    <FullResetPanel />
+
     <div v-if="!conn.online" class="degraded">
       <span class="degraded-title">尚未连接微后端</span>
       连接 Host 进程后可安装、启停驱动包。
@@ -393,8 +419,8 @@ onUnmounted(() => {
 
       <!-- 重启横幅：台账变了 / 已登记重启 / 进程重启中 -->
       <div v-if="restartPhase === 'down'" class="restart-bar down">
-        <b>进程正在重启…</b>
-        <span>health 恢复后自动刷新台账。</span>
+        <b>Host 正在重启…</b>
+        <span>执行面恢复后自动刷新台账。</span>
       </div>
       <div v-else-if="restart?.pending" class="restart-bar pending">
         <b>已登记{{ restart.mode === "immediate" ? "立即" : "安静点" }}重启</b>
@@ -406,7 +432,7 @@ onUnmounted(() => {
       </div>
       <div v-else-if="inventory?.restart_required" class="restart-bar required">
         <b>驱动包台账已变化，需要重启 Host 进程才会生效</b>
-        <span>安静点重启：暂停新派发，等执行中的作业结束后整进程重启并自动恢复，物料与任务不受影响。</span>
+        <span>安静点重启：暂停新派发，等执行中的作业结束后只重启 Host 进程并自动恢复；调度权威、物料与任务不受影响。</span>
         <NButton size="small" type="primary" :loading="restarting" @click="requestRestart('quiescent')">安静点重启</NButton>
         <NButton size="small" quaternary :loading="restarting" @click="requestRestart('immediate')">立即重启</NButton>
       </div>
@@ -421,17 +447,18 @@ onUnmounted(() => {
           :launching="launching"
           @install="(value, upgrade, name) => install(value, upgrade, name)"
           @launch="(name) => launchPackage(name)"
+          @uninstall="uninstallByName"
         />
 
         <section class="card">
           <div class="card-head">
             <span class="card-title">手动安装</span>
-            <span class="dim small">不在索引里的包按 pip 规格装进 {{ inventory?.python.executable ?? "Host 进程的 Python" }}</span>
+            <span class="dim small" :title="inventory?.packages_root">不在索引里的包：源码树放进 unilabos_data/driver_packages/，依赖用 uv 装进 {{ inventory?.python.executable ?? "Host 进程的 Python" }}</span>
           </div>
           <div class="install-row">
             <NInput
               v-model:value="spec"
-              placeholder="pip 规格：unilabos-devices-acme==0.3.0 · git+https://github.com/org/pkg.git · D:\devices\acme"
+              placeholder="GitHub 仓库 https://github.com/org/repo[@ref] · 归档地址 …/pkg.tar.gz · 本机目录 D:\devices\acme"
               :disabled="installing"
               @keyup.enter="install()"
             />
@@ -439,7 +466,7 @@ onUnmounted(() => {
           </div>
           <div class="install-opts">
             <NCheckbox v-model:checked="enableAfterInstall">装完即启用（下次启动挂载到 --devices 扫描）</NCheckbox>
-            <span class="dim small">安装 = `python -m pip install <规格>`，随后 AST 扫描包内 `@device` 并记入台账。</span>
+            <span class="dim small">安装 = 下载源码树（本机目录原地登记）→ uv 预装 pyproject 依赖 → AST 扫描 `@device` 记入台账；不 pip install 包体。</span>
           </div>
 
           <!-- 操作日志 -->
@@ -455,7 +482,7 @@ onUnmounted(() => {
               <span class="dim small op-toggle">{{ logOpen ? "收起日志" : "展开日志" }}</span>
             </div>
             <div v-if="activeOperation.error" class="op-error">{{ activeOperation.error }}</div>
-            <pre v-if="logOpen" class="op-log">{{ activeOperation.log || "等待 pip 输出…" }}</pre>
+            <pre v-if="logOpen" class="op-log">{{ activeOperation.log || "等待输出…" }}</pre>
           </div>
         </section>
       </div>

@@ -5,7 +5,7 @@ FastAPI 直出 DTO；`--role backend` 进程不挂载这两组路由（404），
 
 | 层 | 解决什么 | 域 | 路径前缀 | 客户端 |
 | --- | --- | --- | --- | --- |
-| 驱动包 | 设备驱动代码怎么进到这台机器（`pip install`）、启动时怎么被扫描到 | `driver-packages` | `/api/v1/driver-packages` | `createDriverPackagesApi` |
+| 驱动包 | 设备驱动源码树怎么进到这台机器（下载到 unilabos_data）、依赖怎么预装、启动时怎么被扫描到 | `driver-packages` | `/api/v1/driver-packages` | `createDriverPackagesApi` |
 | 设备进程 | 装好的驱动类怎么配成一台设备、跑在哪个进程、崩了谁拉起 | `device-processes` | `/api/v1/device-processes` | `createDeviceProcessesApi` |
 
 后端实现：`unilabos/server/services/driver_packages.py`、`device_processes.py`，
@@ -14,27 +14,39 @@ FastAPI 直出 DTO；`--role backend` 进程不挂载这两组路由（404），
 
 ## 1. 驱动包（driver-packages）
 
-驱动包 = 含 `@device` / `@resource` 的 Python 分发，来源可以是 pip 规格（`name==1.2`）、
-git URL（`git+https://…`）或本地目录。安装就是在 Host 自己的解释器里跑
-`python -m pip install <spec>`，装完做 AST 扫描找出包内设备类，写入台账
-`<working_dir>/driver_packages.json`。**Host 启动时**把台账里已启用且目录存在的包目录并入
-`--devices` 扫描目录，所以「安装 / 停用 / 卸载」对 Host 本体都要重启才生效；受管设备进程
-（第 2 节）是子进程，挂载驱动包不需要重启 Host。
+驱动包 = 含 `@device` / `@resource` 的 Python **源码树**，与 `unilab --devices <目录>` 是同一套机制，
+**不经 pip 安装包体**：
+
+- 来源：GitHub 仓库地址 `https://github.com/<owner>/<repo>[@ref]`（也接受 `git+https://….git`；
+  不带 ref 时依次试 `main` / `master`）、zip / tar.gz 归档地址，或本机目录；
+- 远端来源经 `codeload.github.com` 下载归档，校验 sha256 后解压到
+  `<working_dir>/driver_packages/<name>/<version>/`（working_dir 即 `unilabos_data/`），同名旧版本目录被清掉；
+  本机目录原地登记、不复制；
+- 读源码树 `pyproject.toml`：`[project].name / version` 作为包名与版本，`[project].dependencies`
+  去掉 `unilabos` 本体后用 `uv pip install --python <当前解释器>`（uv 不可用时回退 `python -m pip`，
+  中文 locale 走清华源）预装——这是安装里唯一会写解释器的一步；
+- 挂载目录 = 源码树里的顶层 Python 包（含 `__init__.py`；`src/` 布局同样识别；`[tool.setuptools.packages.find]
+  include` 存在时按前缀过滤；`tests/ docs/ graph/` 等不算），其父目录进 `sys.path`——与 `--devices` 语义一致；
+- AST 扫描包目录找出 `@device`，写入台账 `<working_dir>/driver_packages.json`。
+
+**Host 启动时**把台账里已启用且目录存在的包目录并入 `--devices` 扫描目录，所以「安装 / 停用 / 卸载」
+对 Host 本体都要重启才生效；受管设备进程（第 2 节）是子进程，挂载驱动包不需要重启 Host。
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `` | 台账与运行态：`{python, working_dir, ledger_path, scan_dirs, external_only, restart_required, packages[], operations[]}` |
+| GET | `` | 台账与运行态：`{python, working_dir, packages_root, ledger_path, scan_dirs, external_only, restart_required, packages[], operations[]}` |
 | GET | `/catalog` | Edge 侧补充目录：`{sources[], packages[]}`（见 1.2） |
-| POST | `/install` | `{spec, enable=true, upgrade=false, name=""}` → 202，返回 `running` 的 operation |
+| POST | `/install` | `{spec, enable=true, upgrade=false, name=""}` → 202，返回 `running` 的 operation；来源非法（不是 GitHub / 归档地址 / 存在的目录）直接 422 |
 | GET | `/operations` | 最近 30 条操作，新的在前 |
-| GET | `/operations/{operation_id}` | 轮询单条操作（安装日志、结果、错误） |
+| GET | `/operations/{operation_id}` | 轮询单条操作（下载 / 依赖 / 扫描日志、结果、错误） |
 | PUT | `/{name}/enabled` | `{enabled}`；只改台账，下次启动生效 |
-| DELETE | `/{name}` | `pip uninstall -y` 并移出台账 → 202，返回 operation |
+| DELETE | `/{name}` | 删除 `unilabos_data` 里的源码树并移出台账（本机目录只移出台账，不删文件；已装依赖保留）→ 202，返回 operation |
 
-`packages[]`（`DriverPackage`）除台账字段（`name` `spec` `version` `package_dirs`
-`device_ids` `enabled` `installer` `installed_at_ms` `updated_at_ms`）外附三项运行态：
+`packages[]`（`DriverPackage`）除台账字段（`name` `spec` `version` `source_kind: github|archive|local`
+`package_root` `package_dirs` `device_ids` `dependencies` `sha256` `enabled` `installer: uv|pip|""`
+`installed_at_ms` `updated_at_ms`）外附三项运行态：
 
-- `dirs_exist`：包目录还在（被手工 `pip uninstall` 会变成 false）；
+- `dirs_exist`：包目录还在（源码树被手工删掉会变成 false）；
 - `mounted`：本次启动已把该包目录纳入扫描；
 - `loaded_device_ids`：`device_ids` 中已进入当前进程注册表的部分。
 
@@ -54,13 +66,11 @@ restart_required ──▶ POST /api/v1/restart {mode:"quiescent", scope:"proces
 ```
 
 - operation：`{operation_id, kind: install|uninstall, spec, status: running|succeeded|failed,
-  package_name, started_at_ms, finished_at_ms, log, error, result}`；`log` 是 pip 全量输出
-  加 `[scan]` 行，最多保留 20 KB。
-- 分发名识别：请求带 `name`（索引条目自带）就以它为准；否则本地目录读其 `pyproject.toml`，
-  `name==ver` 取名字，git/URL 装完看安装前后新增 / 变化的分发。分发名已知时同名同版本
-  重复安装照常登记（台账丢了可以这样补回）；`name` 在环境里找不到则退回差异识别并在
-  日志里留 `[warn]`。
-- `upgrade=true` 加 `pip install --upgrade`：pip 对已装同版本默认什么都不做，目录里的
+  package_name, started_at_ms, finished_at_ms, log, error, result}`；`log` 是 `[download]` /
+  `[extract]` / `[project]` / `$ uv pip install …` / `[scan]` 行，最多保留 20 KB。
+- 包名以源码树 `pyproject [project].name` 为准；请求里的 `name`（索引条目自带）只在没有
+  pyproject 时兜底，两者不同会在日志留 `[warn]`。依赖安装失败整个操作失败、不登记。
+- `upgrade=true`：重新下载源码树覆盖同版本目录，并以 `--upgrade` 重装其依赖；目录里的
   「重装 / 升级」与台账里的「升级」都走这个开关。
 - 重启用 `system.requestRestart({mode, scope: "process"})`——`scope=process` 是重新拉起整个
   Host 进程（同一套启动参数），只有它能让新装的驱动类进入注册表；`scope=devices` 只重建
@@ -83,7 +93,7 @@ restart_required ──▶ POST /api/v1/restart {mode:"quiescent", scope:"proces
   "packages": [
     {
       "name": "unilabos-devices-prcxi",
-      "spec": "git+https://github.com/UniLabOS/unilabos-devices-prcxi.git",
+      "spec": "https://github.com/UniLabOS/unilabos-devices-prcxi",
       "version": "0.3.x",
       "description": "PRCXI 移液工作站驱动",
       "homepage": "https://…",
@@ -102,7 +112,7 @@ restart_required ──▶ POST /api/v1/restart {mode:"quiescent", scope:"proces
 
 同名条目以 remote 为准；每条附 `source` 与 `installed`（台账里已有同名包）。`sources[]`
 给出每个来源的 `ok / count / error / missing`，远端拿不到不影响本地条目。
-`spec` 直接喂给 `POST /install`。前端把三个来源按「浏览器索引 → Edge 镜像 → Edge 本地」
+`spec`（GitHub 仓库地址 / 归档地址）直接喂给 `POST /install`。前端把三个来源按「浏览器索引 → Edge 镜像 → Edge 本地」
 合并（同名取先出现的），`installed` 统一按台账包名判定（大小写、`-`/`_` 不敏感）。
 
 ### 1.3 随包设备图与一键启动（示例包）
@@ -178,8 +188,8 @@ python -m unilabos --backend hostlink --is_slave --skip_env_check --disable_brow
 
 ## 3. 端到端：装一个包 → 配一台设备 → 跑起来
 
-1. 在索引里点「安装到 Edge」= `driverPackages.install({spec, name})`（git 规格需要 Edge 机器上有
-   `git`），轮询 operation 到 `succeeded`；
+1. 在索引里点「安装到 Edge」= `driverPackages.install({spec, name})`（微后端从 GitHub 下载归档，
+   Edge 不需要 `git`），轮询 operation 到 `succeeded`；
    - 示例包装完直接点同一行的「启动」：`graphs(name)` → 每张纯设备图 `launchGraph(name, graph)`，
      demo 设备几秒后接回 Host，不用走下面 3–4 步；
 2. 要让 **Host 本体**加载它：`system.requestRestart({mode:"quiescent", scope:"process"})`；
@@ -201,3 +211,15 @@ pnpm --filter @openlab/protocol smoke -- http://127.0.0.1:8002   # 读路径：i
 后端：`tests/server/test_driver_packages.py`（台账、安装状态机、name 提示、目录合并、路由）、
 `tests/server/test_device_processes.py`（命令拼装、uuid 沿用、崩溃看护、路由）。
 索引仓库：`node scripts/validate.mjs` 校验 `index.json`（CI 同步跑）。
+# 全量数据重置（system 域）
+
+`GET /api/v1/reset` 返回 `supported / pending / confirmation_token / backup_path / detail`。
+仅默认本机分离部署配置重置控制器，其它形态返回 `supported=false`。非默认库路径不支持。
+`POST /api/v1/reset` 必须携带预览的 `confirmation_token` 和 `confirmation="清空全部数据"`。
+确认无效、活跃作业、重启中、在线 Slave、驱动包操作未完成均拒绝（409）。
+202 仅表示接受停机请求，不是清空成功：权威暂停派发、关闭管理服务及 Host，关闭 writer 后
+归档权威和 Host 的四库及受管进程配置。驱动包源码/台账保留。备份 `manifest.json` 的
+`state=completed` 和控制台「重置完成」才是完成凭据。之后手动不带旧 `-g` 启动 `unilab`。
+途中失败保留 `reset-pending.json` 及已归档文件，下次启动拒绝恢复旧任务，需人工按清单恢复。
+只支持已停止全部 Slave 的本机重置，不声称能远程擦除其它机器；外部设备重新接入会再次注册。
+前端不能把断线当成功，live smoke 即使 `--write` 也只读预览，不触发破坏性重置。

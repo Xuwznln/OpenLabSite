@@ -253,7 +253,7 @@ onUnmounted(() => {
           <NSpace vertical size="small" style="margin-top: 10px">
             <NSpace size="small">
               <NSelect v-model:value="restartMode" size="small" style="width: 150px" :options="[{ label: '等待安静点', value: 'quiescent' }, { label: '立即', value: 'immediate' }]" />
-              <NSelect v-model:value="restartScope" size="small" style="width: 150px" :options="[{ label: '自动', value: 'auto' }, { label: 'Edge 进程', value: 'edge' }, { label: '设备', value: 'devices' }, { label: '整进程', value: 'process' }]" />
+              <NSelect v-model:value="restartScope" size="small" style="width: 190px" :options="[{ label: '自动（默认重启 Host）', value: 'auto' }, { label: 'Host 执行进程', value: 'edge' }]" />
             </NSpace>
             <NSpace size="small">
               <NPopconfirm @positive-click="requestRestart">

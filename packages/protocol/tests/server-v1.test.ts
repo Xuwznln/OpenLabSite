@@ -85,7 +85,8 @@ describe("UniLabOS 四库 v1 浏览器接口", () => {
       command_uuid: "cmd-1",
       effect_key: "instantiate_material:cmd-1",
       operation: "instantiate_material",
-      actor_type: "frontend",
+      // 微后端契约（KNOWN_ACTOR_TYPES）：浏览器 / 操作员写操作显式携带 human，不依赖默认值 edge
+      actor_type: "human",
       payload: { registry_class: "PRCXI_1000uL_Tips", name: "tips-1", barcode: "BC-1" },
     });
 

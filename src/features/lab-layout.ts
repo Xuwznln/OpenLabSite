@@ -4,8 +4,7 @@
  * 设备位置是物料权威的事实（materials.v1 position），布局只是叠在其上的
  * 人工标注：把地图按固定边长切成格子，格子归属某个区域或标记为围墙。
  * 权威存放在微后端 runtime.db（lab-v1 域 `GET/PUT /api/v1/lab/layout`，一个 Host 一份，
- * revision 乐观锁）；这里的 localStorage 读写只用于把旧版本留在浏览器里的布局迁移上去，
- * 以及连的是没有该接口的老微后端时的降级。JSON 导出 / 导入保留用于跨 Host 搬运。
+ * revision 乐观锁）。JSON 导出 / 导入保留用于跨 Host 搬运，不在浏览器建立第二份权威。
  *
  * 坐标系与地图一致（物料权威的 position 单位）；格子键为 `"col,row"`，
  * 允许负数，格子左上角 = (col * cellSize, row * cellSize)。
@@ -31,7 +30,6 @@ export interface LabLayout {
   updatedAt: number;
 }
 
-export const LAYOUT_STORAGE_PREFIX = "openlab:lab-layout:";
 export const DEFAULT_CELL_SIZE = 100;
 export const CELL_SIZE_OPTIONS = [50, 100, 200, 500];
 
@@ -206,32 +204,6 @@ export function parseLayout(raw: unknown): LabLayout | null {
     walls: validKeys(record.walls),
     updatedAt: typeof record.updatedAt === "number" ? record.updatedAt : Date.now(),
   };
-}
-
-export function layoutStorageKey(scope: string): string {
-  return `${LAYOUT_STORAGE_PREFIX}${scope.replace(/^https?:\/\//, "")}`;
-}
-
-/** 浏览器里的旧版布局（迁移源 / 老微后端降级存储）。 */
-export function loadLocalLayout(scope: string): LabLayout | null {
-  try {
-    const raw = localStorage.getItem(layoutStorageKey(scope));
-    return raw ? parseLayout(JSON.parse(raw)) : null;
-  } catch {
-    return null;
-  }
-}
-
-export function saveLocalLayout(scope: string, layout: LabLayout): void {
-  localStorage.setItem(layoutStorageKey(scope), JSON.stringify(layout));
-}
-
-export function clearLocalLayout(scope: string): void {
-  try {
-    localStorage.removeItem(layoutStorageKey(scope));
-  } catch {
-    /* 存储不可用时无事可做 */
-  }
 }
 
 export function isLayoutEmpty(layout: LabLayout): boolean {

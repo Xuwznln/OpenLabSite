@@ -36,7 +36,7 @@ const result = await api.domains.materialsV1.patch(materialUuid, { name: "1 号�
 result.replayed;                                  // 同 command_uuid 重放会为 true
 
 // 长操作：202 + operation 资源轮询
-let op = await api.domains.driverPackages.install({ spec: "git+https://github.com/Xuwznln/LabDeviceLockDemo.git", name: "lock_demo" });
+let op = await api.domains.driverPackages.install({ spec: "https://github.com/Xuwznln/LabDeviceLockDemo", name: "lock_demo" });
 while (op.status === "running") op = await api.domains.driverPackages.operation(op.operation_id);
 
 // SSE 失效通知流：拿 URL 自己开 EventSource，收到事件后重拉 HTTP
@@ -96,6 +96,7 @@ import openapi from "@openlab/protocol/openapi.json" with { type: "json" };     
 | `decisions` | `/status-incidents*` `/error-decisions*` | host |
 | `driverPackages` | `/driver-packages*`（安装台账、目录、随包图、长操作） | host |
 | `deviceProcesses` | `/device-processes*`（受管本机 Slave 子进程） | host |
+| `labV1` | `/lab/layout`（实验室布局：区域 / 围墙像素格，revision 乐观锁） | any |
 | `debug` | `/debug/databases*`（四库只读浏览） | any |
 
 `role = host` 的域只在带设备执行面的 Host 进程可用；`backend` 只在 `unilab --role backend`；

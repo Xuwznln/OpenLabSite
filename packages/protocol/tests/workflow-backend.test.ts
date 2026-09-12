@@ -19,6 +19,7 @@ describe("workflow 协议客户端（Backend 信封）", () => {
     const api = createWorkflowBackendApi(mock.http);
     const invocations: Array<() => Promise<unknown>> = [
       () => api.createWorkflow({ name: "demo" }),
+      () => api.createWorkflowFromTemplate({ template_uuid: DUMMY_ID, bindings: {} }),
       () => api.workflows(),
       () => api.workflow(DUMMY_ID),
       () => api.updateWorkflow(DUMMY_ID, { name: "demo" }),
@@ -26,6 +27,7 @@ describe("workflow 协议客户端（Backend 信封）", () => {
       () => api.graph(DUMMY_ID),
       () => api.saveGraph(DUMMY_ID, { revision: 1, nodes: [], edges: [] }),
       () => api.createTask({ workflow_uuid: DUMMY_ID }),
+      () => api.commandTask(DUMMY_ID, { type: "step", expected_revision: 0, idempotency_key: "step-1" }),
       () => api.tasks(),
       () => api.task(DUMMY_ID),
       () => api.taskJobs(DUMMY_ID),
@@ -82,6 +84,17 @@ describe("workflow 协议客户端（Backend 信封）", () => {
       device_id: "sample_rack",
       action_name: "load_sample",
     });
+  });
+
+  it("单点控制保留版本和幂等键，业务冲突不会被当成功", async () => {
+    const mock = createMockHttp();
+    const api = createWorkflowBackendApi(mock.http);
+    const body = { type: "step" as const, expected_revision: 3, idempotency_key: "click-4" };
+    mock.nextResponse = { status: 200, data: { code: 0, data: { control_revision: 4 } } };
+    expect((await api.commandTask(DUMMY_ID, body)).control_revision).toBe(4);
+    expect(mock.calls[0]?.data).toEqual(body);
+    mock.nextResponse = { status: 200, data: { code: 3003, error: { msg: "stale control revision" } } };
+    await expect(api.commandTask(DUMMY_ID, body)).rejects.toBeInstanceOf(BackendBusinessError);
   });
 
   it("人工确认决策走 canonical POST，并保留幂等键与显式确认人", async () => {

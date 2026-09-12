@@ -764,6 +764,7 @@ onUnmounted(() => {
     <!-- 设备属性抽屉：全部实时属性 + 数值历史曲线 -->
     <NDrawer v-model:show="detailOpen" :width="420" placement="right">
       <NDrawerContent :title="`${detailDeviceId} · 实时状态`" closable>
+        <NButton size="small" style="margin-bottom: 12px" @click="router.push({ path: '/logs', query: { device: detailDeviceId } })">查看所在进程日志</NButton>
         <div class="live-legend">
           <span class="live-dot on" /> 8 秒内有更新
           <span style="margin-left: 12px" :style="{ color: telemetryLive ? '#04aa65' : '#c2452d' }">

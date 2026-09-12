@@ -47,6 +47,7 @@ rejected`。`retry_of_job_uuid` / `attempt_no` 表达重试链；`terminal_gate_
 | POST | `/workflow-tasks` | 提交运行（见下） |
 | GET | `/workflow-tasks` | 运行分页（`status/workflow_uuid/cleanup_status`） |
 | GET | `/workflow-tasks/{uuid}` | 运行详情（含 `workflow_snapshot` / `execution_plan`） |
+| POST | `/workflow-tasks/{uuid}/commands` | `{type: "step" | "resume", expected_revision, idempotency_key}`：单点放行 / 转自动；返回 Task |
 | GET | `/workflow-tasks/{uuid}/node-runs` | 节点运行视图：每节点一条（拓扑序），`status / return_info` 是当前 attempt 的结果，`attempts[]` 是历史；画布节点状态用它 |
 | GET | `/workflow-tasks/{uuid}/jobs` | 全部 attempt（节点作业）平铺列表 |
 | GET | `/workflow-tasks/{uuid}/manual-confirmations` | 人工确认待办与历史（每 job 至多一条） |
@@ -81,6 +82,31 @@ rejected`。`retry_of_job_uuid` / `attempt_no` 表达重试链；`terminal_gate_
 两种运行都生成 `workflow_task` + `workflow_node_job`，共用调度、设备锁 / 物料锁、历史
 与异常链路；`ad_hoc` 任务的 `workflow_uuid` 为 `null`，节点信息在
 `workflow_snapshot.nodes[0]`（`action_name`、`meta_data.target_device_id`）。
+
+#### 逐步运行（微后端持有许可）
+
+以 `run_mode="step"` 提交完整工作流，初始 `control_status="paused"`，不下发动作。
+任务详情返回 `control_revision`（初始 0；列表与旧微后端可能不提供）。调用
+`workflowBackend.commandTask(taskUuid, {type: "step", expected_revision: task.control_revision, idempotency_key})`
+只放行一个满足依赖的动作 attempt；并行分支也只选一个，循环/子流程展开后的叶动作同样逐步。
+该步等待资源或执行期间 `control_status="active"`，不接受下一次 step；完成后回到 paused。
+尚未获准的动作不申请动作/物料执行锁；库存预留继续沿用整任务的原有策略。
+
+`type="resume"` 将这个任务切换为 `run_mode="normal"`、active，并从原位置按原依赖并行执行。
+正在执行的动作不会被取消或重复下发。仅未结束的 step 工作流支持控制；
+执行状态不确定或异常待处理时必须先走原有裁决流程，不能用 resume 绕过。
+retry 仍在同一 node run 下追加 attempt，但逐步模式下新 attempt 需再次点击放行。
+
+命令保存在现有 `workflow_task_command`：step 的 result 关联 job_uuid / node_run_uuid，
+target_node_uuid 关联工作流节点；不创建新任务。每条受理命令推进 control_revision；
+同幂等键同参数重传返回当前 Task，不再放行。不同参数复用同键、旧版本、重复在飞 step
+均返回既有 Backend 业务码 **3003**（HTTP 200），不是 HTTP 409。
+网络重传必须保留原 expected_revision 和 idempotency_key，不能自动重读版本重试 step。
+状态变化沿用 `workflow.task.changed` / `workflow.node_run.changed` SSE；正文仍经 HTTP 重拉。
+重启后已成功动作不重跑，已下发但结果未知的动作转 waiting_reconciliation 等待人工裁决。
+
+旧微后端缺少 control_revision 或命令端点时，前端显示升级提示并禁用步进控制。
+这是 v1 加法扩展，需要包含本接口的 Uni-Lab-OS 构建；仅旧 step 枚举不代表具备逐步执行能力。
 
 ### 2.2 状态词汇（canonical，页面不得改写）
 

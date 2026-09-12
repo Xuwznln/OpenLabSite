@@ -7,7 +7,7 @@
  * 点「安装」把 spec + name 交给父组件走安装流程（POST /driver-packages/install）。
  */
 import { computed, onMounted, ref, shallowRef, watch } from "vue";
-import { NButton, NEmpty, NInput, NPopover, NTag, NTooltip } from "naive-ui";
+import { NButton, NEmpty, NInput, NPopover, NPopconfirm, NTag, NTooltip } from "naive-ui";
 import type { DriverPackageCatalog } from "@openlab/protocol";
 import {
   DEFAULT_DEVICE_INDEX_URL,
@@ -35,6 +35,7 @@ const emit = defineEmits<{
   (e: "install", spec: string, upgrade: boolean, name: string): void;
   /** 已登记的包：把随包设备图作为受管进程启动；参数是台账里的包名。 */
   (e: "launch", name: string): void;
+  (e: "uninstall", name: string): void;
 }>();
 
 const conn = useConnectionStore();
@@ -113,7 +114,7 @@ function sourceLabel(row: CatalogRow): string {
 }
 
 function install(row: CatalogRow) {
-  // 已登记的条目再点就是"重装 / 升级"：pip 对已装同版本默认什么都不做，需要 --upgrade
+  // 已登记的条目再点就是"重装 / 升级"：重新下载源码树并升级依赖
   emit("install", row.spec, row.installed, row.name);
 }
 
@@ -187,7 +188,7 @@ defineExpose({ refresh });
         <div v-if="merged.rows.length" class="dim small">没有匹配的包</div>
         <div v-else class="dim small empty-hint">
           <template v-if="indexError">
-            索引读不到（{{ indexError }}）。可以换成内网镜像地址，或在左侧直接按 pip 规格 / git 地址安装。
+            索引读不到（{{ indexError }}）。可以换成内网镜像地址，或在右侧直接按 GitHub 仓库地址 / 本机目录安装。
           </template>
           <template v-else>
             索引为空。给 <a :href="DEVICE_INDEX_REPO_URL" target="_blank" rel="noreferrer" class="link">awesome-lab-devices</a>
@@ -212,7 +213,7 @@ defineExpose({ refresh });
             <a v-if="row.homepage" :href="row.homepage" target="_blank" rel="noreferrer" class="link small">主页</a>
             <NTooltip trigger="hover">
               <template #trigger><span class="mono dim small spec">{{ row.spec }}</span></template>
-              pip install {{ row.spec }}
+              来源 {{ row.spec }}（下载源码树到 unilabos_data，不 pip install）
             </NTooltip>
           </div>
         </div>
@@ -239,6 +240,12 @@ defineExpose({ refresh });
           >
             {{ row.installed ? "重装 / 升级" : "安装到 Edge" }}
           </NButton>
+          <NPopconfirm v-if="row.installed" @positive-click="emit('uninstall', ledgerName(row))">
+            <template #trigger>
+              <NButton size="small" type="error" secondary :disabled="!conn.online">卸载</NButton>
+            </template>
+            卸载 {{ ledgerName(row) }}？请先停止使用它的设备进程。下载的源码会被移除，本机原地登记目录不删文件；不清除物料和历史。
+          </NPopconfirm>
         </div>
       </li>
     </ul>

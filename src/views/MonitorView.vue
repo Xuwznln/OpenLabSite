@@ -15,6 +15,7 @@ import {
 } from "@vicons/ionicons5";
 import type { BackendWorkflowNodeJob, BackendWorkflowTask } from "@openlab/protocol";
 import EntityRef from "../components/EntityRef.vue";
+import { actorTypeLabel } from "../features/actor-type";
 import { ACTIVE_JOB_STATUSES, declaredTimeoutS, describeNodeJob, describeTask, parseIsoMs } from "../features/task-jobs";
 import { useSchedulerStore } from "../stores/scheduler";
 
@@ -445,12 +446,9 @@ function materialLabel(event: MonitorEvent): string {
   return MATERIAL_LABELS[event.type] ?? event.type;
 }
 
-/** 变更来源标签：edge=本地权威、backend=云端、frontend=前端，其余原样。 */
+/** 变更来源标签：与物料页「来源」列同一口径（features/actor-type.ts）。 */
 function actorLabel(actorType: string): string {
-  if (actorType === "edge") return "本地权威";
-  if (actorType === "backend") return "云端";
-  if (actorType === "frontend") return "前端";
-  return actorType;
+  return actorType ? actorTypeLabel(actorType) : "";
 }
 
 /** 数量与原因摘要（物料名称由 EntityRef 单独渲染）。 */

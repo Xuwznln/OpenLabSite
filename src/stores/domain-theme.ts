@@ -6,10 +6,27 @@ import {
   isLabThemeId,
   type LabThemeId,
 } from "../features/domain-themes";
+import { SITE_THEME_QUERY_PARAM } from "../features/site-index";
 
 const STORAGE_KEY = "openlab:domain-theme";
 
+/**
+ * 地址栏 `?theme=<id>`（awesome-lab-sites 里同一份构建的多个学科入口靠它区分）。
+ * 只在本次启动生效并写回 localStorage；非法值忽略。
+ */
+function themeFromLocation(): LabThemeId | null {
+  if (typeof location === "undefined") return null;
+  try {
+    const value = new URL(location.href).searchParams.get(SITE_THEME_QUERY_PARAM)?.trim();
+    return isLabThemeId(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 function initialTheme(): LabThemeId {
+  const fromLocation = themeFromLocation();
+  if (fromLocation) return fromLocation;
   if (typeof localStorage === "undefined") return DEFAULT_LAB_THEME_ID;
   const stored = localStorage.getItem(STORAGE_KEY);
   return isLabThemeId(stored) ? stored : DEFAULT_LAB_THEME_ID;

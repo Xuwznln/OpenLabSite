@@ -22,6 +22,7 @@ export type ThemeNavKey =
   | "history"
   | "registry"
   | "system"
+  | "logs"
   | "error-decisions"
   | "status-incidents";
 
@@ -49,6 +50,7 @@ const systemNav = {
   registry: "注册表",
   packages: "驱动包",
   system: "系统诊断",
+  logs: "实时日志",
   "error-decisions": "异常审批",
   "status-incidents": "状态告警",
 } as const;

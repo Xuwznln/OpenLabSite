@@ -78,12 +78,6 @@ export interface DeviceClassOption {
   package: string | null;
 }
 
-export interface DeviceProcessLogs {
-  process_id: string;
-  lines: string[];
-  path: string;
-}
-
 export function createDeviceProcessesApi(http: HttpTransport) {
   const base = "/api/v1/device-processes";
   return {
@@ -111,13 +105,6 @@ export function createDeviceProcessesApi(http: HttpTransport) {
     /** POST /device-processes/{id}/restart */
     restart: (processId: string) =>
       http.request<DeviceProcess>({ method: "POST", path: `${base}/${encodeURIComponent(processId)}/restart` }),
-    /** GET /device-processes/{id}/logs?tail= —— 内存尾部日志（完整日志在 log_path）。 */
-    logs: (processId: string, tail = 200) =>
-      http.request<DeviceProcessLogs>({
-        method: "GET",
-        path: `${base}/${encodeURIComponent(processId)}/logs`,
-        params: { tail },
-      }),
   };
 }
 

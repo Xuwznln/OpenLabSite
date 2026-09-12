@@ -30,11 +30,18 @@ A first visit (no `openlab:domain-theme` in localStorage) always lands on the **
 (`DEFAULT_LAB_THEME_ID`). The organic / biology / materials themes are reference examples and
 are never preselected for the user.
 
-The intended distribution model mirrors driver packages: the site ships with the general theme,
-and domain-specific site bundles are published through a separate index repository
-(`awesome-lab-sites`, alongside [awesome-lab-devices](https://github.com/Xuwznln/awesome-lab-devices))
-that the browser reads directly, in the same way `src/features/device-index.ts` reads
-`index.json` today.
+The distribution model mirrors driver packages: the site ships with the general theme, and
+front-end sites (domain entry points, forks, community distributions) are listed in the separate
+index repository [awesome-lab-sites](https://github.com/Xuwznln/awesome-lab-sites) — alongside
+[awesome-lab-devices](https://github.com/Xuwznln/awesome-lab-devices) — which the browser reads
+directly (`src/features/site-index.ts`, default URL overridable with `VITE_OPENLAB_SITE_INDEX_URL`).
+The "站点" catalog next to the domain switcher (`src/components/SiteCatalog.vue`) lists those
+entries: an entry pointing at the same deployment switches the theme in place, any other
+deployment opens in a new tab with the current hash route. The microbackend landing page
+(`unilab` management port, `/`) reads the same index to populate its "推荐前端" cards.
+
+An index entry may carry `?theme=<id>` in its `url`; `src/stores/domain-theme.ts` reads that query
+parameter at startup, so one build can appear in the index once per domain theme.
 
 ## Scanner-gun recording
 

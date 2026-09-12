@@ -20,6 +20,8 @@
 | [telemetry-history.md](./telemetry-history.md) | `telemetry-v1`、`history-v1`、`debug` | 域契约 |
 | [decisions.md](./decisions.md) | 状态告警与动作异常的人工决策 | 域契约 |
 | [driver-packages.md](./driver-packages.md) | 驱动包安装 / 目录 / 随包图、受管设备进程 | 域契约 |
+| [lab.md](./lab.md) | `lab-v1`：实验室布局（区域 / 围墙像素格，runtime.db 单行文档，revision 乐观锁） | 域契约 |
+| [logs.md](./logs.md) | Host / 受管 Slave / 外部 Slave 有界增量实时日志（system 域） | 域契约 |
 | [`packages/protocol/README.md`](../../packages/protocol/README.md) | 协议包的安装、用法、边界与发布流程 | 包文档 |
 | [`packages/protocol/CHANGELOG.md`](../../packages/protocol/CHANGELOG.md) | 协议包版本、兼容矩阵 | 发布记录 |
 
@@ -61,7 +63,7 @@ Uni-Lab-OS 微后端 :8002（unilab --port）
 
 | 域 | 路径前缀 | 存储 | 信封 | 客户端 | 角色 |
 | --- | --- | --- | --- | --- | --- |
-| `system` | `/api/v1/health` `/hostlink/peers` `/scheduler/resources` `/restart` | — | 直出 | `createSystemApi` | any |
+| `system` | `/api/v1/health` `/ping` `/hostlink/peers` `/scheduler/resources` `/restart` | — | 直出 | `createSystemApi` | any |
 | `runtime-v1` | `/api/v1/runtime/*` | runtime.db | 直出 | `createRuntimeV1Api` | any |
 | `workflow` | `/api/v1/workflows*` `/workflow-tasks*` `/workflow-node-jobs*` `/events` | runtime.db | Backend | `createWorkflowBackendApi` | any |
 | `registry` | `/api/v1/registry/*` | runtime.db | Backend | `createRegistryApi` | any |
@@ -70,7 +72,7 @@ Uni-Lab-OS 微后端 :8002（unilab --port）
 | `telemetry-v1` | `/api/v1/telemetry/*` | telemetry.db | 直出 | `createTelemetryV1Api` | any |
 | `history-v1` | `/api/v1/history/*` | history.db | 直出 | `createHistoryV1Api` | any |
 | `decisions` | `/api/v1/status-incidents*` `/error-decisions*` | 内存 | 直出 | `createDecisionsApi` | host |
-| `driver-packages` | `/api/v1/driver-packages*` | 台账 JSON + pip 环境 | 直出 + 长操作 | `createDriverPackagesApi` | host |
+| `driver-packages` | `/api/v1/driver-packages*` | `unilabos_data/driver_packages/` 源码树 + 台账 JSON | 直出 + 长操作 | `createDriverPackagesApi` | host |
 | `device-processes` | `/api/v1/device-processes*` | 规格 JSON + 子进程 | 直出 | `createDeviceProcessesApi` | host |
 | `lab-v1` | `/api/v1/lab/layout` | runtime.db（`lab_layout` 单行文档） | 直出 | `createLabV1Api` | any |
 | `debug` | `/api/v1/debug/databases*` | 四库只读 | 直出 | `createDebugApi` | any |
@@ -125,6 +127,7 @@ Uni-Lab-OS 微后端 :8002（unilab --port）
 - `materials.templates` 携带 registry 全量定义（可达数十 MB），只在需要时按需加载，不轮询；
   列表场景用 `include_definition=false`。
 - 浏览器只读的外部资源（驱动包索引）由 `features/` 层负责，不进协议包。
+- 人工标注类数据（实验室布局）也走微后端（`lab-v1`），localStorage 只做老微后端降级与一次性迁移。
 
 ## 7. 验证门槛
 

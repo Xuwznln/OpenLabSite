@@ -4,12 +4,11 @@
  * 数据来自 device-processes 域；崩溃看护由 Host 完成，这里只展示 restart_count 与 last_error。
  */
 import { computed, h, onMounted, onUnmounted, ref, shallowRef, watch } from "vue";
+import { useRouter } from "vue-router";
 import {
   NButton,
   NCheckbox,
   NDataTable,
-  NDrawer,
-  NDrawerContent,
   NEmpty,
   NForm,
   NFormItem,
@@ -33,6 +32,7 @@ import type {
 } from "@openlab/protocol";
 import StatusPill from "./StatusPill.vue";
 import { describeError } from "../features/errors";
+import { resetManagedProcesses } from "../features/device-process-reset";
 import { useConnectionStore } from "../stores/connection";
 
 const props = defineProps<{
@@ -41,12 +41,57 @@ const props = defineProps<{
 }>();
 
 const conn = useConnectionStore();
+const router = useRouter();
 const message = useMessage();
 
 const listing = shallowRef<DeviceProcessListing | null>(null);
 const classes = shallowRef<DeviceClassOption[]>([]);
 const loading = ref(false);
 const busyId = ref("");
+const resetting = ref(false);
+const resetOpen = ref(false);
+const resetConfirmation = ref("");
+const resetTargets = shallowRef<DeviceProcess[]>([]);
+const resetError = ref("");
+
+async function openReset() {
+  if (!conn.online || resetting.value || busyId.value) return;
+  try {
+    const current = await conn.api.domains.deviceProcesses.list();
+    listing.value = current;
+    resetTargets.value = [...current.processes];
+    resetConfirmation.value = "";
+    resetError.value = "";
+    resetOpen.value = true;
+  } catch (error) {
+    message.error(describeError(error));
+  }
+}
+
+async function resetAll() {
+  if (resetConfirmation.value !== "清空" || resetting.value || !conn.online) return;
+  resetting.value = true;
+  resetError.value = "";
+  try {
+    const result = await resetManagedProcesses(
+      conn.api.domains.deviceProcesses,
+      resetTargets.value.map((item) => item.id),
+      () => conn.api.domains.system.restartStatus(),
+    );
+    if (result.failed.length) {
+      resetError.value = `已清除 ${result.removed.length} 个；失败：${result.failed.map((item) => `${item.id}（${describeError(item.error)}）`).join("、")}`;
+      resetTargets.value = resetTargets.value.filter((item) => result.failed.some((failure) => failure.id === item.id));
+    } else {
+      resetOpen.value = false;
+      message.success(`已停止并删除 ${result.removed.length} 个受管设备进程；驱动包、物料及历史保留`);
+    }
+    await refresh();
+  } catch (error) {
+    resetError.value = describeError(error);
+  } finally {
+    resetting.value = false;
+  }
+}
 
 async function refresh() {
   if (!conn.online) return;
@@ -74,6 +119,7 @@ const runningCount = computed(() => processes.value.filter((item) => item.status
 // ── 启停 ─────────────────────────────────────────────────────
 
 async function act(process: DeviceProcess, action: "start" | "stop" | "restart") {
+  if (resetting.value || resetOpen.value) return;
   busyId.value = process.id;
   try {
     await conn.api.domains.deviceProcesses[action](process.id);
@@ -87,6 +133,7 @@ async function act(process: DeviceProcess, action: "start" | "stop" | "restart")
 }
 
 async function remove(process: DeviceProcess) {
+  if (resetting.value || resetOpen.value) return;
   busyId.value = process.id;
   try {
     await conn.api.domains.deviceProcesses.remove(process.id);
@@ -99,37 +146,9 @@ async function remove(process: DeviceProcess) {
   }
 }
 
-// ── 日志抽屉 ─────────────────────────────────────────────────
-
-const logOpen = ref(false);
-const logTarget = shallowRef<DeviceProcess | null>(null);
-const logLines = ref<string[]>([]);
-const logPath = ref("");
-let logTimer: ReturnType<typeof setInterval> | null = null;
-
-async function pullLogs() {
-  if (!logTarget.value) return;
-  try {
-    const result = await conn.api.domains.deviceProcesses.logs(logTarget.value.id, 300);
-    // 后端已剥 ANSI；这里兜底处理改动前启动的旧进程留下的着色序列
-    logLines.value = result.lines.map((line) => line.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, ""));
-    logPath.value = result.path;
-  } catch {
-    /* 进程刚删或后端重启，等下一轮 */
-  }
-}
-
 function openLogs(process: DeviceProcess) {
-  logTarget.value = process;
-  logLines.value = [];
-  logOpen.value = true;
-  void pullLogs();
+  void router.push({ path: "/logs", query: { source: `managed:${process.id}` } });
 }
-
-watch(logOpen, (open) => {
-  if (logTimer) clearInterval(logTimer);
-  logTimer = open ? setInterval(() => void pullLogs(), 2000) : null;
-});
 
 // ── 新建 / 编辑 ─────────────────────────────────────────────
 
@@ -342,7 +361,7 @@ const columns: DataTableColumns<DeviceProcess> = [
     key: "actions",
     width: 260,
     render: (row) => {
-      const busy = busyId.value === row.id;
+      const busy = resetting.value || busyId.value === row.id;
       const running = row.status === "running" || row.status === "starting" || row.status === "restarting";
       return h(NSpace, { size: 4, wrap: false }, {
         default: () => [
@@ -373,7 +392,6 @@ onMounted(() => {
 });
 onUnmounted(() => {
   if (timer) clearInterval(timer);
-  if (logTimer) clearInterval(logTimer);
 });
 watch(
   () => conn.online,
@@ -394,13 +412,29 @@ defineExpose({ refresh });
       </div>
       <NSpace :size="6">
         <NTag size="small" :bordered="false" :type="runningCount ? 'success' : 'default'">{{ runningCount }} / {{ processes.length }} 运行中</NTag>
-        <NButton size="small" type="primary" @click="openCreate">新建设备进程</NButton>
+        <NButton size="small" type="error" secondary :disabled="!conn.online || !processes.length || !!busyId || resetting" @click="openReset">清空受管设备进程</NButton>
+        <NButton size="small" type="primary" :disabled="resetting" @click="openCreate">新建设备进程</NButton>
         <NButton size="small" :loading="loading" @click="refresh">刷新</NButton>
       </NSpace>
     </div>
 
     <NEmpty v-if="!processes.length" description="还没有受管进程：先装好驱动包，再把里面的设备类配成一个进程启动" style="padding: 24px 0" />
     <NDataTable v-else :columns="columns" :data="processes" size="small" :scroll-x="1180" :row-key="(row: DeviceProcess) => row.id" />
+
+    <NModal v-model:show="resetOpen" preset="card" title="清空受管设备进程" style="width: 560px" :closable="!resetting" :mask-closable="!resetting" :close-on-esc="!resetting">
+      <p>将停止并删除以下 {{ resetTargets.length }} 个进程配置，Host 重启后也不会自动拉起。需要通过驱动包「启动」或手动配置恢复。</p>
+      <p>{{ resetTargets.map((item) => item.name).join("、") }}</p>
+      <p>仅限本机受管进程；不处理命令行启动的 Host 设备、外部 Slave，不删除驱动包、物料、设备图快照和历史记录。</p>
+      <p>请先停止工作流和外部派发，再操作；此操作不是全局原子重置。</p>
+      <p v-if="resetError" role="alert">{{ resetError }}</p>
+      <NInput v-model:value="resetConfirmation" placeholder="输入「清空」确认" :disabled="resetting" />
+      <template #footer>
+        <NSpace justify="end">
+          <NButton :disabled="resetting" @click="resetOpen = false">取消</NButton>
+          <NButton type="error" :loading="resetting" :disabled="!conn.online || resetConfirmation !== '清空' || !resetTargets.length" @click="resetAll">停止并清空</NButton>
+        </NSpace>
+      </template>
+    </NModal>
 
     <!-- 新建 / 编辑 -->
     <NModal v-model:show="formOpen" preset="card" :title="editing ? `编辑 ${editing.name}` : '新建设备进程'" style="width: 620px">
@@ -443,16 +477,6 @@ defineExpose({ refresh });
       </NSpace>
     </NModal>
 
-    <!-- 日志 -->
-    <NDrawer v-model:show="logOpen" :width="640" placement="right">
-      <NDrawerContent :title="logTarget ? `${logTarget.name} · 日志` : '日志'" closable>
-        <div class="log-meta dim small">
-          <span>状态 {{ logTarget ? STATUS_LABEL[logTarget.status] : "—" }} · pid {{ logTarget?.pid ?? "—" }}</span>
-          <span class="mono">{{ logPath }}</span>
-        </div>
-        <pre class="proc-log">{{ logLines.length ? logLines.join("\n") : "暂无输出" }}</pre>
-      </NDrawerContent>
-    </NDrawer>
   </section>
 </template>
 
@@ -522,26 +546,6 @@ defineExpose({ refresh });
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 160px;
-}
-
-.log-meta {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 8px;
-}
-
-.proc-log {
-  margin: 0;
-  padding: 10px 12px;
-  max-height: calc(100vh - 160px);
-  overflow: auto;
-  background: #101418;
-  color: #d5dae0;
-  font: 11.5px/1.5 var(--font-mono);
-  white-space: pre-wrap;
-  word-break: break-all;
-  border-radius: 10px;
 }
 
 .mono {

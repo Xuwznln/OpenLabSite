@@ -24,6 +24,7 @@ import type {
   TelemetryV1DeviceState,
 } from "@openlab/protocol";
 import { useConnectionStore } from "./connection";
+import { createRefreshQueue } from "../features/refresh-queue";
 
 export interface DeviceRecord {
   /** 设备 id（runtime device_uuid == materials resource_id）。 */
@@ -183,11 +184,8 @@ export const useDevicesStore = defineStore("devices", () => {
     return devices.value.find((device) => device.id === id);
   }
 
-  let refreshing = false;
-
-  async function refresh() {
-    if (refreshing || !conn.online) return;
-    refreshing = true;
+  const refresh = createRefreshQueue(async () => {
+    if (!conn.online) return;
     loading.value = true;
     const api = conn.api.domains;
     const [endpointResult, rootsResult, telemetryResult, hostlinkResult] = await Promise.allSettled([
@@ -196,6 +194,10 @@ export const useDevicesStore = defineStore("devices", () => {
       api.telemetryV1.states(),
       api.system.hostlinkPeers(),
     ]);
+    if (api !== conn.api.domains) {
+      loading.value = false;
+      return;
+    }
     const failures: string[] = [];
     if (endpointResult.status === "fulfilled") endpoints.value = endpointResult.value;
     else failures.push(`runtime: ${String(endpointResult.reason?.message ?? endpointResult.reason)}`);
@@ -207,8 +209,7 @@ export const useDevicesStore = defineStore("devices", () => {
     loaded.value = true;
     lastRefreshedAt.value = Date.now();
     loading.value = false;
-    refreshing = false;
-  }
+  });
 
   let pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -233,6 +234,9 @@ export const useDevicesStore = defineStore("devices", () => {
       telemetry.value = [];
       hostlink.value = null;
       loaded.value = false;
+      error.value = "";
+      lastRefreshedAt.value = 0;
+      void refresh();
     },
   );
   watch(

@@ -100,6 +100,66 @@ export interface RegistryReport {
   summary: RegistryReportSummary;
 }
 
+/**
+ * 设备包 `@workflow` 声明的工作流模板（registry_type=workflow 条目 payload）。
+ * 与前端「工作流模板」同形：动作节点用**角色**占位——`ctx.run` 的角色是设备 id，
+ * `ctx.run_template` 的角色是设备类（`class:<name>`），插入画布时再绑到实际设备；
+ * 步骤按声明序用 edges 串成链。
+ */
+export interface RegistryWorkflowTemplateRole {
+  role: string;
+  label: string;
+  kind: "device" | "class";
+  device_id?: string;
+  device_class?: string;
+  matches: string[];
+}
+
+export interface RegistryWorkflowTemplateNode {
+  key: string;
+  /** `loop`：循环容器（`with ctx.loop_for / ctx.loop_while`），循环体节点以 `parent` 指向它 */
+  kind: "action" | "slot" | "template" | "loop";
+  role?: string;
+  action_name?: string;
+  name?: string;
+  /** 这一步做什么 / 操作员该看到什么（`ctx.run(..., description=)`） */
+  description?: string;
+  /** action：动作参数；loop：LoopSpec（node_output 条件用 `node_key` 引用模板里的步骤） */
+  param?: JsonObject;
+  inventory_requirements?: JsonObject[];
+  /** 所在循环节点的 key；顶层步骤没有 */
+  parent?: string;
+}
+
+/**
+ * 模板操作指引（`@workflow(guide=...)`）：运行前要在前端做的准备（出库、挂到哪台设备
+ * 哪个位点、确认设备在线）、预期效果、注意事项。三段都是按顺序的短句列表。
+ */
+export interface RegistryWorkflowTemplateGuide {
+  preparation: string[];
+  expected: string[];
+  notes: string[];
+}
+
+export interface RegistryWorkflowTemplate {
+  /** 注册表条目名（`module:qualname`），包内唯一 */
+  id: string;
+  registry_type: "workflow";
+  /** 跨机器稳定的模板身份（uuid5） */
+  uuid: string;
+  display_name: string;
+  description: string;
+  tags: string[];
+  /** 来源设备包（模块路径顶层包名，如 `site_demo`）；旧 Host 不带，前端从 id 推导 */
+  package?: string;
+  /** 声明该模板的模块路径（`site_demo.workflows`） */
+  module?: string;
+  roles: RegistryWorkflowTemplateRole[];
+  nodes: RegistryWorkflowTemplateNode[];
+  edges: Array<{ source: string; target: string }>;
+  guide?: RegistryWorkflowTemplateGuide;
+}
+
 export function createRegistryApi(http: HttpTransport) {
   return {
     /** GET /api/v1/registry/entries —— 条目状态列表（status 过滤可选） */
@@ -150,6 +210,12 @@ export function createRegistryApi(http: HttpTransport) {
       backendRequest<RegistryEntrySummary>(http, {
         method: "POST",
         path: `/api/v1/registry/entries/${encodeURIComponent(name)}/restore/${version}`,
+      }),
+    /** GET /api/v1/registry/workflow-templates —— 生效的 @workflow 模板（模板面板数据源） */
+    workflowTemplates: () =>
+      backendRequest<{ templates: RegistryWorkflowTemplate[] }>(http, {
+        method: "GET",
+        path: "/api/v1/registry/workflow-templates",
       }),
     /** GET /api/v1/registry/reports —— 上报批次统计 */
     reports: (params: { page?: number; page_size?: number } = {}) =>

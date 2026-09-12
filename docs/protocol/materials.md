@@ -48,12 +48,18 @@ Edge 设备侧只持有投影，前端在权威完成变更后可经 `notify-dev
   "command_uuid": "<uuid>",
   "effect_key": "<operation>:<command_uuid>",
   "operation": "instantiate_material",
-  "actor_type": "frontend",
+  "actor_type": "human",
   "observed_at_ms": 1788294959000,
   "preconditions": [],
   "payload": { "registry_class": "demo_tips_24", "name": "tips_01" }
 }
 ```
+
+`actor_type` 是变更来源，落 `changes` 账本并渲染"来源" tag，取值为微后端
+`KNOWN_ACTOR_TYPES`（`human` / `graph` / `registry` / `device` / `virtual_device` /
+`scheduler` / `workflow` / `backend` / `edge`）。浏览器 / 操作员直接发起的写操作**必须**
+显式携带 `human`（`materialsMutation()` 的默认值），不要依赖服务端默认值 `edge`——
+`edge` 表示"未细分的 Edge 进程内写点"，展示为"Edge 上报"而不是"本地权威"。
 
 | 方法 | 路径 | operation | payload |
 | --- | --- | --- | --- |

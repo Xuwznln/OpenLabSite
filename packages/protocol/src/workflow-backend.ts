@@ -151,8 +151,12 @@ export interface BackendWorkflowTask extends BackendWorkflowBase {
   execution_plan: JsonObject;
   run_mode: BackendWorkflowRunMode;
   control_status: BackendWorkflowTaskControlStatus;
+  /** 单任务详情/提交/控制响应必须提供；列表投影不包含此字段。 */
+  control_revision?: number;
   cleanup_status: BackendWorkflowTaskCleanupStatus;
   trace_context: JsonObject;
+  // 注意：行上的 input / output 是调度器内部字段，公开 API（_public_data）会剥掉；
+  // 每个 attempt 的返回值读 job.return_info。
   error_info: JsonValue[];
   target_node_uuid?: string;
   timeout_at?: string;
@@ -182,7 +186,40 @@ export type BackendWorkflowExecutorKind =
   | "condition"
   | "script"
   | "tool_call"
-  | "manual_confirm";
+  | "manual_confirm"
+  /** 循环容器：循环体 = parent_uuid 指向它的子节点，调度器逐轮执行（每轮循环体追加 attempt） */
+  | "loop";
+
+/** 循环节点 `param`：for 固定轮数；while 每轮前判定条件，`max_iterations` 是安全上限。 */
+export interface BackendLoopCondition {
+  source: "device_state" | "node_output";
+  /** device_state：设备 id + 状态字段名 */
+  device_id?: string;
+  field?: string;
+  /** node_output：节点 uuid + 返回值里的路径（空串取整个返回值） */
+  node_uuid?: string;
+  data_key?: string;
+  op: "==" | "!=" | ">" | ">=" | "<" | "<=" | "contains" | "exists";
+  value?: JsonValue;
+}
+
+export interface BackendLoopSpec {
+  mode: "for" | "while";
+  count?: number | null;
+  condition?: BackendLoopCondition | null;
+  max_iterations?: number;
+  /** 两轮之间的等待秒数；空循环体的 while（"等到某状态"）必须 > 0 */
+  interval_seconds?: number;
+}
+
+/** 循环节点运行的 `control_data.loop`：当前轮次（0 起）与静态摘要，用于画布进度展示。 */
+export interface BackendLoopProgress {
+  mode: "for" | "while";
+  iteration: number;
+  count?: number | null;
+  max_iterations?: number | null;
+  condition?: string | null;
+}
 
 /**
  * `workflow_node_job` 表 DTO —— 一次 **attempt**（物理执行）。
@@ -197,8 +234,8 @@ export interface BackendWorkflowNodeJob extends BackendWorkflowBase {
   workflow_node_uuid: string;
   /** 同一节点运行内从 1 递增。 */
   attempt_no: number;
-  /** 本次尝试为何产生：`initial`（首次派发）/ `retry_decision`（决策链 retry）等。 */
-  trigger: "initial" | "retry_decision" | (string & {});
+  /** 本次尝试为何产生：`initial`（首次派发）/ `retry_decision`（决策链 retry）/ `loop_iteration`（循环下一轮）等。 */
+  trigger: "initial" | "retry_decision" | "loop_iteration" | (string & {});
   feedback_sequence: number;
   status: BackendWorkflowNodeJobStatus;
   param: JsonObject;
@@ -425,6 +462,13 @@ export interface BackendGraphWriteInput {
 }
 
 /** execution_kind=workflow（默认）：按 Workflow 定义整图运行。 */
+export interface BackendWorkflowTaskCommandInput {
+  /** step：仅放行一个动作 attempt；resume：转为自动执行。 */
+  type: "step" | "resume";
+  expected_revision: number;
+  idempotency_key: string;
+}
+
 export interface BackendWorkflowTaskCreateInput {
   execution_kind?: "workflow";
   workflow_uuid: string;
@@ -480,6 +524,20 @@ export interface BackendAuthoringApplyInput {
   expected_candidate_hash: string;
 }
 
+/** 注册表工作流模板 → 工作流：角色绑定缺省时类角色单实例自动填、设备角色即其设备 id。 */
+export interface BackendWorkflowFromTemplateInput {
+  template_uuid: string;
+  bindings?: Record<string, string>;
+  name?: string;
+}
+
+export interface BackendWorkflowFromTemplateResult {
+  workflow: BackendWorkflow;
+  template_uuid: string;
+  /** 实际生效的 {角色: device_id} */
+  bindings: Record<string, string>;
+}
+
 export function createWorkflowBackendApi(http: HttpTransport) {
   return {
     /** POST /api/v1/workflows —— 创建 Workflow 定义 */
@@ -487,6 +545,13 @@ export function createWorkflowBackendApi(http: HttpTransport) {
       backendRequest<BackendWorkflow>(http, {
         method: "POST",
         path: "/api/v1/workflows",
+        body,
+      }),
+    /** POST /api/v1/workflows/from-template —— 注册表模板实例化（同模板同绑定幂等） */
+    createWorkflowFromTemplate: (body: BackendWorkflowFromTemplateInput) =>
+      backendRequest<BackendWorkflowFromTemplateResult>(http, {
+        method: "POST",
+        path: "/api/v1/workflows/from-template",
         body,
       }),
     /** GET /api/v1/workflows —— 定义分页列表 */
@@ -555,6 +620,13 @@ export function createWorkflowBackendApi(http: HttpTransport) {
       backendRequest<BackendWorkflowTask>(http, {
         method: "GET",
         path: `/api/v1/workflow-tasks/${encodeURIComponent(taskUuid)}`,
+      }),
+    /** POST /api/v1/workflow-tasks/{task_uuid}/commands —— 单点放行 / 切回自动 */
+    commandTask: (taskUuid: string, body: BackendWorkflowTaskCommandInput) =>
+      backendRequest<BackendWorkflowTask>(http, {
+        method: "POST",
+        path: `/api/v1/workflow-tasks/${encodeURIComponent(taskUuid)}/commands`,
+        body,
       }),
     /** GET /api/v1/workflow-tasks/{task_uuid}/jobs */
     taskJobs: (taskUuid: string) =>

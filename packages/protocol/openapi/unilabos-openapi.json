@@ -990,6 +990,7 @@
           "backend"
         ],
         "summary": "Error Decisions",
+        "description": "待人工决策的清单：执行面挂起的失败 attempt + 调度器在重启后接管的\n执行态未知 / 决策上下文丢失的 attempt，两者报告同形。",
         "operationId": "error_decisions_api_v1_error_decisions_get",
         "responses": {
           "200": {
@@ -1841,6 +1842,97 @@
           }
         },
         "x-openlab-role": "any"
+      }
+    },
+    "/api/v1/hostlink/log-sources": {
+      "get": {
+        "tags": [
+          "runtime-logs"
+        ],
+        "summary": "Sources",
+        "operationId": "sources_api_v1_hostlink_log_sources_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeLogSources"
+                }
+              }
+            }
+          }
+        },
+        "x-openlab-role": "host"
+      }
+    },
+    "/api/v1/hostlink/logs": {
+      "get": {
+        "tags": [
+          "runtime-logs"
+        ],
+        "summary": "Logs",
+        "operationId": "logs_api_v1_hostlink_logs_get",
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "title": "Source Id"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 96,
+              "pattern": "^(?:[0-9a-f]{24}:[0-9]{1,16})?$",
+              "default": "",
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "minimum": 1,
+              "default": 300,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeLogBatch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-openlab-role": "host"
       }
     },
     "/api/v1/hostlink/peers": {
@@ -3385,6 +3477,47 @@
         "x-openlab-role": "any"
       }
     },
+    "/api/v1/materials/snapshots/delta": {
+      "post": {
+        "tags": [
+          "materials-v1"
+        ],
+        "summary": "Apply Delta",
+        "description": "设备增量上报：只带变了的节点 / 段，权威按段合并（乐观锁在节点内）。",
+        "operationId": "apply_delta_api_v1_materials_snapshots_delta_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InventoryMutation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-openlab-role": "any"
+      }
+    },
     "/api/v1/materials/templates": {
       "post": {
         "tags": [
@@ -3432,16 +3565,34 @@
         "operationId": "list_templates_api_v1_materials_templates_get",
         "parameters": [
           {
+            "name": "name",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按模板 name 精确筛选：存在性检查 / 按名取 uuid 只回 0 或 1 条。",
+              "title": "Name"
+            },
+            "description": "按模板 name 精确筛选：存在性检查 / 按名取 uuid 只回 0 或 1 条。"
+          },
+          {
             "name": "include_definition",
             "in": "query",
             "required": false,
             "schema": {
               "type": "boolean",
-              "description": "false 时省略 registry 全量 definition（全注册表可达十几 MB），只返回名称 / 类型 / 分类 / 位点 / 版本等目录字段，供前端选择器使用。",
-              "default": true,
+              "description": "默认只返回名称 / uuid / 类型 / 分类 / 位点 / 版本 / definition_hash 等目录字段（前端选择器、存在性检查、变更判定够用）；true 时附带 registry 全量 definition（全注册表可达十几 MB），只在确实要读 definition 正文时开。",
+              "default": false,
               "title": "Include Definition"
             },
-            "description": "false 时省略 registry 全量 definition（全注册表可达十几 MB），只返回名称 / 类型 / 分类 / 位点 / 版本等目录字段，供前端选择器使用。"
+            "description": "默认只返回名称 / uuid / 类型 / 分类 / 位点 / 版本 / definition_hash 等目录字段（前端选择器、存在性检查、变更判定够用）；true 时附带 registry 全量 definition（全注册表可达十几 MB），只在确实要读 definition 正文时开。"
           }
         ],
         "responses": {
@@ -3612,6 +3763,7 @@
           "materials-v1"
         ],
         "summary": "Transfer Material",
+        "description": "transfer 提交权威位置后同步等设备完成 unload/load 投影；设备在此期间会回头\n读权威（tree.get），所以必须走线程池（def），不能占住事件循环。",
         "operationId": "transfer_material_api_v1_materials_transfer_post",
         "requestBody": {
           "content": {
@@ -3678,6 +3830,84 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-openlab-role": "any"
+      }
+    },
+    "/api/v1/ping": {
+      "get": {
+        "tags": [
+          "backend"
+        ],
+        "summary": "Ping",
+        "description": "HTTP 版 ping-pong：回显客户端时间戳并附服务端时钟，供链路时延 / 时钟偏差诊断。\n\n与控制 WebSocket 的 PingNotice / PongNotice 字段同名；host_node 的 test_latency\n对它所连的 Backend（本机进程或分体部署的 --role backend / 云端）逐次调用。",
+        "operationId": "ping_api_v1_ping_get",
+        "parameters": [
+          {
+            "name": "client_timestamp",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Client Timestamp"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Ping Api V1 Ping Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-openlab-role": "any"
+      }
+    },
+    "/api/v1/registry/digest": {
+      "get": {
+        "tags": [
+          "Registry"
+        ],
+        "summary": "Get Registry Digest",
+        "description": "权威持有的条目内容哈希索引：Host 上报前先取，只为权威没有的哈希附完整定义。",
+        "operationId": "get_registry_digest_api_v1_registry_digest_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Registry Digest Api V1 Registry Digest Get"
                 }
               }
             }
@@ -4092,6 +4322,93 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response List Registry Reports Api V1 Registry Reports Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-openlab-role": "any"
+      }
+    },
+    "/api/v1/registry/workflow-templates": {
+      "get": {
+        "tags": [
+          "Registry"
+        ],
+        "summary": "List Registry Workflow Templates",
+        "description": "生效的工作流模板（设备包 ``@workflow``）：前端模板面板与脚本实例化的数据源。",
+        "operationId": "list_registry_workflow_templates_api_v1_registry_workflow_templates_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response List Registry Workflow Templates Api V1 Registry Workflow Templates Get"
+                }
+              }
+            }
+          }
+        },
+        "x-openlab-role": "any"
+      }
+    },
+    "/api/v1/reset": {
+      "get": {
+        "tags": [
+          "backend"
+        ],
+        "summary": "Reset Preview",
+        "operationId": "reset_preview_api_v1_reset_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResetStatus"
+                }
+              }
+            }
+          }
+        },
+        "x-openlab-role": "any"
+      },
+      "post": {
+        "tags": [
+          "backend"
+        ],
+        "summary": "Reset Request",
+        "operationId": "reset_request_api_v1_reset_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResetStatus"
                 }
               }
             }
@@ -6783,6 +7100,57 @@
         "x-openlab-role": "any"
       }
     },
+    "/api/v1/workflow-tasks/{task_uuid}/commands": {
+      "post": {
+        "tags": [
+          "workflow"
+        ],
+        "summary": "Command Workflow Task",
+        "operationId": "command_workflow_task_api_v1_workflow_tasks__task_uuid__commands_post",
+        "parameters": [
+          {
+            "name": "task_uuid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowTaskCommandRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-openlab-role": "any"
+      }
+    },
     "/api/v1/workflow-tasks/{task_uuid}/interventions": {
       "get": {
         "tags": [
@@ -7143,6 +7511,47 @@
             }
           }
         ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-openlab-role": "any"
+      }
+    },
+    "/api/v1/workflows/from-template": {
+      "post": {
+        "tags": [
+          "workflow"
+        ],
+        "summary": "Create Workflow From Template",
+        "description": "注册表工作流模板 → 可运行工作流（角色绑定 + 类单实例自动解析，幂等 upsert）。",
+        "operationId": "create_workflow_from_template_api_v1_workflows_from_template_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowFromTemplateRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -7659,6 +8068,7 @@
               "cancel",
               "release_failed",
               "replace_result",
+              "resume_pending",
               "reconcile_state"
             ],
             "title": "Command Type"
@@ -7871,9 +8281,7 @@
             "title": "Job Uuid"
           },
           "summary": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
+            "additionalProperties": true,
             "type": "object",
             "title": "Summary"
           },
@@ -8051,6 +8459,7 @@
               "cancel_job",
               "release_failed",
               "replace_result",
+              "resume_pending",
               "inventory_apply",
               "reconcile"
             ],
@@ -8086,9 +8495,7 @@
             "title": "Payload Sha256"
           },
           "summary": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
+            "additionalProperties": true,
             "type": "object",
             "title": "Summary"
           },
@@ -8184,9 +8591,7 @@
             "title": "Active Job Uuid"
           },
           "descriptor": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
+            "additionalProperties": true,
             "type": "object",
             "title": "Descriptor"
           },
@@ -8371,9 +8776,7 @@
             "title": "Config Hash"
           },
           "config": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
+            "additionalProperties": true,
             "type": "object",
             "title": "Config"
           }
@@ -8397,16 +8800,12 @@
             "title": "Device Uuid"
           },
           "state": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
+            "additionalProperties": true,
             "type": "object",
             "title": "State"
           },
           "properties": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
+            "additionalProperties": true,
             "type": "object",
             "title": "Properties"
           },
@@ -8423,9 +8822,7 @@
           },
           "alarms": {
             "items": {
-              "additionalProperties": {
-                "$ref": "#/components/schemas/JsonValue"
-              },
+              "additionalProperties": true,
               "type": "object"
             },
             "type": "array",
@@ -8520,13 +8917,13 @@
           "upgrade": {
             "type": "boolean",
             "title": "Upgrade",
-            "description": "pip install --upgrade：重装 / 升级已装的同名包",
+            "description": "重新下载源码树，并以 --upgrade 重装其依赖",
             "default": false
           },
           "name": {
             "type": "string",
             "title": "Name",
-            "description": "已知的分发名（索引条目自带）；git / URL 规格靠它可靠登记台账",
+            "description": "已知的包名（索引条目自带）；源码树没有 pyproject 时用它登记",
             "default": ""
           }
         },
@@ -8535,7 +8932,7 @@
           "spec"
         ],
         "title": "DriverPackageInstallRequest",
-        "description": "pip 规格（name / name==1.2）、git URL（git+https://…）或本地目录。"
+        "description": "安装来源：GitHub 仓库地址（https://github.com/<owner>/<repo>[@ref]）、zip / tar.gz 归档地址或本机目录。\n\n源码树落到 unilabos_data/driver_packages/<name>/<version>/（本机目录原地登记），\n依赖用 uv / pip 预装，不 pip install 包体。"
       },
       "EndpointSnapshotUpsert": {
         "properties": {
@@ -8609,9 +9006,7 @@
             "title": "Action Capabilities"
           },
           "config": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
+            "additionalProperties": true,
             "type": "object",
             "title": "Config"
           },
@@ -8753,9 +9148,7 @@
             "title": "Result Uuid"
           },
           "decision": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
+            "additionalProperties": true,
             "type": "object",
             "title": "Decision"
           },
@@ -8822,9 +9215,7 @@
             "title": "Detail Payload Uuid"
           },
           "summary": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
+            "additionalProperties": true,
             "type": "object",
             "title": "Summary"
           },
@@ -8931,6 +9322,17 @@
             "minimum": 1,
             "title": "Attempt No",
             "default": 1
+          },
+          "attempt_trigger": {
+            "type": "string",
+            "enum": [
+              "initial",
+              "retry_decision",
+              "recovery",
+              "loop_iteration"
+            ],
+            "title": "Attempt Trigger",
+            "default": "initial"
           },
           "execute_command_uuid": {
             "type": "string",
@@ -9288,6 +9690,30 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Meta Data"
+          },
+          "device_site_templates": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "items": {},
+                  "type": "array"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Site Templates"
+          },
+          "on_existing": {
+            "type": "string",
+            "enum": [
+              "replace",
+              "adopt"
+            ],
+            "title": "On Existing",
+            "default": "replace"
           }
         },
         "type": "object",
@@ -9469,9 +9895,7 @@
             "title": "Payload Uuid"
           },
           "summary": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
+            "additionalProperties": true,
             "type": "object",
             "title": "Summary"
           },
@@ -9682,9 +10106,7 @@
             "title": "Payload Uuid"
           },
           "summary": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
+            "additionalProperties": true,
             "type": "object",
             "title": "Summary"
           },
@@ -9804,7 +10226,7 @@
           },
           "inline_payload": {
             "type": "string",
-            "format": "binary",
+            "contentMediaType": "application/octet-stream",
             "title": "Inline Payload"
           },
           "created_at_ms": {
@@ -9908,9 +10330,7 @@
             "title": "Preconditions"
           },
           "payload": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
+            "additionalProperties": true,
             "type": "object",
             "title": "Payload"
           }
@@ -10152,9 +10572,7 @@
             "title": "Payload Uuid"
           },
           "summary": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
+            "additionalProperties": true,
             "type": "object",
             "title": "Summary"
           },
@@ -10350,9 +10768,7 @@
             "title": "Unit"
           },
           "snapshot": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
+            "additionalProperties": true,
             "type": "object",
             "title": "Snapshot"
           },
@@ -10375,9 +10791,7 @@
       "MaterialDataRead": {
         "properties": {
           "data": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
+            "additionalProperties": true,
             "type": "object",
             "title": "Data"
           },
@@ -10563,16 +10977,12 @@
             "title": "Template Name"
           },
           "resource_schema": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
+            "additionalProperties": true,
             "type": "object",
             "title": "Resource Schema"
           },
           "model": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
+            "additionalProperties": true,
             "type": "object",
             "title": "Model"
           },
@@ -10582,23 +10992,17 @@
             "default": ""
           },
           "config": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
+            "additionalProperties": true,
             "type": "object",
             "title": "Config"
           },
           "extra": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
+            "additionalProperties": true,
             "type": "object",
             "title": "Extra"
           },
           "meta_data": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
+            "additionalProperties": true,
             "type": "object",
             "title": "Meta Data"
           },
@@ -10835,9 +11239,7 @@
             "default": "rectangle"
           },
           "extra": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
+            "additionalProperties": true,
             "type": "object",
             "title": "Extra"
           }
@@ -10929,9 +11331,7 @@
             "title": "Composition"
           },
           "meta_data": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
+            "additionalProperties": true,
             "type": "object",
             "title": "Meta Data"
           }
@@ -11045,6 +11445,61 @@
         ],
         "title": "PayloadObjectRecord"
       },
+      "ResetRequest": {
+        "properties": {
+          "confirmation_token": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Confirmation Token"
+          },
+          "confirmation": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Confirmation"
+          }
+        },
+        "type": "object",
+        "required": [
+          "confirmation_token",
+          "confirmation"
+        ],
+        "title": "ResetRequest"
+      },
+      "ResetStatus": {
+        "properties": {
+          "supported": {
+            "type": "boolean",
+            "title": "Supported"
+          },
+          "pending": {
+            "type": "boolean",
+            "title": "Pending"
+          },
+          "confirmation_token": {
+            "type": "string",
+            "title": "Confirmation Token"
+          },
+          "backup_path": {
+            "type": "string",
+            "title": "Backup Path"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "supported",
+          "pending",
+          "confirmation_token",
+          "backup_path",
+          "detail"
+        ],
+        "title": "ResetStatus"
+      },
       "ResourceTreeNotify": {
         "properties": {
           "device_id": {
@@ -11118,7 +11573,178 @@
         },
         "type": "object",
         "title": "RestartRequest",
-        "description": "安静点重启请求。\n\nmode: quiescent 等执行端安静；immediate 跳过等待立即重启。\nscope: auto 按运行形态选择；edge 通知 Edge 进程整进程重启（需\n--role backend）；process 整进程重启。"
+        "description": "安静点重启请求。\n\nmode: quiescent 等执行端安静；immediate 跳过等待立即重启。\nscope: auto 按运行形态选择（调度权威进程 → edge，只重启 Host；其它 → process）；\nedge 只重启 Host 进程，调度权威与管理端口常驻；process 本进程整体重启。"
+      },
+      "RuntimeLogBatch": {
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "stream_id": {
+            "type": "string",
+            "title": "Stream Id"
+          },
+          "cursor": {
+            "type": "string",
+            "title": "Cursor"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeLogLine"
+            },
+            "type": "array",
+            "title": "Lines"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More",
+            "default": false
+          },
+          "reset": {
+            "type": "boolean",
+            "title": "Reset",
+            "default": false
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated",
+            "default": false
+          },
+          "path": {
+            "type": "string",
+            "title": "Path",
+            "default": ""
+          },
+          "pid": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pid"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source_id",
+          "stream_id",
+          "cursor",
+          "lines"
+        ],
+        "title": "RuntimeLogBatch"
+      },
+      "RuntimeLogLine": {
+        "properties": {
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "offset",
+          "text"
+        ],
+        "title": "RuntimeLogLine"
+      },
+      "RuntimeLogSource": {
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "host",
+              "slave"
+            ],
+            "title": "Role"
+          },
+          "machine_name": {
+            "type": "string",
+            "title": "Machine Name"
+          },
+          "node_id": {
+            "type": "string",
+            "title": "Node Id",
+            "default": ""
+          },
+          "pid": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pid"
+          },
+          "device_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Device Ids"
+          },
+          "online": {
+            "type": "boolean",
+            "title": "Online"
+          },
+          "managed": {
+            "type": "boolean",
+            "title": "Managed",
+            "default": false
+          },
+          "supported": {
+            "type": "boolean",
+            "title": "Supported",
+            "default": true
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "source_id",
+          "name",
+          "role",
+          "machine_name",
+          "online"
+        ],
+        "title": "RuntimeLogSource"
+      },
+      "RuntimeLogSources": {
+        "properties": {
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeLogSource"
+            },
+            "type": "array",
+            "title": "Sources"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sources"
+        ],
+        "title": "RuntimeLogSources"
       },
       "SiteRead": {
         "properties": {
@@ -11173,9 +11799,7 @@
             "title": "Occupied Material Uuid"
           },
           "pose": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
+            "additionalProperties": true,
             "type": "object",
             "title": "Pose"
           },
@@ -11197,16 +11821,12 @@
             "default": ""
           },
           "meta_data": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
+            "additionalProperties": true,
             "type": "object",
             "title": "Meta Data"
           },
           "extra": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
+            "additionalProperties": true,
             "type": "object",
             "title": "Extra"
           },
@@ -11511,6 +12131,13 @@
           "type": {
             "type": "string",
             "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
           }
         },
         "type": "object",
@@ -11547,6 +12174,17 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Meta Data"
+          },
+          "workflow_uuid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workflow Uuid"
           }
         },
         "type": "object",
@@ -11604,6 +12242,38 @@
         ],
         "title": "WorkflowEdgeWrite",
         "description": "Complete WorkflowEdge payload used by full-graph reconciliation."
+      },
+      "WorkflowFromTemplateRequest": {
+        "properties": {
+          "template_uuid": {
+            "type": "string",
+            "title": "Template Uuid"
+          },
+          "bindings": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Bindings"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "template_uuid"
+        ],
+        "title": "WorkflowFromTemplateRequest",
+        "description": "把注册表里的工作流模板（设备包 ``@workflow``）按角色绑定实例化成可运行的工作流。\n\n``bindings`` 是 ``{角色 id: device_id}``：设备角色缺省即其设备 id，类角色在物料\n权威里恰有一个该类设备时自动填充，否则必须显式给出。同一模板 + 同一组绑定\n反复调用幂等覆盖同一个工作流（脚本 / e2e 的\"运行模板\"入口）。"
       },
       "WorkflowNodeWrite": {
         "properties": {
@@ -11770,6 +12440,39 @@
         "title": "WorkflowNodeWrite",
         "description": "Complete WorkflowNode payload used by full-graph reconciliation."
       },
+      "WorkflowTaskCommandRequest": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "step",
+              "resume"
+            ],
+            "title": "Type"
+          },
+          "expected_revision": {
+            "type": "integer",
+            "maximum": 9223372036854776000,
+            "minimum": 0,
+            "title": "Expected Revision"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Idempotency Key"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "expected_revision",
+          "idempotency_key"
+        ],
+        "title": "WorkflowTaskCommandRequest",
+        "description": "step 放行一个动作；resume 切回自动。版本与幂等键防止跨页面重复放行。"
+      },
       "WorkflowTaskCreateRequest": {
         "properties": {
           "execution_kind": {
@@ -11886,6 +12589,17 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Meta Data"
+          },
+          "workflow_uuid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workflow Uuid"
           }
         },
         "type": "object",

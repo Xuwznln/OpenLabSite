@@ -232,7 +232,7 @@ HTTP **恒 200**；业务结果在正文：
 {
   "protocol_version": "materials.v1",
   "command_uuid": "9d1d…", "effect_key": "patch_material:9d1d…",
-  "operation": "patch_material", "actor_type": "frontend", "actor_uuid": null,
+  "operation": "patch_material", "actor_type": "human", "actor_uuid": null,
   "job_uuid": null, "observed_at_ms": 1788440000000,
   "preconditions": [ { "aggregate_type": "material", "aggregate_uuid": "…", "expected_version": 7 } ],
   "payload": { "name": "…", "barcode": null, "lifecycle": "active", "…": "…" }
@@ -252,6 +252,8 @@ HTTP **恒 200**；业务结果在正文：
 - `payload` 与路由声明的类型化请求体**严格比对**：可选字段必须显式给出（`null` / 空串），否则 422
   `mutation.payload differs from the typed request body`。客户端只能通过 `materialsMutation()` 构造。
 - `operation` 取值由服务端定义（`patch_material`、`put_position`、`inbound_lot`…），前端不得自造。
+- `actor_type` 取值为服务端 `KNOWN_ACTOR_TYPES`；浏览器 / 操作员发起的写操作**必须**显式携带
+  `human`（`materialsMutation()` 默认值），不依赖服务端默认值 `edge`。
 
 ### 5.4 客户端错误归一
 
@@ -264,7 +266,7 @@ HTTP **恒 200**；业务结果在正文：
 
 ## 6. 长操作（异步）
 
-用于 pip 安装 / 卸载这类可能跑几分钟的动作：
+用于驱动包下载、依赖安装这类可能跑几分钟的动作：
 
 ```text
 POST /driver-packages/install ─202─▶ operation{status: running}
@@ -286,6 +288,8 @@ GET  /driver-packages/operations/{operation_id} ──轮询（1–2 s）──�
 
 - 事件**只是失效通知**：正文不含业务数据，客户端收到后重拉 HTTP。
 - 没有 SSE 的域按 3–8 s 轮询，页面可见性恢复时立即刷新。
+- 实时日志页是有界只读例外：只在可见且未暂停时按 1 s 增量拉取选中进程，来源目录 5 s 刷新；
+  不新增长连接，读取与窗口上限见 [logs.md](./logs.md)。
 - 浏览器同源连接数有限（HTTP/1.1 每源 6 条）：一个页面**至多**各打开一条流，跨 tab 复用由应用层保证。
 - 新增流必须登记到 `catalog.ts`（`method: "SSE"`）并更新校验脚本的 SSE 清单。
 

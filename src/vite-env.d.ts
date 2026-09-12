@@ -8,6 +8,8 @@ interface ImportMetaEnv {
   readonly VITE_DEFAULT_EDGE_URL?: string;
   /** 驱动包索引地址（缺省 awesome-lab-devices 的 main/index.json）。 */
   readonly VITE_OPENLAB_DEVICE_INDEX_URL?: string;
+  /** 前端站点索引地址（缺省 awesome-lab-sites 的 main/index.json）。 */
+  readonly VITE_OPENLAB_SITE_INDEX_URL?: string;
 }
 
 declare module "*.vue" {
