@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_LAB_THEME_ID, LAB_THEME_IDS, LAB_THEMES, isLabThemeId } from "./domain-themes";
 
-describe("领域主题完整性（四模式）", () => {
-  it("包含通用模式与三个领域", () => {
-    expect(LAB_THEME_IDS).toEqual(["general", "organic", "biology", "materials"]);
+describe("通用版主题", () => {
+  it("仅包含通用模式", () => {
+    expect(LAB_THEME_IDS).toEqual(["general"]);
     expect(isLabThemeId("general")).toBe(true);
+    for (const oldTheme of ["organic", "biology", "materials"]) expect(isLabThemeId(oldTheme)).toBe(false);
   });
 
   it("首次进入默认是通用，而不是某个学科", () => {

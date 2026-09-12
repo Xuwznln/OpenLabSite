@@ -1,5 +1,9 @@
 # OpenLab
 
+> OpenLabSite 当前仅发布通用版；下文遗留的领域工具及主题说明仅适用于旧仓库
+> `archive/domain-editions-20260913`。本版不支持学科切换或 `?theme=`，详见
+> [通用版边界](docs/GENERAL_EDITION.md)。物料管理、装配和实验室地图保持可用。
+
 OpenLab is the local-first operations console for the Uni-Lab-OS microbackend. It gives a
 laboratory one static web application for device operation, material tracking, workflow
 authoring and execution, live telemetry, audit history and runtime diagnostics.

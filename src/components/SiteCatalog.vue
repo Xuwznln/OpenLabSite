@@ -2,7 +2,7 @@
 /**
  * 站点目录：awesome-lab-sites 索引里列出的前端站点（浏览器直接读 index.json，与微后端无关）。
  *
- * 同一份部署的条目（只差 ?theme=）就地切换学科主题；别的部署在新标签页打开并带上当前 hash 路由。
+ * 本站固定通用；其他前端在新标签页打开，不切换本站主题。
  * 与「驱动包」页读 awesome-lab-devices 是同一套模式；微后端导航页（unilab 管理端口的 /）也读同一份索引。
  */
 import { computed, onMounted, ref, shallowRef } from "vue";
@@ -60,17 +60,7 @@ function isHere(entry: SiteIndexEntry): boolean {
   return !theme || theme === domain.activeId;
 }
 
-function sameDeployment(entry: SiteIndexEntry): boolean {
-  return !!currentHref.value && isSameDeployment(entry.url, currentHref.value);
-}
-
 function openEntry(entry: SiteIndexEntry) {
-  const theme = entryTheme(entry);
-  if (sameDeployment(entry) && isLabThemeId(theme)) {
-    domain.setTheme(theme);
-    open.value = false;
-    return;
-  }
   window.open(siteEntryHref(entry.url, currentHref.value), "_blank", "noreferrer");
 }
 
@@ -109,7 +99,6 @@ onMounted(() => void load());
             <span class="site-title">
               <span class="site-name">{{ entry.name }}</span>
               <NTag v-if="isHere(entry)" size="tiny" :bordered="false" type="info">当前</NTag>
-              <NTag v-else-if="sameDeployment(entry)" size="tiny" :bordered="false">本站切换</NTag>
               <NTag size="tiny" :bordered="false" :type="entry.official ? 'success' : 'default'">{{ entry.official ? "官方" : "社区" }}</NTag>
               <span v-if="themeLabel(entry)" class="mono dim small">{{ themeLabel(entry) }}</span>
             </span>
@@ -120,7 +109,7 @@ onMounted(() => void load());
       </ul>
 
       <div class="catalog-foot">
-        <span class="dim small">同一部署的条目就地切换主题；其他站点在新标签页打开并连接你填写的微后端地址。</span>
+        <span class="dim small">本站仅提供通用界面；其他前端在新标签页打开。</span>
         <NButton size="tiny" quaternary :loading="loading" @click="load">刷新</NButton>
       </div>
     </div>

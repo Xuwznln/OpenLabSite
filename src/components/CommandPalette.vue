@@ -12,7 +12,6 @@ import {
   AlertCircleOutline,
   ArrowDownOutline,
   ArrowUpOutline,
-  CalculatorOutline,
   ColorWandOutline,
   CubeOutline,
   GitNetworkOutline,
@@ -72,10 +71,6 @@ const pages = computed<{ to: string; label: string; icon: Component }[]>(() => [
   { to: "/registry", label: domain.config.nav.registry, icon: LayersOutline },
   { to: "/system", label: domain.config.nav.system, icon: SpeedometerOutline },
   { to: "/data", label: domain.config.nav.entities, icon: ServerOutline },
-  // 领域工具是学科专属入口，通用模式下不出现
-  ...(domain.activeId === "general"
-    ? []
-    : [{ to: "/toolkit", label: domain.config.nav.toolkit, icon: CalculatorOutline }]),
 ]);
 
 function close() {

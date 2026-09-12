@@ -131,22 +131,6 @@ export const router = createRouter({
     },
     { path: "/entities", redirect: "/data" },
 
-    // ── 领域工具 ──
-    {
-      path: "/toolkit",
-      name: "domain-toolkit",
-      component: () => import("./views/DomainToolkitView.vue"),
-      meta: { title: "领域工具", overline: "Open Toolkit" },
-    },
-
-    // 参考案例：不进入主导航，供用户/AI 预览和复制源码。
-    {
-      path: "/cases/organic-synthesis",
-      name: "case-organic-synthesis",
-      component: () =>
-        import("./vibe-cases/organic-synthesis/OrganicSynthesisWorkbench.vue"),
-      meta: { title: "有机合成案例", overline: "Reference Case" },
-    },
     { path: "/:pathMatch(.*)*", redirect: "/" },
   ],
 });

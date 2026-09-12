@@ -11,7 +11,6 @@ import {
 } from "naive-ui";
 import {
   AlertCircleOutline,
-  CalculatorOutline,
   ColorWandOutline,
   CubeOutline,
   ExtensionPuzzleOutline,
@@ -31,7 +30,7 @@ import {
 } from "@vicons/ionicons5";
 import CommandPalette from "./components/CommandPalette.vue";
 import ConnectionBar from "./components/ConnectionBar.vue";
-import DomainSwitcher from "./components/DomainSwitcher.vue";
+import SiteCatalog from "./components/SiteCatalog.vue";
 import RunDock from "./components/RunDock.vue";
 import ScanDrawer from "./components/ScanDrawer.vue";
 import { DEFAULT_LOCAL_EDGE_URL, useConnectionStore } from "./stores/connection";
@@ -111,17 +110,10 @@ const NAV_GROUPS_BASE = [
       { key: "entities", to: "/data", icon: ServerOutline },
     ],
   },
-  {
-    key: "tools",
-    title: "领域工具",
-    items: [{ key: "toolkit", to: "/toolkit", icon: CalculatorOutline }],
-  },
 ] as const;
 
 const navGroups = computed<NavGroup[]>(() =>
   NAV_GROUPS_BASE
-    // 领域工具是学科专属栏目，通用模式下整组隐藏
-    .filter((group) => !(group.key === "tools" && domain.activeId === "general"))
     .map((group) => ({
       key: group.key,
       title: "title" in group ? group.title : undefined,
@@ -141,7 +133,6 @@ const ROUTE_KEYS: Array<[prefix: string, key: string]> = [
   ["/editor", "editor"],
   ["/inventory", "inventory"],
   ["/devices", "devices"],
-  ["/toolkit", "toolkit"],
   ["/data", "entities"],
   ["/history", "history"],
   ["/registry", "registry"],
@@ -150,7 +141,6 @@ const ROUTE_KEYS: Array<[prefix: string, key: string]> = [
   ["/logs", "logs"],
   ["/error-decisions", "error-decisions"],
   ["/status-incidents", "status-incidents"],
-  ["/cases", "cases"],
 ];
 
 const activeKey = computed(() => {
@@ -325,7 +315,8 @@ onUnmounted(() => {
                 <span class="crumb-title">{{ pageTitle }}</span>
               </div>
               <div class="top-cluster">
-                <DomainSwitcher class="top-domain" />
+                <span class="dim small">通用</span>
+                <SiteCatalog />
                 <button class="quick-btn" title="扫码直达（扫码枪直接扫即可）" @click="openScan()">
                   <NIcon size="15"><ScanOutline /></NIcon>
                 </button>

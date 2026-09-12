@@ -1,60 +1,18 @@
-import { computed, ref, watch } from "vue";
+import { computed } from "vue";
 import { defineStore } from "pinia";
-import {
-  DEFAULT_LAB_THEME_ID,
-  LAB_THEMES,
-  isLabThemeId,
-  type LabThemeId,
-} from "../features/domain-themes";
-import { SITE_THEME_QUERY_PARAM } from "../features/site-index";
+import { LAB_THEMES } from "../features/domain-themes";
 
-const STORAGE_KEY = "openlab:domain-theme";
-
-/**
- * 地址栏 `?theme=<id>`（awesome-lab-sites 里同一份构建的多个学科入口靠它区分）。
- * 只在本次启动生效并写回 localStorage；非法值忽略。
- */
-function themeFromLocation(): LabThemeId | null {
-  if (typeof location === "undefined") return null;
-  try {
-    const value = new URL(location.href).searchParams.get(SITE_THEME_QUERY_PARAM)?.trim();
-    return isLabThemeId(value) ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-function initialTheme(): LabThemeId {
-  const fromLocation = themeFromLocation();
-  if (fromLocation) return fromLocation;
-  if (typeof localStorage === "undefined") return DEFAULT_LAB_THEME_ID;
-  const stored = localStorage.getItem(STORAGE_KEY);
-  return isLabThemeId(stored) ? stored : DEFAULT_LAB_THEME_ID;
-}
-
+/** 通用版固定配置：旧 localStorage 与 ?theme= 不再改变界面。 */
 export const useDomainThemeStore = defineStore("domain-theme", () => {
-  const activeId = ref<LabThemeId>(initialTheme());
-  const config = computed(() => LAB_THEMES[activeId.value]);
-
-  function setTheme(theme: LabThemeId) {
-    activeId.value = theme;
+  const activeId = computed(() => "general" as const);
+  const config = computed(() => LAB_THEMES.general);
+  if (typeof document !== "undefined") {
+    const root = document.documentElement;
+    root.dataset.labTheme = "general";
+    root.style.setProperty("--domain-accent", config.value.accent);
+    root.style.setProperty("--domain-accent-hover", config.value.accentHover);
+    root.style.setProperty("--domain-accent-soft", config.value.accentSoft);
+    root.style.setProperty("--domain-accent-rgb", config.value.accentRgb);
   }
-
-  watch(
-    activeId,
-    (theme) => {
-      const next = LAB_THEMES[theme];
-      if (typeof localStorage !== "undefined") localStorage.setItem(STORAGE_KEY, theme);
-      if (typeof document === "undefined") return;
-      const root = document.documentElement;
-      root.dataset.labTheme = theme;
-      root.style.setProperty("--domain-accent", next.accent);
-      root.style.setProperty("--domain-accent-hover", next.accentHover);
-      root.style.setProperty("--domain-accent-soft", next.accentSoft);
-      root.style.setProperty("--domain-accent-rgb", next.accentRgb);
-    },
-    { immediate: true },
-  );
-
-  return { activeId, config, setTheme };
+  return { activeId, config };
 });
