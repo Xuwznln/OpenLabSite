@@ -1,13 +1,15 @@
 <script setup lang="ts">
 /**
- * 异常审批：两类需要操作员介入的执行端事件。
+ * 异常审批：三类需要操作员介入的事件。
  *
  * - 动作异常（error-decisions）：动作失败后由微后端持有，等待选择 Host 给出的
  *   处理选项（重试 / 跳过 / 中止 / 人工替换结果）。只提交 options[].action。
+ * - 人工确认（manual-confirmations）：流程走到人工确认节点时开出的确认单，有指派名单
+ *   时只能以名单中的用户身份确认；有截止时间，到期由调度器收敛为超时。
  * - 工作流干预（interventions）：调度器把任务置为 waiting_intervention 时的
  *   干预记录，选项在 Workflow Authority 侧决策；此处展示并跳转任务运行时。
  */
-import { computed, onMounted, onUnmounted, ref, shallowRef } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref, shallowRef } from "vue";
 import { useRouter } from "vue-router";
 import {
   NAlert,
@@ -16,22 +18,73 @@ import {
   NIcon,
   NInput,
   NModal,
+  NSelect,
   NSpace,
   NTag,
   useMessage,
 } from "naive-ui";
-import { CheckmarkDoneOutline, WarningOutline } from "@vicons/ionicons5";
-import type { ErrorDecision, ErrorDecisionOption } from "@openlab/protocol";
+import { CheckmarkDoneOutline, HandRightOutline, WarningOutline } from "@vicons/ionicons5";
+import type { BackendManualConfirmationDecisionInput, ErrorDecision, ErrorDecisionOption } from "@openlab/protocol";
 import EntityRef from "../components/EntityRef.vue";
 import PageHeader from "../components/PageHeader.vue";
-import { useDecisionsStore } from "../stores/decisions";
+import { useDecisionsStore, type PendingManualConfirmation } from "../stores/decisions";
 import { describeError } from "../features/errors";
+import { parseIsoMs } from "../features/task-jobs";
 
 const router = useRouter();
 const decisions = useDecisionsStore();
 const message = useMessage();
 const submitting = ref("");
 const nowS = ref(Date.now() / 1000);
+
+// ── 人工确认：每张单各自的确认人；有指派名单只能从名单里选 ──
+const confirmActor = reactive<Record<string, string>>({});
+
+function actorFor(item: PendingManualConfirmation): string {
+  const current = confirmActor[item.confirmation.uuid];
+  if (current !== undefined) return current;
+  return item.confirmation.assignee_user_ids[0] ?? "operator";
+}
+
+function confirmRemaining(item: PendingManualConfirmation): string {
+  const deadline = parseIsoMs(item.confirmation.deadline_at);
+  if (!deadline) return "";
+  const left = deadline / 1000 - nowS.value;
+  if (left <= 0) return "已到期 · 等待调度器收敛为超时";
+  const h = Math.floor(left / 3600);
+  const m = Math.floor((left % 3600) / 60);
+  const s = Math.floor(left % 60);
+  return h > 0 ? `剩余 ${h} 小时 ${m} 分` : `剩余 ${m}:${String(s).padStart(2, "0")}`;
+}
+
+function confirmOverdue(item: PendingManualConfirmation): boolean {
+  const deadline = parseIsoMs(item.confirmation.deadline_at);
+  return Boolean(deadline) && deadline! / 1000 - nowS.value <= 0;
+}
+
+const CONFIRM_ACTION_LABELS: Record<string, string> = { approve: "确认放行", skip: "跳过", reject: "拒绝" };
+
+async function decideConfirmation(item: PendingManualConfirmation, action: BackendManualConfirmationDecisionInput["action"]) {
+  const actor = actorFor(item).trim() || "operator";
+  const assignees = item.confirmation.assignee_user_ids;
+  if (assignees.length && !assignees.includes(actor)) {
+    message.error(`只有被指派的用户（${assignees.join("、")}）可以确认`);
+    return;
+  }
+  submitting.value = `${item.confirmation.uuid}:${action}`;
+  try {
+    await decisions.decideManualConfirmation(item.confirmation.uuid, {
+      action,
+      confirmed_by: actor,
+      decision_idempotency_key: `openlab-manual:${item.confirmation.uuid}:${action}`,
+    });
+    message.success(`已提交「${CONFIRM_ACTION_LABELS[action] ?? action}」`);
+  } catch (err) {
+    message.error(`提交失败：${describeError(err)}`);
+  } finally {
+    submitting.value = "";
+  }
+}
 
 const ACTION_LABELS: Record<string, string> = {
   retry: "重试",
@@ -128,7 +181,9 @@ async function choose(
 }
 
 const unsupported = computed(() => decisions.errorSupport === "unsupported");
-const empty = computed(() => !decisions.errorDecisions.length && !decisions.interventions.length);
+const empty = computed(
+  () => !decisions.errorDecisions.length && !decisions.interventions.length && !decisions.manualConfirmations.length,
+);
 
 let clock: ReturnType<typeof setInterval> | null = null;
 onMounted(() => {
@@ -164,11 +219,73 @@ onUnmounted(() => {
       {{ decisions.errorLastError }}
     </NAlert>
 
-    <NEmpty v-if="empty" description="当前没有等待处理的动作异常或工作流干预" style="padding: 64px 0">
+    <NEmpty v-if="empty" description="当前没有等待处理的动作异常、人工确认或工作流干预" style="padding: 64px 0">
       <template #icon><NIcon size="42" color="#9AA3AB"><CheckmarkDoneOutline /></NIcon></template>
     </NEmpty>
 
     <NSpace v-else vertical size="large">
+      <section v-if="decisions.manualConfirmations.length">
+        <div class="section-title">人工确认（{{ decisions.manualConfirmations.length }}）</div>
+        <div class="cards">
+          <div v-for="item in decisions.manualConfirmations" :key="item.confirmation.uuid" class="decision-card confirm">
+            <div class="card-head">
+              <NIcon size="18" color="#d89a16"><HandRightOutline /></NIcon>
+              <span class="title">{{ item.taskTitle }}</span>
+              <NTag size="small" type="warning" :bordered="false">待确认</NTag>
+              <NTag v-if="item.confirmation.assignee_user_ids.length" size="small" :bordered="false">
+                指派 {{ item.confirmation.assignee_user_ids.join("、") }}
+              </NTag>
+              <NTag v-else size="small" :bordered="false" type="success">任何操作员可确认</NTag>
+              <span class="spacer" />
+              <span
+                v-if="item.confirmation.deadline_at"
+                class="countdown mono"
+                :class="{ expired: confirmOverdue(item) }"
+                :title="`截止 ${item.confirmation.deadline_at}`"
+              >
+                {{ confirmRemaining(item) }}
+              </span>
+            </div>
+            <p v-if="item.confirmation.description" class="error-message">{{ item.confirmation.description }}</p>
+            <div class="meta-row">
+              <span>任务 <a class="link mono" @click="router.push(`/workflow-tasks/${encodeURIComponent(item.taskUuid)}`)">{{ item.taskUuid.slice(0, 8) }}</a></span>
+              <span>作业 <span class="mono">{{ item.confirmation.workflow_node_job_uuid.slice(0, 8) }}</span></span>
+              <span>开启 {{ item.confirmation.opened_at }}</span>
+              <span v-if="item.confirmation.deadline_at">截止 {{ item.confirmation.deadline_at }}</span>
+            </div>
+            <div class="options">
+              <NSelect
+                v-if="item.confirmation.assignee_user_ids.length"
+                :value="actorFor(item)"
+                size="small"
+                style="width: 170px"
+                :options="item.confirmation.assignee_user_ids.map((id) => ({ label: id, value: id }))"
+                @update:value="(value: string) => (confirmActor[item.confirmation.uuid] = value)"
+              />
+              <NInput
+                v-else
+                :value="actorFor(item)"
+                size="small"
+                style="width: 170px"
+                placeholder="确认人 ID"
+                @update:value="(value: string) => (confirmActor[item.confirmation.uuid] = value)"
+              />
+              <NButton
+                size="small"
+                type="primary"
+                :loading="submitting === `${item.confirmation.uuid}:approve`"
+                :disabled="!!submitting"
+                @click="decideConfirmation(item, 'approve')"
+              >
+                确认放行
+              </NButton>
+              <NButton size="small" secondary :disabled="!!submitting" @click="decideConfirmation(item, 'skip')">跳过</NButton>
+              <NButton size="small" tertiary type="error" :disabled="!!submitting" @click="decideConfirmation(item, 'reject')">拒绝</NButton>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section v-if="decisions.errorDecisions.length">
         <div class="section-title">动作异常（{{ decisions.errorDecisions.length }}）</div>
         <div class="cards">
@@ -279,6 +396,11 @@ onUnmounted(() => {
 
 .decision-card.intervention {
   border-left-color: #d89a16;
+}
+
+.decision-card.confirm {
+  border-left-color: #f59e0b;
+  background: #fffdf6;
 }
 
 .card-head {

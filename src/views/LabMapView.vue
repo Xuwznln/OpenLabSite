@@ -1,21 +1,23 @@
 <script setup lang="ts">
 /**
  * 实验室地图：以 materials.v1 权威中的根物料（设备 / 台面）位置与位点占用
- * 绘制 2D 俯视图。没有独立的布局 API——位置就是物料的 position 字段。
+ * 绘制 2D 俯视图。物料位置来自 position；区域/围墙由独立的布局 API 管理。
  *
  * - 有坐标的根物料按 position_x/y 与 size 摆放，单位与权威一致；
  * - 没有坐标的根物料自动排成网格，避免漏画；
- * - 位点按 pose.position / pose.size 画在设备内部，占用者高亮；
+ * - 展开子台面，位点按 pose.position / pose.size 画在所属物料内部，占用者高亮；
  * - 点击设备进入 2.5D 装配视图；
  * - 「编辑布局」：按像素格给实验室划分区域、画围墙（features/lab-layout），
  *   叠在设备之下；布局权威在微后端 runtime.db（lab-v1，revision 乐观锁），
- *   老微后端降级到浏览器；可导出 / 导入 JSON 跨 Host 搬运。
+ *   可导出 / 导入 JSON 跨 Host 搬运，接口错误不退回浏览器存储。
  */
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from "vue";
 import { useRouter } from "vue-router";
 import { NButton, NEmpty, NIcon, NInput, NPopconfirm, NSelect, NSwitch, NTag, useMessage } from "naive-ui";
 import { CubeOutline, RefreshOutline } from "@vicons/ionicons5";
-import type { MaterialsV1Aggregate, MaterialsV1Site } from "@openlab/protocol";
+import type { MaterialsV1Aggregate } from "@openlab/protocol";
+import { materialMap, type MapSite, type MaterialSurface } from "../features/material-map";
+import { createRefreshQueue } from "../features/refresh-queue";
 import PageHeader from "../components/PageHeader.vue";
 import {
   addZone,
@@ -24,17 +26,13 @@ import {
   cellKey,
   cellRect,
   cellsBounds,
-  clearLocalLayout,
   emptyLayout,
   fromServerLayout,
-  isLayoutEmpty,
-  loadLocalLayout,
   paintCell,
   parseLayout,
   removeZone,
   renameZone,
   rescaleLayout,
-  saveLocalLayout,
   toServerLayout,
   zoneArea,
   zoneCentroid,
@@ -58,16 +56,6 @@ const showLabels = ref(true);
 const hoverKey = ref("");
 const selectedUuid = ref("");
 
-interface MapSite {
-  key: string;
-  site: MaterialsV1Site;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  occupant?: MaterialsV1Aggregate;
-}
-
 interface MapBlock {
   uuid: string;
   id: string;
@@ -82,57 +70,25 @@ interface MapBlock {
   h: number;
   placed: boolean;
   sites: MapSite[];
+  surfaces: MaterialSurface[];
   childCount: number;
 }
 
-const roots = computed(() => devices.roots);
-const byUuid = computed(() => new Map(devices.roots.map((item) => [item.material.material_uuid, item])));
-
-function num(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
-}
-
-function poseValue(pose: Record<string, unknown>, group: string, axis: string): number | undefined {
-  const inner = pose[group];
-  if (inner && typeof inner === "object") {
-    const value = (inner as Record<string, unknown>)[axis];
-    if (typeof value === "number") return value;
-  }
-  return undefined;
-}
-
-const DEFAULT_W = 320;
-const DEFAULT_H = 240;
+// 根设备、子台面、位点和占用者必须来自同一次 HTTP 快照，不能把两次请求拼成半新半旧的树。
+const allAggregates = shallowRef<MaterialsV1Aggregate[]>([]);
+const materialsError = ref("");
+const materialsLoading = ref(false);
 const GAP = 40;
 
 const blocks = computed<MapBlock[]>(() => {
-  const list = roots.value.filter((item) => item.material.resource_type !== "well");
+  const list = materialMap(allAggregates.value);
   const placed: MapBlock[] = [];
   const unplaced: MapBlock[] = [];
-  for (const item of list) {
+  for (const projection of list) {
+    const { aggregate: item, w, h, sites, surfaces, childCount } = projection;
     const record = devices.byId(item.material.resource_id);
     const position = item.position;
-    const w = Math.max(60, num(position.size_width, DEFAULT_W) || DEFAULT_W);
-    const h = Math.max(60, num(position.size_height, DEFAULT_H) || DEFAULT_H);
     const hasPosition = typeof position.position_x === "number" && typeof position.position_y === "number";
-    const sites: MapSite[] = item.sites.map((site, index) => {
-      const pose = site.pose ?? {};
-      const sw = poseValue(pose, "size", "width") ?? Math.min(w, 80) * 0.8;
-      const sh = poseValue(pose, "size", "height") ?? Math.min(h, 80) * 0.8;
-      const cols = Math.max(1, Math.floor(w / (sw + 10)));
-      const fallbackX = 10 + (index % cols) * (sw + 10);
-      const fallbackY = 10 + Math.floor(index / cols) * (sh + 10);
-      const occupant = site.occupied_material_uuid ? byUuid.value.get(site.occupied_material_uuid) : undefined;
-      return {
-        key: site.site_uuid,
-        site,
-        x: poseValue(pose, "position", "x") ?? fallbackX,
-        y: poseValue(pose, "position", "y") ?? fallbackY,
-        w: sw,
-        h: sh,
-        occupant: occupant ?? (site.occupied_material_uuid ? findOccupant(site.occupied_material_uuid) : undefined),
-      };
-    });
     const block: MapBlock = {
       uuid: item.material.material_uuid,
       id: item.material.resource_id,
@@ -147,7 +103,8 @@ const blocks = computed<MapBlock[]>(() => {
       h,
       placed: hasPosition,
       sites,
-      childCount: devices.roots.filter((child) => child.material.parent_material_uuid === item.material.material_uuid).length,
+      surfaces,
+      childCount,
     };
     (hasPosition ? placed : unplaced).push(block);
   }
@@ -171,12 +128,6 @@ const blocks = computed<MapBlock[]>(() => {
   return [...placed, ...unplaced];
 });
 
-const allAggregates = shallowRef<MaterialsV1Aggregate[]>([]);
-
-function findOccupant(uuid: string): MaterialsV1Aggregate | undefined {
-  return allAggregates.value.find((item) => item.material.material_uuid === uuid);
-}
-
 // ── 布局（区域 / 围墙）编辑 ────────────────────────────────────
 //
 // 权威在微后端 runtime.db（lab-v1），一个 Host 一份、所有浏览器共享；这里保存的是
@@ -185,8 +136,9 @@ function findOccupant(uuid: string): MaterialsV1Aggregate | undefined {
 const layoutScope = computed(() => conn.baseUrl);
 const layout = ref<LabLayout>(emptyLayout());
 const layoutRevision = ref(0);
-/** server = 权威在微后端；local = 老微后端（404/503）降级到浏览器；loading = 尚未读到。 */
-const layoutBacking = ref<"loading" | "server" | "local">("loading");
+/** 读取失败时禁止写入，不能用空布局覆盖服务端。 */
+const layoutBacking = ref<"loading" | "server" | "error">("loading");
+const layoutError = ref("");
 const layoutSaving = ref(false);
 const layoutSyncedAt = ref(0);
 const editing = ref(false);
@@ -204,25 +156,13 @@ async function loadServerLayout() {
   try {
     const doc = await conn.api.domains.labV1.layout();
     if (scope !== layoutScope.value) return;
-    const legacy = loadLocalLayout(scope);
-    if (doc.revision === 0 && legacy && !isLayoutEmpty(legacy)) {
-      // 旧版本把布局留在浏览器里：一次性搬到微后端，之后所有人共享
-      const migrated = await conn.api.domains.labV1.saveLayout(toServerLayout(legacy, 0));
-      clearLocalLayout(scope);
-      applyServerLayout(migrated);
-      message.success("已把本浏览器里的布局同步到微后端，现在所有连接这台 Host 的人都能看到");
-      return;
-    }
     applyServerLayout(doc);
-    if (legacy) clearLocalLayout(scope);
   } catch (error) {
-    if (error instanceof ApiError && error.isUnsupported) {
-      layoutBacking.value = "local";
-      layout.value = loadLocalLayout(scope) ?? emptyLayout();
-      return;
-    }
-    if (layoutBacking.value === "loading") layoutBacking.value = "server";
-    message.error(`读取实验室布局失败：${describeError(error)}`);
+    if (scope !== layoutScope.value) return;
+    layoutBacking.value = "error";
+    editing.value = false;
+    layoutError.value = `读取实验室布局失败：${describeError(error)}`;
+    message.error(layoutError.value);
   }
 }
 
@@ -230,29 +170,33 @@ function applyServerLayout(doc: Awaited<ReturnType<typeof conn.api.domains.labV1
   layout.value = fromServerLayout(doc);
   layoutRevision.value = doc.revision;
   layoutBacking.value = "server";
+  layoutError.value = "";
   layoutSyncedAt.value = Date.now();
 }
 
 async function flushLayoutSave() {
   saveTimer = null;
   const next = pendingSave;
-  pendingSave = null;
   if (!next || layoutBacking.value !== "server" || !conn.online) return;
+  pendingSave = null;
+  const scope = layoutScope.value;
   layoutSaving.value = true;
   try {
     const saved = await conn.api.domains.labV1.saveLayout(toServerLayout(next, layoutRevision.value));
+    if (scope !== layoutScope.value) return;
     layoutRevision.value = saved.revision;
     layoutSyncedAt.value = Date.now();
     // 保存期间又有新改动：紧接着再存一轮
     if (pendingSave) scheduleLayoutSave();
   } catch (error) {
+    if (scope !== layoutScope.value) return;
     if (error instanceof ApiError && error.status === 409) {
       message.warning("布局刚被其他人修改，已刷新为服务端版本；你的这一笔改动请重新绘制");
       pendingSave = null;
       await loadServerLayout();
     } else {
       message.error(`布局保存失败：${describeError(error)}（改动仍在页面上，下一次绘制会重试）`);
-      pendingSave = next;
+      pendingSave ??= next;
     }
   } finally {
     layoutSaving.value = false;
@@ -265,11 +209,11 @@ function scheduleLayoutSave() {
 }
 
 function commitLayout(next: LabLayout) {
-  layout.value = next;
-  if (layoutBacking.value === "local") {
-    saveLocalLayout(layoutScope.value, next);
+  if (!conn.online || layoutBacking.value !== "server") {
+    message.warning("布局尚未从微后端读取成功，暂不能修改");
     return;
   }
+  layout.value = next;
   pendingSave = next;
   scheduleLayoutSave();
 }
@@ -278,13 +222,17 @@ watch(layoutScope, () => {
   layout.value = emptyLayout();
   layoutRevision.value = 0;
   layoutBacking.value = "loading";
+  layoutError.value = "";
+  editing.value = false;
   pendingSave = null;
   void loadServerLayout();
 });
 watch(
   () => conn.online,
   (online) => {
-    if (online && layoutBacking.value === "loading") void loadServerLayout();
+    if (!online) editing.value = false;
+    else if (layoutBacking.value !== "server") void loadServerLayout();
+    else if (pendingSave) scheduleLayoutSave();
   },
 );
 
@@ -560,14 +508,34 @@ const stats = computed(() => {
 const occupantName = (site: MapSite) =>
   site.occupant ? site.occupant.material.display_name || site.occupant.material.name : site.site.occupied_material_uuid ? "已占用" : "";
 
-async function refresh() {
-  await devices.refresh();
+const refreshMaterials = createRefreshQueue(async () => {
+  if (!conn.online) return;
+  const api = conn.api;
+  materialsLoading.value = true;
   try {
-    allAggregates.value = await conn.api.domains.materialsV1.instances();
-  } catch {
-    /* 树内占用者名称退化为「已占用」 */
+    const snapshot = await api.domains.materialsV1.instances();
+    if (api !== conn.api) return;
+    allAggregates.value = snapshot;
+    materialsError.value = "";
+  } catch (error) {
+    if (api === conn.api) materialsError.value = describeError(error);
+  } finally {
+    materialsLoading.value = false;
   }
+});
+
+async function refresh() {
+  await Promise.all([devices.refresh(), refreshMaterials()]);
 }
+
+watch(() => conn.materialsNoticeRevision, () => void refreshMaterials());
+watch(() => conn.online, (online) => { if (online) void refresh(); });
+watch(() => conn.baseUrl, () => {
+  allAggregates.value = [];
+  materialsError.value = "";
+  selectedUuid.value = "";
+  void refreshMaterials();
+});
 
 let timer: ReturnType<typeof setInterval> | null = null;
 onMounted(() => {
@@ -595,10 +563,10 @@ onUnmounted(() => {
         <span class="switch-label">标签</span>
         <NSwitch v-model:value="showLabels" size="small" />
         <NButton size="small" :disabled="!userBox" @click="resetView">复位视图</NButton>
-        <NButton size="small" :type="editing ? 'primary' : 'default'" :secondary="editing" @click="editing = !editing">
+        <NButton size="small" :disabled="!conn.online || layoutBacking !== 'server'" :type="editing ? 'primary' : 'default'" :secondary="editing" @click="editing = !editing">
           {{ editing ? "完成编辑" : "编辑布局" }}
         </NButton>
-        <NButton size="small" :loading="devices.loading" @click="refresh">
+        <NButton size="small" :loading="devices.loading || materialsLoading" @click="refresh">
           <template #icon><NIcon><RefreshOutline /></NIcon></template>
           刷新
         </NButton>
@@ -609,9 +577,14 @@ onUnmounted(() => {
       <span class="degraded-title">尚未连接微后端</span>
       连接后地图会按设备位置自动绘制。
     </div>
+    <div v-if="conn.online && materialsError" class="degraded">物料快照读取失败：{{ materialsError }}。保留上次成功读取的地图，正在重试。</div>
+    <div v-if="conn.online && layoutError" class="degraded">
+      {{ layoutError }}。布局未保存到浏览器，读取成功后才能编辑。
+      <NButton size="tiny" @click="loadServerLayout">重试读取布局</NButton>
+    </div>
 
     <!-- 已连接就渲染画布；没有设备时也能先划分区域、画围墙 -->
-    <div v-else class="layout" :class="{ editing }">
+    <div v-if="conn.online" class="layout" :class="{ editing }">
       <div class="canvas-card">
         <div v-if="editing" class="edit-bar">
           <span class="edit-hint">
@@ -677,6 +650,7 @@ onUnmounted(() => {
           <g
             v-for="block in blocks"
             :key="block.uuid"
+            :data-material-uuid="block.uuid"
             class="block"
             :class="{ off: !block.online, busy: block.busy, selected: selectedUuid === block.uuid, dim: hoverKey && hoverKey !== block.uuid, ghost: editing }"
             @mouseenter="hoverKey = block.uuid"
@@ -686,12 +660,21 @@ onUnmounted(() => {
           >
             <rect class="block-body" :x="block.x" :y="block.y" :width="block.w" :height="block.h" rx="10" />
             <rect v-if="!block.placed" class="block-unplaced" :x="block.x" :y="block.y" :width="block.w" :height="block.h" rx="10" />
-            <g v-for="site in block.sites" :key="site.key" class="site" :class="{ occupied: !!site.site.occupied_material_uuid }">
-              <rect :x="block.x + site.x" :y="block.y + site.y" :width="site.w" :height="site.h" rx="5" />
-              <text v-if="showLabels" :x="block.x + site.x + site.w / 2" :y="block.y + site.y + 14" class="site-label">{{ site.site.label }}</text>
-              <text v-if="showLabels && site.site.occupied_material_uuid" :x="block.x + site.x + site.w / 2" :y="block.y + site.y + site.h / 2 + 8" class="site-occupant">
-                {{ occupantName(site).slice(0, 14) }}
-              </text>
+            <g :transform="`translate(${block.x} ${block.y})`">
+              <g v-for="surface in block.surfaces" :key="surface.uuid" :transform="surface.transform"
+                :data-surface-uuid="surface.uuid" @dblclick.stop="router.push(`/lab/assembly/${encodeURIComponent(surface.uuid)}`)">
+                <rect v-if="surface.nested" class="surface-body" :width="surface.w" :height="surface.h" rx="6" />
+                <text v-if="surface.nested && showLabels" x="8" :y="surface.h - 8" class="surface-label">{{ surface.name }}</text>
+                <g v-for="site in surface.sites" :key="site.key" class="site" :class="{ occupied: !!site.site.occupied_material_uuid }"
+                  :data-site-uuid="site.site.site_uuid" :data-occupant-uuid="site.site.occupied_material_uuid || ''">
+                  <rect :x="site.x" :y="site.y" :width="site.w" :height="site.h" rx="5" />
+                  <text v-if="showLabels" :x="site.x + site.w / 2" :y="site.y + 14" class="site-label">{{ site.site.label }}</text>
+                  <text v-if="showLabels && site.site.occupied_material_uuid" :x="site.x + site.w / 2" :y="site.y + site.h / 2 + 8" class="site-occupant">
+                    {{ occupantName(site).slice(0, 14) }}
+                  </text>
+                  <title>{{ site.ownerName }} / {{ site.site.label }} · {{ occupantName(site) || "空" }}</title>
+                </g>
+              </g>
             </g>
             <text v-if="showLabels" :x="block.x + 12" :y="block.y - 10" class="block-name">{{ block.name }}</text>
             <text v-if="showLabels" :x="block.x + block.w - 12" :y="block.y - 10" class="block-state" text-anchor="end">
@@ -778,9 +761,6 @@ onUnmounted(() => {
             <template v-else-if="layoutSyncedAt">（revision {{ layoutRevision }}，{{ new Date(layoutSyncedAt).toLocaleTimeString("zh-CN", { hour12: false }) }} 已同步）</template>；
             导出 / 导入用于在不同 Host 之间搬运。
           </p>
-          <p v-else-if="layoutBacking === 'local'" class="dim small edit-note">
-            当前微后端没有布局接口（版本较旧），区域与围墙暂存在本浏览器；升级 Uni-Lab-OS 后打开本页会自动同步上去。
-          </p>
         </div>
 
         <div class="side-card">
@@ -797,9 +777,10 @@ onUnmounted(() => {
               <b v-else class="dim">未划分</b>
             </div>
             <div class="kv"><span>位点</span><b>{{ selected.sites.filter((s) => s.site.occupied_material_uuid).length }}/{{ selected.sites.length }} 已占用</b></div>
+            <div class="kv"><span>直接子物料</span><b>{{ selected.childCount }}</b></div>
             <ul v-if="selected.sites.length" class="site-list">
               <li v-for="site in selected.sites" :key="site.key">
-                <span class="site-chip" :class="{ occupied: !!site.site.occupied_material_uuid }">{{ site.site.label }}</span>
+                <span class="site-chip" :title="site.ownerName" :class="{ occupied: !!site.site.occupied_material_uuid }">{{ site.site.label }}</span>
                 <span class="site-text">{{ occupantName(site) || "空" }}</span>
               </li>
             </ul>
@@ -938,6 +919,9 @@ onUnmounted(() => {
   stroke: #9aa8bd;
   stroke-width: 1.2;
 }
+
+.surface-body { fill: #f8fafc; stroke: #9aa8bd; stroke-width: 1; stroke-dasharray: 4 3; }
+.surface-label { font-size: 11px; fill: #6e7580; }
 
 .site.occupied rect {
   fill: #0e9f6e;

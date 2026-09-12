@@ -62,8 +62,21 @@ const {
   visibleParamFields,
   collapsedParamCount,
   isFieldFocused,
+  fieldMeta,
   updateField,
 } = props.form;
+
+/** 字段主标签：驱动 docstring 给的中文名优先，没有就是参数名（路径末段）。 */
+function fieldTitle(path: string): string {
+  return fieldMeta(path).title || path;
+}
+
+/** hover 提示：说明 + 参数路径 · 类型，说明缺失时只剩后者。 */
+function fieldTooltip(field: ParameterField): string {
+  const description = fieldMeta(field.path).description;
+  const identity = `${field.path} · ${field.type}`;
+  return description ? `${description}\n${identity}` : identity;
+}
 
 function isMultiSelect(field: PlaceholderField): boolean {
   return (
@@ -111,13 +124,23 @@ function renderDeductOption(option: SelectOption): VNodeChild {
         :key="`ph-${field.param}`"
         class="parameter-field placeholder-field"
       >
-        <!-- 中文语义为主、参数名为次，单行排布不换行 -->
+        <!-- 中文语义为主（驱动 docstring 的显示名优先，否则选择器类别），参数名为次 -->
         <div class="parameter-field-head">
-          <div class="field-id">
-            <strong>{{ placeholderLabel(field) }}</strong>
-            <span>{{ field.param }}</span>
+          <div class="field-id" :title="fieldMeta(field.param).description || undefined">
+            <strong>{{ fieldMeta(field.param).title || placeholderLabel(field) }}</strong>
+            <span>
+              {{ field.param }}
+              <template v-if="fieldMeta(field.param).title"> · {{ placeholderLabel(field) }}</template>
+            </span>
           </div>
           <slot name="placeholder-actions" :field="field" />
+        </div>
+        <div
+          v-if="fieldMeta(field.param).description"
+          class="field-help"
+          :title="fieldMeta(field.param).description"
+        >
+          {{ fieldMeta(field.param).description }}
         </div>
         <!-- 物料出库：资源类 + 实例名 + 数量 + 可选条码 → 微后端实例化并
              权威登记，产物写回参数；数量 >1 时循环出库并自动加序号后缀 -->
@@ -237,40 +260,66 @@ function renderDeductOption(option: SelectOption): VNodeChild {
         class="parameter-field"
         :class="[fieldLayout(field), { focused: isFieldFocused(field.path) }]"
       >
-        <!-- compact：label 左 + 控件右同行，降低心智负担 / 提高信息密度 -->
-        <div v-if="fieldLayout(field) === 'compact'" class="compact-row">
-          <span class="compact-label" :title="`${field.path} · ${field.type}`">
-            {{ field.path }}
-          </span>
-          <slot name="field-actions" :field="field" />
-          <NInputNumber
-            v-if="field.type === 'number'"
-            :value="Number(field.value)"
-            size="small"
-            class="compact-number"
-            @update:value="updateField(field, $event)"
-          />
-          <NSwitch
-            v-else-if="field.type === 'boolean'"
-            :value="Boolean(field.value)"
-            size="small"
-            @update:value="updateField(field, $event)"
-          />
-          <NInput
-            v-else
-            :value="String(field.value ?? '')"
-            size="small"
-            class="compact-input"
-            @update:value="updateField(field, $event)"
-          />
-        </div>
+        <!-- compact：label 左 + 控件右同行，降低心智负担 / 提高信息密度；
+             有中文名时中文为主、参数名小字为次，说明另起一行 -->
+        <template v-if="fieldLayout(field) === 'compact'">
+          <div class="compact-row">
+            <span
+              class="compact-label"
+              :class="{ named: fieldMeta(field.path).title }"
+              :title="fieldTooltip(field)"
+            >
+              {{ fieldTitle(field.path) }}
+              <small v-if="fieldMeta(field.path).title">{{ field.path }}</small>
+            </span>
+            <slot name="field-actions" :field="field" />
+            <NInputNumber
+              v-if="field.type === 'number'"
+              :value="Number(field.value)"
+              size="small"
+              class="compact-number"
+              @update:value="updateField(field, $event)"
+            />
+            <NSwitch
+              v-else-if="field.type === 'boolean'"
+              :value="Boolean(field.value)"
+              size="small"
+              @update:value="updateField(field, $event)"
+            />
+            <NInput
+              v-else
+              :value="String(field.value ?? '')"
+              size="small"
+              class="compact-input"
+              @update:value="updateField(field, $event)"
+            />
+          </div>
+          <div
+            v-if="fieldMeta(field.path).description"
+            class="field-help compact-help"
+            :title="fieldMeta(field.path).description"
+          >
+            {{ fieldMeta(field.path).description }}
+          </div>
+        </template>
         <template v-else>
           <div class="parameter-field-head">
-            <div class="field-id">
-              <strong class="mono">{{ field.path }}</strong>
-              <span>{{ field.type }}</span>
+            <div class="field-id" :title="fieldTooltip(field)">
+              <strong :class="{ mono: !fieldMeta(field.path).title }">
+                {{ fieldTitle(field.path) }}
+              </strong>
+              <span>
+                <template v-if="fieldMeta(field.path).title">{{ field.path }} · </template>{{ field.type }}
+              </span>
             </div>
             <slot name="field-actions" :field="field" />
+          </div>
+          <div
+            v-if="fieldMeta(field.path).description"
+            class="field-help"
+            :title="fieldMeta(field.path).description"
+          >
+            {{ fieldMeta(field.path).description }}
           </div>
           <div v-if="field.type.startsWith('list:')" class="list-param">
             <span>{{ Array.isArray(field.value) ? field.value.length : 0 }} 行等长数据</span>
@@ -325,9 +374,11 @@ function renderDeductOption(option: SelectOption): VNodeChild {
   gap: 6px;
 }
 
+/* 一张 compact 卡至少要装下：参数名（≥ 9 个等宽字符）+ 置顶按钮 + 控件，
+   否则退成单列——否则参数名会被挤成 "p..." 只剩一个字 */
 .flow-fields .parameter-field.compact {
   flex: 1 1 calc(50% - 3px);
-  min-width: 150px;
+  min-width: 260px;
   padding: 4px 8px;
 }
 
@@ -349,14 +400,44 @@ function renderDeductOption(option: SelectOption): VNodeChild {
   min-height: 26px;
 }
 
+/* 参数名按自身宽度占位、有可读下限，只在确实放不下时才省略（hover 看全名）；
+   多余空间与控件均分，数字 / 开关行仍靠右对齐 */
 .compact-label {
-  flex: 1;
-  min-width: 0;
+  flex: 1 1 auto;
+  min-width: 9ch;
   overflow: hidden;
   color: #3d434c;
   font: 11px var(--font-mono);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 有中文名：中文为主（正文字体），参数名小字等宽跟在后面 */
+.compact-label.named {
+  font: 600 12px/1.4 var(--font-sans);
+  color: #23272e;
+}
+
+.compact-label small {
+  margin-left: 4px;
+  color: #9aa1aa;
+  font: 9.5px var(--font-mono);
+}
+
+/* 参数说明：驱动 docstring 的 Args 注解，单行省略、hover 看全文 */
+.field-help {
+  margin-top: 4px;
+  color: #6e7580;
+  font-size: 10.5px;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.field-help.compact-help {
+  margin-top: 1px;
+  padding-bottom: 2px;
 }
 
 .compact-number {
@@ -365,8 +446,8 @@ function renderDeductOption(option: SelectOption): VNodeChild {
 }
 
 .compact-input {
-  flex: 1.4;
-  min-width: 88px;
+  flex: 1 1 96px;
+  min-width: 96px;
 }
 
 .parameter-field.focused {

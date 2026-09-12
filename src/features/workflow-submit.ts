@@ -21,12 +21,18 @@ import type {
   JsonObject,
 } from "@openlab/protocol";
 import { ApiError, BackendBusinessError } from "@openlab/protocol";
+import { LOOP_NODE_TYPE, loopSpecFromNodeData, type LoopNodeData } from "./workflow-loops";
 
 export interface SubmitNodeInput {
   id: string;
   type: string;
+  /** 绝对坐标（组内成员由调用方换算好） */
   position: { x: number; y: number };
   data: Record<string, unknown>;
+  /** 画布分组（模板插入成组）：记到 meta_data.editor_group，任务视图按组归拢 */
+  group?: { id: string; name: string; description: string; template_id?: string };
+  /** 所在循环容器的节点 id（循环体成员）→ 提交为 parent_uuid */
+  loopId?: string;
 }
 
 export interface SubmitEdgeInput {
@@ -67,8 +73,8 @@ export interface AuthorityGraphBuild {
   notLocallyExecutable: { id: string; name: string; type: string }[];
 }
 
-/** 本机调度器已接线的执行器种类（unilabos scheduler `_build_dag`）。 */
-export const LOCALLY_EXECUTABLE_KINDS: ReadonlySet<string> = new Set(["device_action"]);
+/** 本机调度器已接线的执行器种类（unilabos scheduler `_build_dag`）：设备动作与循环容器。 */
+export const LOCALLY_EXECUTABLE_KINDS: ReadonlySet<string> = new Set(["device_action", LOOP_NODE_TYPE]);
 
 /** Host 自己的执行节点；人工确认等"无设备"动作挂在它上面。 */
 export const HOST_NODE_ID = "host_node";
@@ -184,7 +190,13 @@ function parseJsonObject(text: unknown, what: string): JsonObject {
   return value as JsonObject;
 }
 
-/** 画布的库存需求（{template_id, quantity, unit[, key]}）→ 权威 InventoryRequirement（reagent）。 */
+/**
+ * 画布的库存需求 → 权威 InventoryRequirement。
+ *
+ * 两种账目形态：`{template_id, quantity, unit[, key]}` 是 `lot`（按量，从 inventory_lot 预留扣减）；
+ * 不带数量、或显式 `kind: "material"` 的是 `material`（按件，调度器从该模板的 active 实例里选一件，
+ * 以 `{"uuid": ...}` 引用注入 key 同名参数——host_node/apply_deduct_resource 的 `resource` 即此用法）。
+ */
 function inventoryRequirements(text: unknown, nodeLabel: string, warnings: string[]): JsonObject[] {
   const raw = typeof text === "string" && text.trim() ? text : "[]";
   let list: unknown;
@@ -198,21 +210,25 @@ function inventoryRequirements(text: unknown, nodeLabel: string, warnings: strin
     if (item === null || typeof item !== "object") return [];
     const record = item as Record<string, unknown>;
     const templateUuid = String(record.template_uuid ?? record.template_id ?? "").trim();
+    if (!templateUuid) return [];
     const quantity = Number(record.quantity);
-    if (!templateUuid || !Number.isFinite(quantity) || quantity <= 0) return [];
+    const hasQuantity = Number.isFinite(quantity) && quantity > 0;
+    const kind = record.kind === "material" || record.kind === "lot" ? record.kind : hasQuantity ? "lot" : "material";
+    if (kind === "lot" && !hasQuantity) return [];
     const key = String(record.key ?? "").trim();
     if (!key) {
       warnings.push(`${nodeLabel} 的库存需求未指定注入参数名（key），按 "inventory" 注入；请确认动作有同名参数`);
     }
-    return [
-      {
-        key: key || (index === 0 ? "inventory" : `inventory_${index + 1}`),
-        kind: "reagent",
-        template_uuid: templateUuid,
-        quantity,
-        unit: String(record.unit ?? "").trim() || null,
-      },
-    ];
+    const requirement: JsonObject = {
+      key: key || (index === 0 ? "inventory" : `inventory_${index + 1}`),
+      kind,
+      template_uuid: templateUuid,
+    };
+    if (kind === "lot") {
+      requirement.quantity = quantity;
+      requirement.unit = String(record.unit ?? "").trim() || null;
+    }
+    return [requirement];
   });
 }
 
@@ -265,11 +281,52 @@ export async function buildAuthorityGraph(input: BuildAuthorityGraphInput): Prom
 
   const unknownDevices = new Set<string>();
   const nodes: BackendWorkflowNodeWrite[] = [];
+  const loopMemberCount = new Map<string, number>();
   for (const node of input.nodes) {
+    if (node.loopId) loopMemberCount.set(node.loopId, (loopMemberCount.get(node.loopId) ?? 0) + 1);
+  }
+  for (const node of input.nodes) {
+    // 组框只是画布上的可见边界，调用方通常已过滤；这里再兜一道
+    if (node.type === "group") continue;
     const uuid = uuidByNodeId.get(node.id)!;
     const dependsOn = upstream.get(node.id) ?? [];
     const pose: JsonObject = { x: Math.round(node.position.x), y: Math.round(node.position.y) };
     const disabled = input.disabled.has(node.id);
+    const groupMeta: JsonObject | undefined = node.group
+      ? {
+          id: node.group.id,
+          name: node.group.name,
+          description: node.group.description,
+          ...(node.group.template_id ? { template_id: node.group.template_id } : {}),
+        }
+      : undefined;
+    const parentUuid = node.loopId ? uuidByNodeId.get(node.loopId) : undefined;
+    if (node.loopId && !parentUuid) {
+      throw new SubmitGraphError(`节点 ${node.id} 所在的循环 ${node.loopId} 不在提交图里`);
+    }
+
+    if (node.type === LOOP_NODE_TYPE) {
+      const data = node.data as Partial<LoopNodeData>;
+      const label = String(data.label ?? "").trim() || "循环";
+      const built = loopSpecFromNodeData(data, (editorNodeId) => uuidByNodeId.get(editorNodeId), {
+        hasBody: (loopMemberCount.get(node.id) ?? 0) > 0,
+      });
+      if (built.error) throw new SubmitGraphError(`循环「${label}」：${built.error}`);
+      const policy: JsonObject = {};
+      if (dependsOn.length) policy.depends_on = dependsOn;
+      nodes.push({
+        uuid,
+        name: label,
+        type: LOOP_NODE_TYPE,
+        pose,
+        param: built.spec as unknown as JsonObject,
+        execution_policy: policy,
+        disabled,
+        ...(parentUuid ? { parent_uuid: parentUuid } : {}),
+        meta_data: { editor_node_id: node.id, ...(groupMeta ? { editor_group: groupMeta } : {}) },
+      });
+      continue;
+    }
 
     if (node.type === "manual") {
       const label = String(node.data.label ?? "").trim() || "人工确认";
@@ -309,7 +366,13 @@ export async function buildAuthorityGraph(input: BuildAuthorityGraphInput): Prom
           param,
           execution_policy: { ...policy, always_free: true },
           disabled,
-          meta_data: { target_device_id: hostId, editor_node_id: node.id, manual_confirm: { label, prompt } },
+          ...(parentUuid ? { parent_uuid: parentUuid } : {}),
+          meta_data: {
+            target_device_id: hostId,
+            editor_node_id: node.id,
+            manual_confirm: { label, prompt },
+            ...(groupMeta ? { editor_group: groupMeta } : {}),
+          },
         });
         continue;
       }
@@ -324,7 +387,8 @@ export async function buildAuthorityGraph(input: BuildAuthorityGraphInput): Prom
         param: { label, prompt },
         execution_policy: policy,
         disabled,
-        meta_data: { editor_node_id: node.id },
+        ...(parentUuid ? { parent_uuid: parentUuid } : {}),
+        meta_data: { editor_node_id: node.id, ...(groupMeta ? { editor_group: groupMeta } : {}) },
       });
       continue;
     }
@@ -355,6 +419,7 @@ export async function buildAuthorityGraph(input: BuildAuthorityGraphInput): Prom
     if (action?.alwaysFree) policy.always_free = true;
     const metaData: JsonObject = { target_device_id: deviceId, editor_node_id: node.id };
     if (requirements.length) metaData.inventory_requirements = requirements;
+    if (groupMeta) metaData.editor_group = groupMeta;
     nodes.push({
       uuid,
       name: label,
@@ -366,6 +431,7 @@ export async function buildAuthorityGraph(input: BuildAuthorityGraphInput): Prom
       param,
       execution_policy: policy,
       disabled,
+      ...(parentUuid ? { parent_uuid: parentUuid } : {}),
       meta_data: metaData,
     });
   }
@@ -400,6 +466,7 @@ export interface SubmitWorkflowInput {
   nodes: BackendWorkflowNodeWrite[];
   /** 只保存定义与图，不创建运行。 */
   saveOnly?: boolean;
+  runMode?: "normal" | "step";
 }
 
 export interface SubmitWorkflowResult {
@@ -460,7 +527,7 @@ export async function submitWorkflow(api: SubmitWorkflowApi, input: SubmitWorkfl
     : await api.createTask({
         execution_kind: "workflow",
         workflow_uuid: workflow.uuid,
-        run_mode: "normal",
+        run_mode: input.runMode ?? "normal",
         description: `编排画布提交 · ${input.name}`,
       });
   return { workflow, task, created };

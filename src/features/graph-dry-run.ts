@@ -226,8 +226,8 @@ interface RequirementShape {
   template_id: string;
   quantity: number;
   unit: string;
-  /** reagent = 可计量扣减；material = 独立实例（只改生命周期，不扣数量）。 */
-  kind: "reagent" | "material";
+  /** lot = 按量计量扣减（inventory_lot）；material = 独立实例（只改生命周期，不扣数量）。 */
+  kind: "lot" | "material";
 }
 
 /** 兼容画布 `{template_id, quantity, unit}` 与后端 InventoryRequirement `{template_uuid, kind, ...}` 两种写法。 */
@@ -238,12 +238,12 @@ function parseRequirements(raw: string): RequirementShape[] | null {
     return parsed.map((item) => {
       const record = asRecord(item);
       const quantity = Number(record?.quantity ?? 0);
-      const explicitKind = record?.kind === "material" || record?.kind === "reagent" ? record.kind : null;
+      const explicitKind = record?.kind === "material" || record?.kind === "lot" ? record.kind : null;
       return {
         template_id: String(record?.template_id ?? record?.template_uuid ?? ""),
         quantity: Number.isFinite(quantity) ? quantity : 0,
         unit: String(record?.unit ?? ""),
-        kind: explicitKind ?? (quantity > 0 ? "reagent" : "material"),
+        kind: explicitKind ?? (quantity > 0 ? "lot" : "material"),
       };
     });
   } catch {
@@ -273,7 +273,7 @@ export function simulateDeductions(
     const requirements = parseRequirements(node.requirementsJson);
     if (!requirements) continue;
     for (const requirement of requirements) {
-      if (!requirement.template_id || requirement.kind !== "reagent" || requirement.quantity <= 0) continue;
+      if (!requirement.template_id || requirement.kind !== "lot" || requirement.quantity <= 0) continue;
       const key = requirement.template_id;
       const row =
         rows.get(key) ??

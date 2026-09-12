@@ -27,6 +27,8 @@ import EntityRef from "../components/EntityRef.vue";
 import StatusPill from "../components/StatusPill.vue";
 import { describeError } from "../features/errors";
 import { beginWorkflowPrint } from "../features/workflow-print";
+import WorkflowRunButton from "../components/WorkflowRunButton.vue";
+import type { WorkflowExecutionMode } from "../features/workflow-execution";
 import { useConnectionStore } from "../stores/connection";
 import { useDomainThemeStore } from "../stores/domain-theme";
 
@@ -183,7 +185,10 @@ function printDefinition() {
   });
 }
 
+const runMode = ref<WorkflowExecutionMode>("normal");
+
 async function createTask(printAfterCreate = false) {
+  if (running.value || !conn.schedulerLocal || !graph.value) return;
   const printSession = printAfterCreate ? beginWorkflowPrint() : null;
   if (printAfterCreate && !printSession) {
     message.warning("浏览器拦截了打印窗口；任务仍会正常创建，可在任务详情中补打");
@@ -192,7 +197,7 @@ async function createTask(printAfterCreate = false) {
   try {
     const task = await conn.api.domains.workflowBackend.createTask({
       workflow_uuid: workflowUuid,
-      run_mode: "normal",
+      run_mode: runMode.value,
     });
     printSession?.complete({
       domainName: domain.config.name,
@@ -244,10 +249,9 @@ watch(
           <NButton size="small" secondary :disabled="!graph" @click="printDefinition">
             打印定义
           </NButton>
-          <NButton size="small" secondary :loading="running" @click="createTask(false)">
-            创建 Task
-          </NButton>
-          <NButton size="small" type="primary" :loading="running" @click="createTask(true)">
+          <WorkflowRunButton v-model="runMode" :loading="running"
+            :disabled="!conn.schedulerLocal || !graph || !conn.online" @submit="createTask(false)" />
+          <NButton size="small" type="primary" :loading="running" :disabled="!conn.schedulerLocal || !graph || !conn.online" @click="createTask(true)">
             创建并打印
           </NButton>
         </NSpace>

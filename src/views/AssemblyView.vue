@@ -7,7 +7,7 @@
  *   sx = (rx - ry) * ISO_X, sy = (rx + ry) * ISO_Y - z，(rx,ry) = yaw 旋转后的世界坐标
  * 盒体 = 顶面 + 按法线剔除的可见侧面；画家算法先按场景层级、同层按深度排序。
  */
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   NButton,
@@ -21,30 +21,12 @@ import {
   NTag,
 } from "naive-ui";
 import { ArrowBackOutline } from "@vicons/ionicons5";
-import type { MaterialsV1Aggregate, MaterialsV1Site, MaterialsV1Tree } from "@openlab/protocol";
+import { ApiError, type EdgeApi, type MaterialsV1Tree } from "@openlab/protocol";
+import { assemblyFromMaterials, findAssemblyNode, type AssemblyNode, type LabAssembly } from "../features/material-assembly";
+import { createRefreshQueue } from "../features/refresh-queue";
 import { TERMS } from "../features/terminology";
 import { useConnectionStore } from "../stores/connection";
 import { describeError } from "../features/errors";
-
-/** 装配树节点：由 materials.v1 tree 投影而来的可视化模型。 */
-interface AssemblyNode {
-  edge_uuid: string;
-  template_id: string;
-  template_name: string;
-  category: string;
-  spec?: { grid?: { rows: number; cols: number }; height?: number; volume_ml?: number };
-  barcode?: string;
-  status: string;
-  slot_id: string;
-  content?: { substance?: string; volume_ml?: number };
-  /** 空位点标签（已被子件占用的不在此列），用于在台面上画出槽位轮廓。 */
-  emptySites: string[];
-  children: AssemblyNode[];
-}
-
-interface LabAssembly {
-  root: AssemblyNode;
-}
 
 const route = useRoute();
 const router = useRouter();
@@ -52,8 +34,8 @@ const conn = useConnectionStore();
 
 const loading = ref(true);
 const error = ref("");
-const assembly = ref<LabAssembly | null>(null);
-const selected = ref<AssemblyNode | null>(null);
+const assembly = shallowRef<LabAssembly | null>(null);
+const selected = shallowRef<AssemblyNode | null>(null);
 const hoverUuid = ref("");
 
 const subjectId = computed(() => String(route.params.id ?? ""));
@@ -229,81 +211,27 @@ const CATEGORY_COLORS: Record<string, string> = {
   bottle: "#fbbf24",
 };
 
-const CATEGORY_HEIGHTS: Record<string, number> = {
-  deck: 10,
-  rack: 30,
-  plate: 10,
-  tube: 26,
-  bottle: 44,
-};
-
-function parseSlot(slot: string, index: number, cols: number): { row: number; col: number } {
-  const m = /^([A-Za-z])(\d+)$/.exec(slot.trim());
-  if (m) return { row: m[1].toUpperCase().charCodeAt(0) - 65, col: parseInt(m[2], 10) - 1 };
-  return { row: Math.floor(index / Math.max(cols, 1)), col: index % Math.max(cols, 1) };
-}
-
-/** 递归生成盒体（root 平台 → 子件 → 孙件，最多三层可视化） */
+/** 每层都绘制空位点与子件；设备 → 台面 → 板 → 孔不再被三层上限截断。 */
 const boxes = computed<IsoBox[]>(() => {
   const root = assembly.value?.root;
   if (!root) return [];
   const out: IsoBox[] = [];
 
-  const grid = root.spec?.grid ?? { rows: 1, cols: Math.max(root.children.length, 1) };
-  const cellW = 64;
-  const cellD = 52;
-  const platW = grid.cols * cellW + 24;
-  const platD = grid.rows * cellD + 24;
-
-  // 台面有槽位或子件时不再在中央写名字（标题栏已有），避免与槽位标签重叠
-  const rootLabel = root.children.length || root.emptySites.length ? undefined : root.template_name;
-  out.push(boxFaces(0, 0, 0, platW, platD, CATEGORY_HEIGHTS[root.category] ?? 10,
-    CATEGORY_COLORS[root.category] ?? "#94a3b8", root.edge_uuid, root, 0, rootLabel));
-
-  // 空位点：在台面上画一层极薄的槽位轮廓，让位点布局与二维地图一致
-  root.emptySites.forEach((slot, i) => {
-    const { row, col } = parseSlot(slot, i, grid.cols);
-    const platformZ = CATEGORY_HEIGHTS[root.category] ?? 10;
-    out.push({
-      ...boxFaces(12 + col * cellW + 6, 12 + row * cellD + 6, platformZ, cellW - 12, cellD - 12, 1.2,
-        "#e5e9f0", `${root.edge_uuid}:site:${slot}`, null, 1, slot),
-      slot: true,
-    });
-  });
-
-  root.children.forEach((child, i) => {
-    const { row, col } = parseSlot(child.slot_id, i, grid.cols);
-    const cx = 12 + col * cellW + 4;
-    const cy = 12 + row * cellD + 4;
-    const cw = cellW - 8;
-    const cd = cellD - 8;
-    const ch = CATEGORY_HEIGHTS[child.category] ?? 20;
-    const color = CATEGORY_COLORS[child.category] ?? "#a1a1aa";
-    const baseZ = CATEGORY_HEIGHTS[root.category] ?? 10;
-
-    out.push(boxFaces(cx, cy, baseZ, cw, cd, ch, color, child.edge_uuid, child, 1,
-      child.slot_id || child.template_name));
-
-    // 孙件（rack 里的 tube 等）
-    const cGrid = child.spec?.grid ?? { rows: 1, cols: Math.max(child.children.length, 1) };
-    const gw = cw / Math.max(cGrid.cols, 1);
-    const gd = cd / Math.max(cGrid.rows, 1);
-    child.children.forEach((g, j) => {
-      const pos = parseSlot(g.slot_id, j, cGrid.cols);
-      const fill = fillRatio(g);
-      const gColor = fill !== null && fill < 0.34 ? "#f87171"
-        : CATEGORY_COLORS[g.category] ?? "#34d399";
-      out.push(boxFaces(
-        cx + pos.col * gw + gw * 0.22,
-        cy + pos.row * gd + gd * 0.22,
-        baseZ + ch,
-        gw * 0.56,
-        gd * 0.56,
-        CATEGORY_HEIGHTS[g.category] ?? 18,
-        gColor, g.edge_uuid, g, 2,
-      ));
-    });
-  });
+  const visit = (node: AssemblyNode, x: number, y: number, z: number, level: number) => {
+    const { w, d, h } = node.geometry;
+    const fill = fillRatio(node);
+    const color = fill !== null && fill < 0.34 ? "#f87171" : CATEGORY_COLORS[node.category] ?? "#94a3b8";
+    const label = node.children.length || node.emptySites.length ? undefined : node.slot_id || node.template_name;
+    out.push(boxFaces(x, y, z, w, d, h, color, node.edge_uuid, node, level, label));
+    for (const site of node.emptySites) {
+      out.push({ ...boxFaces(x + site.x, y + site.y, z + h, site.w, site.h, 1.2,
+        "#e5e9f0", site.key, null, level + 1, site.site.label), slot: true });
+    }
+    for (const child of node.children) {
+      visit(child, x + child.geometry.x, y + child.geometry.y, z + h + child.geometry.z, level + 1);
+    }
+  };
+  visit(root, 0, 0, 0, 0);
 
   return out.sort((a, b) => a.level - b.level || a.order - b.order);
 });
@@ -354,108 +282,63 @@ const STATUS_LABEL: Record<string, string> = {
   retired: "已退役",
 };
 
-function numericValue(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function gridFromSites(sites: MaterialsV1Site[]): { rows: number; cols: number } | undefined {
-  let rows = 0;
-  let cols = 0;
-  for (const site of sites) {
-    const match = /^([A-Za-z])(\d+)$/.exec(site.label.trim());
-    if (!match) continue;
-    rows = Math.max(rows, match[1].toUpperCase().charCodeAt(0) - 64);
-    cols = Math.max(cols, Number(match[2]));
-  }
-  if (rows && cols) return { rows, cols };
-  if (sites.length) return { rows: 1, cols: sites.length };
-  return undefined;
-}
-
-function assemblyFromMaterials(tree: MaterialsV1Tree): LabAssembly {
-  const aggregateByUuid = new Map(
-    tree.nodes.map((aggregate) => [aggregate.material.material_uuid, aggregate]),
-  );
-  const childrenByParent = new Map<string, MaterialsV1Aggregate[]>();
-  for (const aggregate of tree.nodes) {
-    const parentUuid = aggregate.material.parent_material_uuid;
-    if (!parentUuid) continue;
-    const siblings = childrenByParent.get(parentUuid) ?? [];
-    siblings.push(aggregate);
-    childrenByParent.set(parentUuid, siblings);
-  }
-
-  const toNode = (aggregate: MaterialsV1Aggregate): AssemblyNode => {
-    const identity = aggregate.material;
-    const parent = identity.parent_material_uuid
-      ? aggregateByUuid.get(identity.parent_material_uuid)
-      : undefined;
-    const parentSite = parent?.sites.find(
-      (site) => site.occupied_material_uuid === identity.material_uuid,
-    );
-    const substance = aggregate.data.substances[0];
-    const explicitVolume = numericValue(aggregate.data.data.volume_ml);
-    const substanceVolume =
-      substance && substance.quantity_unit.toLowerCase() === "ml"
-        ? substance.quantity
-        : undefined;
-    return {
-      edge_uuid: identity.material_uuid,
-      template_id: identity.template_uuid,
-      template_name: identity.display_name || identity.template_name || identity.name,
-      category: identity.resource_type || "material",
-      spec: {
-        grid: gridFromSites(aggregate.sites),
-        height: aggregate.position.size_height || undefined,
-        volume_ml: explicitVolume,
-      },
-      barcode: identity.barcode,
-      status: identity.lifecycle_status,
-      slot_id: parentSite?.label || String(parentSite?.site_index ?? ""),
-      content: {
-        substance: substance?.name,
-        volume_ml: explicitVolume ?? substanceVolume,
-      },
-      emptySites: aggregate.sites
-        .filter((site) => !site.occupied_material_uuid)
-        .map((site) => site.label || String(site.site_index)),
-      children: (childrenByParent.get(identity.material_uuid) ?? []).map(toNode),
-    };
-  };
-
-  const root = aggregateByUuid.get(tree.root_material_uuid);
-  if (!root) throw new Error(`materials.v1 tree 缺少根物料 ${tree.root_material_uuid}`);
-  return { root: toNode(root) };
-}
-
-async function loadMaterialTree(subject: string): Promise<MaterialsV1Tree> {
+async function loadMaterialTree(subject: string, api: EdgeApi): Promise<MaterialsV1Tree> {
   try {
-    return await conn.api.domains.materialsV1.tree(subject);
+    return await api.domains.materialsV1.tree(subject);
   } catch (treeError) {
+    if (!(treeError instanceof ApiError) || treeError.status !== 404) throw treeError;
     try {
-      const aggregate = await conn.api.domains.materialsV1.byResourceId(subject);
-      return await conn.api.domains.materialsV1.tree(aggregate.material.material_uuid);
+      const aggregate = await api.domains.materialsV1.byResourceId(subject);
+      return await api.domains.materialsV1.tree(aggregate.material.material_uuid);
     } catch {
       throw treeError;
     }
   }
 }
 
-async function load() {
-  loading.value = true;
-  error.value = "";
+let disposed = false;
+const load = createRefreshQueue(async () => {
+  if (!conn.online || disposed) return;
+  const api = conn.api;
+  const subject = subjectId.value;
+  loading.value = assembly.value === null;
   try {
-    const tree = await loadMaterialTree(subjectId.value);
+    const tree = await loadMaterialTree(subject, api);
+    if (disposed || api !== conn.api || subject !== subjectId.value) return;
+    const selection = selected.value?.edge_uuid ?? "";
     assembly.value = assemblyFromMaterials(tree);
-    selected.value = assembly.value.root;
+    selected.value = findAssemblyNode(assembly.value.root, selection) ?? assembly.value.root;
+    error.value = "";
   } catch (err) {
-    error.value = describeError(err);
+    if (!disposed && api === conn.api && subject === subjectId.value) {
+      error.value = describeError(err);
+      if (err instanceof ApiError && err.status === 404) {
+        assembly.value = null;
+        selected.value = null;
+      }
+    }
   } finally {
     loading.value = false;
   }
-}
+});
 
-onMounted(() => void load());
+let timer: ReturnType<typeof setInterval> | null = null;
+onMounted(() => {
+  void load();
+  timer = setInterval(() => void load(), 8000);
+});
+onUnmounted(() => {
+  disposed = true;
+  if (timer !== null) clearInterval(timer);
+});
+watch(() => conn.materialsNoticeRevision, () => void load());
+watch(() => conn.online, (online) => { if (online) void load(); });
+watch([() => conn.baseUrl, subjectId], () => {
+  assembly.value = null;
+  selected.value = null;
+  error.value = "";
+  void load();
+});
 </script>
 
 <template>
@@ -492,7 +375,8 @@ onMounted(() => void load());
       </NSpace>
     </NCard>
 
-    <NSpin v-if="loading" style="margin: 64px auto; display: block" />
+    <div v-if="!conn.online" class="degraded">尚未连接微后端，装配状态将在连接恢复后重新校准。</div>
+    <NSpin v-else-if="loading" style="margin: 64px auto; display: block" />
     <NEmpty v-else-if="error" :description="error" style="margin: 64px 0" />
 
     <div v-else class="asm-layout">
@@ -510,6 +394,7 @@ onMounted(() => void load());
           <g
             v-for="b in boxes"
             :key="b.uuid"
+            :data-material-uuid="b.node?.edge_uuid"
             class="iso-box"
             :class="{ dim: hoverUuid && hoverUuid !== b.uuid && !b.slot, slot: b.slot }"
             @click="b.slot || Date.now() < suppressClickUntil || selectNode(b.node)"

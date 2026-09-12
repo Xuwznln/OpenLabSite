@@ -83,9 +83,57 @@ export interface DeductDraftState {
   busy: boolean;
 }
 
+/** 字段的人读元数据：来自 goal schema 的 `title`（docstring `param[中文名]`）与 `description`。 */
+export interface ParameterFieldMeta {
+  /** 中文名等显示名；registry 没有 docstring 时回退为参数名本身，此处置空以免重复显示 */
+  title: string;
+  description: string;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+/**
+ * 沿点路径在 goal schema 里找到叶子属性：对象走 `properties`，数组走 `items`。
+ * 找不到（schema 不可用 / 高级 JSON 里手加的键）返回 null。
+ */
+export function goalPropertySchema(
+  detail: DeviceActionSchemaDetail | null,
+  path: string,
+): Record<string, unknown> | null {
+  let node = asRecord(asRecord(asRecord(detail?.schema)?.properties)?.goal);
+  for (const segment of path.split(".").filter(Boolean)) {
+    if (!node) return null;
+    const properties = asRecord(node.properties);
+    let next = asRecord(properties?.[segment]);
+    if (!next && /^\d+$/.test(segment)) next = asRecord(node.items);
+    node = next;
+  }
+  return node;
+}
+
+export function parameterFieldMeta(
+  detail: DeviceActionSchemaDetail | null,
+  path: string,
+): ParameterFieldMeta {
+  const prop = goalPropertySchema(detail, path);
+  const leaf = path.split(".").filter(Boolean).at(-1) ?? path;
+  const rawTitle = typeof prop?.title === "string" ? prop.title.trim() : "";
+  const description = typeof prop?.description === "string" ? prop.description.trim() : "";
+  return {
+    title: rawTitle && rawTitle !== leaf && rawTitle !== path ? rawTitle : "",
+    description,
+  };
+}
+
 export function useActionParamForm(options: ActionParamFormOptions) {
   const placeholderFields = ref<PlaceholderField[]>([]);
   const actionSchemaHint = ref("");
+  /** 最近一次识别到的动作 schema（字段中文名 / 说明的数据源）。 */
+  const schemaDetail = ref<DeviceActionSchemaDetail | null>(null);
   const materialOptionState = ref<PlaceholderOptionState>(emptyOptionState());
   const deviceOptionState = ref<PlaceholderOptionState>(emptyOptionState());
   const siteOptionState = ref<PlaceholderOptionState>(emptyOptionState());
@@ -314,6 +362,7 @@ export function useActionParamForm(options: ActionParamFormOptions) {
         actionSchemaHint.value = "runtime.v1 动作定义不可用，已按原始字段展示。";
       }
     }
+    schemaDetail.value = detail;
     if (options.prefillFromGoalDefault && detail) {
       prefillGoalDefault(detail.goal_default);
     }
@@ -610,9 +659,16 @@ export function useActionParamForm(options: ActionParamFormOptions) {
     }
   }
 
+  /** 平铺字段 / placeholder 参数的中文名与说明（docstring `param[中文名]: 说明`）。 */
+  function fieldMeta(path: string): ParameterFieldMeta {
+    return parameterFieldMeta(schemaDetail.value, path);
+  }
+
   return {
     placeholderFields,
     actionSchemaHint,
+    schemaDetail,
+    fieldMeta,
     activePlaceholderFields,
     placeholderFallbackHints,
     optionStateFor,

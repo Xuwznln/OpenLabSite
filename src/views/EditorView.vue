@@ -17,6 +17,7 @@ import {
   ConnectionMode,
   VueFlow,
   useVueFlow,
+  type Node as FlowNode,
   type NodeTypesObject,
 } from "@vue-flow/core";
 import { Background } from "@vue-flow/background";
@@ -51,6 +52,7 @@ import {
   HandRightOutline,
   HelpCircleOutline,
   Pin,
+  RepeatOutline,
   PinOutline,
   SettingsOutline,
   Star,
@@ -58,21 +60,53 @@ import {
   TrashOutline,
 } from "@vicons/ionicons5";
 import ActionNode from "../components/ActionNode.vue";
+import WorkflowRunButton from "../components/WorkflowRunButton.vue";
+import { WORKFLOW_RUN_OPTIONS, type WorkflowExecutionMode } from "../features/workflow-execution";
 import SlotNode from "../components/SlotNode.vue";
 import { TERMS } from "../features/terminology";
 import ManualNode from "../components/ManualNode.vue";
 import BranchNode from "../components/BranchNode.vue";
 import NodePickerPanel from "../components/NodePickerPanel.vue";
+import GroupNode from "../components/GroupNode.vue";
+import LoopNode from "../components/LoopNode.vue";
+import TemplateGuide from "../components/TemplateGuide.vue";
 import TemplatePanel from "../components/TemplatePanel.vue";
+import {
+  GROUP_ACTIONS_KEY,
+  GROUP_NODE_TYPE,
+  GROUP_PADDING,
+  fitFrame,
+  frameForLayout,
+  frameSize,
+  frameStyle,
+  groupSubmitMeta,
+  type GroupNodeData,
+} from "../features/canvas-groups";
+import {
+  LOOP_ACTIONS_KEY,
+  LOOP_HEADER_HEIGHT,
+  LOOP_NODE_TYPE,
+  LOOP_OPS,
+  defaultLoopNodeData,
+  describeLoopNode,
+  loopNodeDataFromSpec,
+  nearestLoopAncestor,
+  type LoopConditionSource,
+  type LoopMode,
+  type LoopNodeData,
+} from "../features/workflow-loops";
 import WorkflowVariablesDrawer from "../components/WorkflowVariablesDrawer.vue";
 import {
   buildTemplateRegistry,
   collectRoles,
   expandTemplate,
+  hasTemplateGuide,
   suggestDeviceForRole,
   templateFromCanvas,
+  templateFromRegistry,
   type ExpandedEdge,
   type ExpandedNode,
+  type RoleDeviceCandidate,
   type TemplateRole,
   type WorkflowTemplate,
 } from "../features/workflow-templates";
@@ -158,6 +192,8 @@ const nodeTypes: NodeTypesObject = {
   slot: markRaw(SlotNode) as unknown as NodeTypesObject[string],
   manual: markRaw(ManualNode) as unknown as NodeTypesObject[string],
   branch: markRaw(BranchNode) as unknown as NodeTypesObject[string],
+  [GROUP_NODE_TYPE]: markRaw(GroupNode) as unknown as NodeTypesObject[string],
+  [LOOP_NODE_TYPE]: markRaw(LoopNode) as unknown as NodeTypesObject[string],
 };
 
 const DRAFT_KEY = "unilab-edge-ui:editor-draft";
@@ -199,8 +235,41 @@ type LiteNode = {
   id: string;
   type?: string;
   position: { x: number; y: number };
+  /** Vue Flow 算好的绝对坐标（组内成员的 position 是相对父节点的） */
+  computedPosition?: { x: number; y: number };
+  parentNode?: string;
+  style?: Record<string, unknown>;
   data: Record<string, unknown>;
 };
+
+/** 节点的绝对坐标：组内成员用 computedPosition，其余就是 position。 */
+function absolutePosition(node: LiteNode): { x: number; y: number } {
+  const computed = node.parentNode ? node.computedPosition : undefined;
+  return computed ? { x: computed.x, y: computed.y } : { x: node.position.x, y: node.position.y };
+}
+
+function isGroupNode(node: { type?: string }): boolean {
+  return node.type === GROUP_NODE_TYPE;
+}
+function isLoopNode(node: { type?: string }): boolean {
+  return node.type === LOOP_NODE_TYPE;
+}
+/** 有宽高、能装成员的节点：组框（画布边界）与循环框（图结构）。 */
+function isContainerNode(node: { type?: string }): boolean {
+  return isGroupNode(node) || isLoopNode(node);
+}
+/** 容器嵌套深度（父链长度），批量落节点时父节点必须先进节点表。 */
+function containerDepth(nodeId: string, byId: Map<string, { parentNode?: string }>): number {
+  let depth = 0;
+  let current = byId.get(nodeId)?.parentNode;
+  const seen = new Set<string>();
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    depth += 1;
+    current = byId.get(current)?.parentNode;
+  }
+  return depth;
+}
 type LiteEdge = {
   id: string;
   source: string;
@@ -252,7 +321,8 @@ onNodesInitialized(() => {
 
 const liteNodes = computed(() => flow.getNodes.value as unknown as LiteNode[]);
 const liteEdges = computed(() => flow.getEdges.value as unknown as LiteEdge[]);
-const nodeCount = computed(() => liteNodes.value.length);
+/** 图节点数：组框只是可见边界，不算步骤 */
+const nodeCount = computed(() => liteNodes.value.filter((n) => !isGroupNode(n)).length);
 
 const EDGE_STYLE_PLAIN = { stroke: "#94a3b8", strokeWidth: 2 };
 const EDGE_STYLE_MAPPED = { stroke: "#2E5BFF", strokeWidth: 2 };
@@ -390,20 +460,22 @@ function nextNodeId(): string {
 // 节点渲染宽 220+边距，340 间距保证连线有可见、可点的长度
 const INSERT_GAP_X = 340;
 
-/** 接链锚点：优先当前唯一选中的节点，其次上一个插入的节点。 */
+/** 接链锚点：优先当前唯一选中的节点（组框没有 handle，不算），其次上一个插入的节点。 */
 function chainAnchorId(): string {
   const selected = flow.getSelectedNodes.value;
-  if (selected.length === 1) return String(selected[0].id);
+  if (selected.length === 1 && !isGroupNode(selected[0])) return String(selected[0].id);
   return lastInsertedId;
 }
 
+/** 新节点落点：锚点右侧一格；没有锚点就排在画布最右（按绝对坐标，组内成员也算）。 */
 function insertPosition(anchorId: string): { x: number; y: number } {
-  const nodes = liteNodes.value;
+  const nodes = liteNodes.value.filter((n) => !isGroupNode(n));
   if (!nodes.length) return { x: 80, y: 120 };
   const anchor =
     nodes.find((n) => n.id === anchorId) ??
-    nodes.reduce((a, b) => (a.position.x >= b.position.x ? a : b));
-  return { x: anchor.position.x + INSERT_GAP_X, y: anchor.position.y };
+    nodes.reduce((a, b) => (absolutePosition(a).x >= absolutePosition(b).x ? a : b));
+  const base = absolutePosition(anchor);
+  return { x: base.x + INSERT_GAP_X, y: base.y };
 }
 
 /** 新节点落在当前视口外时跟随过去，避免插着插着跑出屏幕。 */
@@ -773,6 +845,8 @@ function openNodeInspector(nodeId: string) {
 // 浮层/抽屉内改设备/动作后的 schema 重识别（400ms 防抖）由 paramForm 内部 watch 负责。
 
 onNodeClick(({ node }) => {
+  // 组框 / 循环框只做选中 / 拖动，操作都在它自己的标题栏按钮上
+  if (isContainerNode(node)) return;
   if (node.type === "slot") {
     openSlotFill(String(node.id));
     return;
@@ -1247,17 +1321,65 @@ function deleteEdge() {
 
 // ── dagre 一键布局 ──
 
+/**
+ * 一键布局：循环框是 dagre 的复合节点（成员是它的子节点），布局后成员位置换成相对循环框，
+ * 循环框尺寸按 dagre 算出的簇大小再留出标题栏。组框不参与（只是可见边界），布局后按成员撑大。
+ */
 function autoLayout() {
-  const g = new dagre.graphlib.Graph();
+  const nodes = liteNodes.value.filter((n) => !isGroupNode(n));
+  const byId = new Map(liteNodes.value.map((n) => [n.id, n] as const));
+  const g = new dagre.graphlib.Graph({ compound: true });
   g.setGraph({ rankdir: "LR", nodesep: 46, ranksep: 92 });
   g.setDefaultEdgeLabel(() => ({}));
-  for (const n of liteNodes.value) g.setNode(n.id, { width: 220, height: 72 });
-  for (const e of liteEdges.value) g.setEdge(e.source, e.target);
-  dagre.layout(g);
-  for (const n of liteNodes.value) {
-    const pos = g.node(n.id);
-    if (pos) n.position = { x: pos.x - 110, y: pos.y - 36 };
+  for (const n of nodes) g.setNode(n.id, { width: 220, height: 72 });
+  for (const n of nodes) {
+    const loop = nearestLoopAncestor(n.id, byId);
+    if (loop) g.setParent(n.id, loop);
   }
+  for (const e of liteEdges.value) {
+    if (g.hasNode(e.source) && g.hasNode(e.target)) g.setEdge(e.source, e.target);
+  }
+  dagre.layout(g);
+  // 循环框：簇的外接框再向上留出标题栏；成员相对循环框左上角
+  const loopFrames = new Map<string, { x: number; y: number; width: number; height: number }>();
+  for (const n of nodes) {
+    if (!isLoopNode(n)) continue;
+    const cluster = g.node(n.id);
+    if (!cluster) continue;
+    const width = Math.max(cluster.width ?? 0, 260) + GROUP_PADDING * 2;
+    const height = Math.max(cluster.height ?? 0, 72) + LOOP_HEADER_HEIGHT + GROUP_PADDING * 2;
+    loopFrames.set(n.id, {
+      x: cluster.x - width / 2,
+      y: cluster.y - height / 2,
+      width,
+      height,
+    });
+  }
+  const absoluteOf = (id: string): { x: number; y: number } => {
+    const frame = loopFrames.get(id);
+    if (frame) return { x: frame.x, y: frame.y };
+    const pos = g.node(id);
+    return { x: (pos?.x ?? 0) - 110, y: (pos?.y ?? 0) - 36 };
+  };
+  for (const n of nodes) {
+    const absolute = absoluteOf(n.id);
+    const loop = nearestLoopAncestor(n.id, byId);
+    const parentFrame = loop ? loopFrames.get(loop) : undefined;
+    const position = parentFrame
+      ? { x: absolute.x - parentFrame.x, y: absolute.y - parentFrame.y }
+      : absolute;
+    const patch: Record<string, unknown> = { position };
+    const frame = loopFrames.get(n.id);
+    if (frame) patch.style = frameStyle(frame);
+    // 循环体成员从组框里出来了（布局按循环层级重排），组框成员关系只保留到循环框那一层
+    if (n.parentNode && !loop && isGroupNode(byId.get(n.parentNode) ?? {})) {
+      const group = byId.get(n.parentNode)!;
+      const groupAbsolute = absolutePosition(group);
+      patch.position = { x: absolute.x - groupAbsolute.x, y: absolute.y - groupAbsolute.y };
+    }
+    flow.updateNode(n.id, patch as Parameters<typeof flow.updateNode>[1]);
+  }
+  for (const group of liteNodes.value.filter((n) => isGroupNode(n))) fitGroupToMembers(group.id);
   void nextTick(() => fitView({ padding: 0.2 }));
   commitHistory();
   saveDraftSoon();
@@ -1277,6 +1399,11 @@ type Draft = {
     type?: string;
     x: number;
     y: number;
+    /** 组内成员：所属组框 id（x/y 为组内相对坐标） */
+    parentNode?: string;
+    /** 组框尺寸 */
+    width?: number;
+    height?: number;
     data: Record<string, unknown>;
   }[];
   edges: {
@@ -1288,6 +1415,26 @@ type Draft = {
   }[];
 };
 
+/** 草稿 / 历史里的节点 → Vue Flow 节点：容器（组框 / 循环框）先于成员，成员挂回父节点。 */
+function hydrateDraftNodes(nodes: Draft["nodes"]): FlowNode[] {
+  const byId = new Map(nodes.map((n) => [n.id, n] as const));
+  const ordered = [...nodes].sort((a, b) => containerDepth(a.id, byId) - containerDepth(b.id, byId));
+  return ordered.map((n) => {
+    const base: FlowNode = {
+      id: n.id,
+      type: n.type ?? "action",
+      position: { x: n.x, y: n.y },
+      data: n.data,
+    };
+    if (isContainerNode(n)) {
+      // 容器不能被 Delete 键直接删掉（成员会成孤儿）：解组 / 解开 / 删除整组走标题栏按钮
+      base.style = frameStyle({ width: n.width ?? 0, height: n.height ?? 0 });
+      base.deletable = false;
+    }
+    return n.parentNode ? { ...base, parentNode: n.parentNode, expandParent: true } : base;
+  });
+}
+
 function snapshotDraft(): Draft {
   return {
     workflowId: workflowId.value,
@@ -1295,13 +1442,22 @@ function snapshotDraft(): Draft {
     priority: priority.value,
     authorityWorkflowUuid: authorityWorkflowUuid.value || undefined,
     variables: cloneJson(workflowVariables.value),
-    nodes: liteNodes.value.map((n) => ({
-      id: n.id,
-      type: n.type ?? "action",
-      x: n.position.x,
-      y: n.position.y,
-      data: { ...n.data },
-    })),
+    nodes: liteNodes.value.map((n) => {
+      const entry: Draft["nodes"][number] = {
+        id: n.id,
+        type: n.type ?? "action",
+        x: n.position.x,
+        y: n.position.y,
+        data: { ...n.data },
+      };
+      if (n.parentNode) entry.parentNode = n.parentNode;
+      if (isContainerNode(n)) {
+        const size = frameSize(n.style);
+        entry.width = size.width;
+        entry.height = size.height;
+      }
+      return entry;
+    }),
     edges: liteEdges.value.map((e) => ({
       id: e.id,
       source: e.source,
@@ -1405,14 +1561,7 @@ function applyGraphState(snap: string) {
   nodeDrawerOpen.value = false;
   edgeDrawerOpen.value = false;
   workflowVariables.value = normalizeVariables(state.variables);
-  setNodes(
-    state.nodes.map((n) => ({
-      id: n.id,
-      type: n.type ?? "action",
-      position: { x: n.x, y: n.y },
-      data: n.data,
-    })),
-  );
+  setNodes(hydrateDraftNodes(state.nodes));
   setEdges(
     state.edges.map((e) => ({
       id: e.id,
@@ -1463,6 +1612,11 @@ type ClipboardPayload = {
     type?: string;
     x: number;
     y: number;
+    /** 循环体成员：所在循环也在剪贴板里时保留归属（x/y 为相对坐标） */
+    parentNode?: string;
+    /** 循环框尺寸 */
+    width?: number;
+    height?: number;
     data: Record<string, unknown>;
   }[];
   edges: {
@@ -1480,21 +1634,44 @@ function selectedLiteNodes(): LiteNode[] {
   return flow.getSelectedNodes.value as unknown as LiteNode[];
 }
 
-/** 复制选中节点（或指定 id），同时带上它们内部的连线与传参映射。 */
+/** 复制选中节点（或指定 id），同时带上它们内部的连线与传参映射；选中循环框即连同整个循环体。 */
 function copySelection(nodeIds?: string[]): boolean {
-  const picked = nodeIds?.length
+  const initial = nodeIds?.length
     ? liteNodes.value.filter((n) => nodeIds.includes(n.id))
     : selectedLiteNodes();
+  if (!initial.length) return false;
+  // 组框不进剪贴板（只是画布边界）；循环框连同全部成员（含嵌套）
+  const picked: LiteNode[] = [];
+  const queue = initial.filter((n) => !isGroupNode(n));
+  const idSet = new Set<string>();
+  while (queue.length) {
+    const node = queue.shift()!;
+    if (idSet.has(node.id)) continue;
+    idSet.add(node.id);
+    picked.push(node);
+    if (isLoopNode(node)) queue.push(...liteNodes.value.filter((n) => n.parentNode === node.id));
+  }
   if (!picked.length) return false;
-  const idSet = new Set(picked.map((n) => n.id));
   clipboard.value = {
-    nodes: picked.map((n) => ({
-      id: n.id,
-      type: n.type ?? "action",
-      x: n.position.x,
-      y: n.position.y,
-      data: cloneJson({ ...n.data }),
-    })),
+    nodes: picked.map((n) => {
+      // 父级也被复制时保留相对坐标与归属，否则用绝对坐标落到顶层
+      const keepParent = Boolean(n.parentNode && idSet.has(n.parentNode));
+      const position = keepParent ? n.position : absolutePosition(n);
+      const entry: ClipboardPayload["nodes"][number] = {
+        id: n.id,
+        type: n.type ?? "action",
+        x: position.x,
+        y: position.y,
+        data: cloneJson({ ...n.data }),
+      };
+      if (keepParent) entry.parentNode = n.parentNode;
+      if (isLoopNode(n)) {
+        const size = frameSize(n.style);
+        entry.width = size.width;
+        entry.height = size.height;
+      }
+      return entry;
+    }),
     edges: liteEdges.value
       .filter((e) => idSet.has(e.source) && idSet.has(e.target))
       .map((e) => ({
@@ -1529,16 +1706,30 @@ function pasteClipboard() {
   const offset = 48 * pasteRound;
   removeSelectedNodes(flow.getSelectedNodes.value);
   const idMap = new Map<string, string>();
-  const newNodes = payload.nodes.map((n) => {
-    const id = nextNodeId();
-    idMap.set(n.id, id);
-    return {
+  for (const n of payload.nodes) idMap.set(n.id, nextNodeId());
+  const byId = new Map(payload.nodes.map((n) => [n.id, n] as const));
+  // 父级（循环框）先进节点表
+  const ordered = [...payload.nodes].sort((a, b) => containerDepth(a.id, byId) - containerDepth(b.id, byId));
+  const newNodes = ordered.map((n) => {
+    const id = idMap.get(n.id)!;
+    const parent = n.parentNode ? idMap.get(n.parentNode) : undefined;
+    const node: Record<string, unknown> = {
       id,
       type: n.type ?? "action",
-      position: { x: n.x + offset, y: n.y + offset },
+      // 成员相对父级，不再平移
+      position: parent ? { x: n.x, y: n.y } : { x: n.x + offset, y: n.y + offset },
       data: cloneNodeDataForNewInstance(n.data),
       selected: true,
     };
+    if (parent) {
+      node.parentNode = parent;
+      node.expandParent = true;
+    }
+    if (isLoopNode(n)) {
+      node.style = frameStyle({ width: n.width ?? 320, height: n.height ?? 160 });
+      node.deletable = false;
+    }
+    return node as { id: string; type: string; position: { x: number; y: number }; data: Record<string, unknown> };
   });
   addNodes(newNodes);
   addEdges(
@@ -1576,13 +1767,43 @@ const ctxMenu = ref({
 
 const ctxOptions = computed(() => {
   if (ctxMenu.value.kind === "node") {
-    const nodeType =
-      liteNodes.value.find((n) => n.id === ctxMenu.value.targetId)?.type ?? "action";
+    const target = liteNodes.value.find((n) => n.id === ctxMenu.value.targetId);
+    const nodeType = target?.type ?? "action";
+    if (target && isGroupNode(target)) {
+      // 组框不是动作节点：只有解组 / 删除整组（"删除节点"对 deletable:false 的组框是空操作）
+      return [
+        { label: "解组（保留成员）", key: "group-ungroup" },
+        { type: "divider" as const, key: "d1" },
+        { label: "删除整组", key: "group-delete" },
+      ];
+    }
+    if (target && isLoopNode(target)) {
+      return [
+        { label: "编辑循环", key: "loop-edit" },
+        { label: "包成循环…（嵌套）", key: "node-wrap-loop" },
+        { label: "创建副本（含循环体）", key: "node-duplicate" },
+        { label: "断开所有连线", key: "node-disconnect" },
+        { type: "divider" as const, key: "d1" },
+        { label: "解开循环（保留成员）", key: "loop-dissolve" },
+        { label: "删除循环及成员", key: "loop-delete" },
+      ];
+    }
+    // 放入 / 移出循环：成员看所在循环，非成员列出画布上的循环
+    const loopId = target ? nearestLoopAncestor(target.id, new Map(liteNodes.value.map((n) => [n.id, n]))) : undefined;
+    const loopTargets = liteNodes.value
+      .filter((n) => isLoopNode(n) && n.id !== loopId)
+      .map((n) => ({ label: String(n.data.label || describeLoopNode(n.data as Partial<LoopNodeData>)), key: `loop-move:${n.id}` }));
+    const loopItems = [
+      { label: "包成循环…", key: "node-wrap-loop", disabled: nodeType === "branch" },
+      ...(loopTargets.length ? [{ label: "放入循环", key: "loop-move-menu", children: loopTargets }] : []),
+      ...(loopId ? [{ label: "移出循环", key: "loop-move-out" }] : []),
+    ];
     if (nodeType === "slot") {
       return [
         { label: "填充空位", key: "node-fill" },
         { label: "创建副本", key: "node-duplicate" },
         { label: "重复片段 ×N…", key: "node-repeat" },
+        ...loopItems,
         { label: "断开所有连线", key: "node-disconnect" },
         { type: "divider" as const, key: "d1" },
         { label: "删除空位", key: "node-delete" },
@@ -1592,6 +1813,7 @@ const ctxOptions = computed(() => {
       { label: "编辑节点", key: "node-edit" },
       { label: "创建副本", key: "node-duplicate" },
       { label: "重复片段 ×N…", key: "node-repeat", disabled: nodeType === "branch" },
+      ...loopItems,
       { label: "断开所有连线", key: "node-disconnect" },
       { type: "divider" as const, key: "d1" },
       { label: "删除节点", key: "node-delete" },
@@ -1636,9 +1858,19 @@ function disconnectNode(nodeId: string) {
   commitHistory();
 }
 
+/** 右键作用范围：目标节点在多选里就是整个多选，否则只是它自己。 */
+function selectionOr(nodeId: string): string[] {
+  const selected = flow.getSelectedNodes.value.map((n) => String(n.id));
+  return selected.includes(nodeId) && selected.length > 1 ? selected : [nodeId];
+}
+
 function onCtxSelect(key: string) {
   const id = ctxMenu.value.targetId;
   ctxMenu.value.show = false;
+  if (key.startsWith("loop-move:")) {
+    moveNodesIntoLoop(selectionOr(id), key.slice("loop-move:".length));
+    return;
+  }
   switch (key) {
     case "node-edit": {
       const nodeType = liteNodes.value.find((n) => n.id === id)?.type ?? "action";
@@ -1660,6 +1892,27 @@ function onCtxSelect(key: string) {
       break;
     case "node-delete":
       removeNodes([id], true);
+      break;
+    case "group-ungroup":
+      ungroup(id);
+      break;
+    case "group-delete":
+      removeGroup(id);
+      break;
+    case "loop-edit":
+      openLoopEditor({ kind: "edit", nodeId: id });
+      break;
+    case "node-wrap-loop":
+      openWrapLoopModal(id);
+      break;
+    case "loop-dissolve":
+      dissolveLoop(id);
+      break;
+    case "loop-delete":
+      removeLoop(id);
+      break;
+    case "loop-move-out":
+      moveNodesOutOfLoop(selectionOr(id));
       break;
     case "edge-edit":
       openEdgeInspector(id);
@@ -1689,6 +1942,19 @@ function isTypingTarget(target: EventTarget | null): boolean {
 
 function onEditorKeydown(e: KeyboardEvent) {
   if (isTypingTarget(e.target)) return;
+  if ((e.key === "Delete" || e.key === "Backspace") && !e.ctrlKey && !e.metaKey) {
+    // 组框是 deletable:false（Vue Flow 的 Delete 不带子节点删除，删了父节点会留下孤儿成员），
+    // 所以 Vue Flow 对选中的组框什么都不做。只选了组框时按 Delete → 走"删除整组"确认。
+    const selected = flow.getSelectedNodes.value;
+    if (selected.length && selected.every((n) => isContainerNode(n))) {
+      e.preventDefault();
+      for (const container of selected) {
+        if (isLoopNode(container)) removeLoop(String(container.id));
+        else removeGroup(String(container.id));
+      }
+    }
+    return;
+  }
   if (!(e.ctrlKey || e.metaKey)) return;
   const key = e.key.toLowerCase();
   if (key === "z" && !e.shiftKey) {
@@ -1795,7 +2061,24 @@ function persistUserTemplates(): void {
   localStorage.setItem(USER_TEMPLATE_KEY, JSON.stringify(userTemplates.value));
 }
 
-const templateRegistry = computed(() => buildTemplateRegistry(userTemplates.value));
+/**
+ * 设备包模板：驱动包里 `@workflow` 声明、随注册表上报到调度权威
+ * （registry 域）。接远端调度权威的受控 Edge 没有该域 → 静默为空。
+ */
+const registryTemplates = ref<WorkflowTemplate[]>([]);
+
+async function loadRegistryTemplates(): Promise<void> {
+  try {
+    const { templates } = await conn.api.domains.registry.workflowTemplates();
+    registryTemplates.value = templates.map(templateFromRegistry);
+  } catch {
+    registryTemplates.value = [];
+  }
+}
+
+const templateRegistry = computed(() =>
+  buildTemplateRegistry(userTemplates.value, registryTemplates.value),
+);
 const templateList = computed(() => [...templateRegistry.value.values()]);
 
 const slotCount = computed(
@@ -1808,19 +2091,29 @@ const roleSelections = ref<Record<string, string>>({});
 const pendingRoles = ref<TemplateRole[]>([]);
 const pendingTemplateId = ref("");
 const pendingFillSlotId = ref("");
-const roleDeviceOptions = ref<{ label: string; value: string }[]>([]);
+const roleDeviceOptions = ref<{ label: string; value: string; className: string }[]>([]);
+/** 正在插入的模板的运行前准备（设备包 @workflow guide.preparation），角色弹窗里先提醒。 */
+const pendingTemplatePreparation = computed(
+  () => templateRegistry.value.get(pendingTemplateId.value)?.guide?.preparation ?? [],
+);
 
 async function loadRoleDeviceOptions(): Promise<void> {
   try {
     const endpoints = await conn.api.domains.runtimeV1.endpoints();
-    roleDeviceOptions.value = [...new Set(
-      endpoints
-        .filter((endpoint) => endpoint.state === "online")
-        .flatMap((endpoint) => endpoint.device_routes)
-        .filter((route) => route.enabled && route.selected)
-        .map((route) => route.device_uuid),
-    )]
-      .map((key) => ({ label: key, value: key }));
+    const byId = new Map<string, string>();
+    for (const route of endpoints
+      .filter((endpoint) => endpoint.state === "online")
+      .flatMap((endpoint) => endpoint.device_routes)
+      .filter((route) => route.enabled && route.selected)) {
+      const config = (route.config ?? {}) as Record<string, unknown>;
+      const className = typeof config.registry_name === "string" ? config.registry_name : "";
+      if (!byId.has(route.device_uuid)) byId.set(route.device_uuid, className);
+    }
+    roleDeviceOptions.value = [...byId].map(([key, className]) => ({
+      label: key,
+      value: key,
+      className,
+    }));
   } catch {
     roleDeviceOptions.value = [];
   }
@@ -1854,9 +2147,12 @@ function beginTemplateUse(
   pendingRoles.value = roles;
   roleSelections.value = {};
   void loadRoleDeviceOptions().then(() => {
-    const ids = roleDeviceOptions.value.map((o) => o.value);
+    const candidates: RoleDeviceCandidate[] = roleDeviceOptions.value.map((o) => ({
+      id: o.value,
+      className: o.className || undefined,
+    }));
     const selections: Record<string, string> = {};
-    for (const role of roles) selections[role.role] = suggestDeviceForRole(role, ids);
+    for (const role of roles) selections[role.role] = suggestDeviceForRole(role, candidates);
     roleSelections.value = selections;
     roleModalOpen.value = true;
   });
@@ -1871,38 +2167,58 @@ function confirmRoleModal() {
   );
 }
 
-/** 展开图的 dagre 布局，归一化到 (0,0) 由调用方平移。 */
+/** 展开图里一个节点布局后的框：绝对坐标（归一化到 (0,0)），循环框带宽高。 */
+type ExpansionFrame = { x: number; y: number; width: number; height: number };
+
+/**
+ * 展开图的 dagre 布局，归一化到 (0,0) 由调用方平移。
+ * 循环节点是复合节点（成员是它的子节点），布局后循环框取簇外接框再留出标题栏。
+ */
 function layoutExpansion(
   nodes: ExpandedNode[],
   edges: ExpandedEdge[],
-): Map<string, { x: number; y: number }> {
-  const g = new dagre.graphlib.Graph();
+): Map<string, ExpansionFrame> {
+  const g = new dagre.graphlib.Graph({ compound: true });
   g.setGraph({ rankdir: "LR", nodesep: 46, ranksep: 92 });
   g.setDefaultEdgeLabel(() => ({}));
   for (const n of nodes) g.setNode(n.key, { width: 220, height: 72 });
+  for (const n of nodes) if (n.parent) g.setParent(n.key, n.parent);
   for (const e of edges) g.setEdge(e.source, e.target);
   dagre.layout(g);
+  const frames = new Map<string, ExpansionFrame>();
+  for (const n of nodes) {
+    const p = g.node(n.key);
+    if (n.type === "loop") {
+      const width = Math.max(p.width ?? 0, 260) + GROUP_PADDING * 2;
+      const height = Math.max(p.height ?? 0, 72) + LOOP_HEADER_HEIGHT + GROUP_PADDING * 2;
+      frames.set(n.key, { x: p.x - width / 2, y: p.y - height / 2, width, height });
+    } else {
+      frames.set(n.key, { x: p.x - 110, y: p.y - 36, width: 220, height: 72 });
+    }
+  }
   let minX = Infinity;
   let minY = Infinity;
-  for (const n of nodes) {
-    const p = g.node(n.key);
-    minX = Math.min(minX, p.x - 110);
-    minY = Math.min(minY, p.y - 36);
+  for (const frame of frames.values()) {
+    minX = Math.min(minX, frame.x);
+    minY = Math.min(minY, frame.y);
   }
-  const positions = new Map<string, { x: number; y: number }>();
-  for (const n of nodes) {
-    const p = g.node(n.key);
-    positions.set(n.key, { x: p.x - 110 - minX, y: p.y - 36 - minY });
+  for (const frame of frames.values()) {
+    frame.x -= minX;
+    frame.y -= minY;
   }
-  return positions;
+  return frames;
 }
 
 function expandedNodeData(
   node: ExpandedNode,
   mapping: Record<string, string>,
+  resolveNodeId: (key: string) => string | undefined = () => undefined,
 ): Record<string, unknown> {
   if (node.type === "slot") {
     return { slotLabel: node.slotLabel ?? "空位", slotHint: node.slotHint ?? "" };
+  }
+  if (node.type === "loop") {
+    return loopNodeDataFromSpec(node.loopSpec, node.name ?? "", resolveNodeId) as unknown as Record<string, unknown>;
   }
   return {
     deviceId: mapping[node.role ?? ""] ?? "",
@@ -1910,7 +2226,7 @@ function expandedNodeData(
     actionName: node.actionName ?? "",
     actionType: "goal",
     paramJson: JSON.stringify(node.param ?? {}, null, 2),
-    requirementsJson: "[]",
+    requirementsJson: JSON.stringify(node.inventoryRequirements ?? []),
   };
 }
 
@@ -1943,6 +2259,7 @@ function materializeTemplate(
     return;
   }
   const layout = layoutExpansion(graph.nodes, graph.edges);
+  const template = templateRegistry.value.get(templateId);
 
   const slot = fillSlotId
     ? liteNodes.value.find((n) => n.id === fillSlotId)
@@ -1952,26 +2269,92 @@ function materializeTemplate(
   let originX = 80;
   let originY = 120;
   if (slot) {
-    originX = slot.position.x;
-    originY = slot.position.y;
+    const slotAbsolute = absolutePosition(slot);
+    originX = slotAbsolute.x;
+    originY = slotAbsolute.y;
   } else if (dropOrigin) {
     originX = dropOrigin.x;
     originY = dropOrigin.y;
-  } else if (liteNodes.value.length) {
-    originX = Math.max(...liteNodes.value.map((n) => n.position.x)) + INSERT_GAP_X;
+  } else {
+    const others = liteNodes.value.filter((n) => !isGroupNode(n));
+    if (others.length) {
+      originX = Math.max(...others.map((n) => absolutePosition(n).x)) + INSERT_GAP_X;
+    }
+  }
+
+  // 成组：填的是某个组里的空位就并入那个组，否则新建一个以模板命名的组框包住全部成员。
+  // 成员位置相对组框；拖成员到边缘组框跟着长（expandParent），拖组框整块一起动。
+  const joinGroupId = slot?.parentNode ?? "";
+  const groupId = joinGroupId || `g-${Date.now()}`;
+  let childOffset = { x: 0, y: 0 };
+  let groupNode: {
+    id: string;
+    type: string;
+    position: { x: number; y: number };
+    style: Record<string, string>;
+    data: Record<string, unknown>;
+  } | null = null;
+  if (joinGroupId) {
+    const group = liteNodes.value.find((n) => n.id === joinGroupId);
+    const groupAbsolute = group ? absolutePosition(group) : { x: 0, y: 0 };
+    childOffset = { x: originX - groupAbsolute.x, y: originY - groupAbsolute.y };
+  } else {
+    // 组框只需装下顶层框（循环框已包住自己的成员）
+    const topFrames = graph.nodes.filter((n) => !n.parent).map((n) => layout.get(n.key)!);
+    const frame = frameForLayout(
+      { x: originX, y: originY },
+      topFrames.map((f) => ({ x: f.x + f.width - 220, y: f.y + f.height - 72 })),
+    );
+    childOffset = frame.childOffset;
+    const groupData: GroupNodeData = {
+      groupName: template?.name ?? templateId,
+      groupDescription: template?.description ?? "",
+      templateId,
+    };
+    groupNode = {
+      id: groupId,
+      type: GROUP_NODE_TYPE,
+      position: frame.position,
+      style: frameStyle(frame),
+      data: groupData as unknown as Record<string, unknown>,
+    };
   }
 
   const idMap = new Map<string, string>();
-  const newNodes = graph.nodes.map((n) => {
-    const id = nextNodeId();
-    idMap.set(n.key, id);
-    const p = layout.get(n.key)!;
-    return {
+  for (const n of graph.nodes) idMap.set(n.key, n.type === "loop" ? newLoopNodeId() : nextNodeId());
+  const resolveExpandedRef = (key: string) => idMap.get(key);
+  // 父节点（循环框）先于成员进节点表
+  const depthOf = (n: ExpandedNode): number => {
+    let depth = 0;
+    let current = n.parent ? graph.nodes.find((m) => m.key === n.parent) : undefined;
+    while (current) {
+      depth += 1;
+      current = current.parent ? graph.nodes.find((m) => m.key === current!.parent) : undefined;
+    }
+    return depth;
+  };
+  const orderedNodes = [...graph.nodes].sort((a, b) => depthOf(a) - depthOf(b));
+  const newNodes = orderedNodes.map((n) => {
+    const id = idMap.get(n.key)!;
+    const frame = layout.get(n.key)!;
+    // 循环体成员相对循环框；顶层节点相对组框（childOffset）
+    const parentFrame = n.parent ? layout.get(n.parent)! : undefined;
+    const position = parentFrame
+      ? { x: frame.x - parentFrame.x, y: frame.y - parentFrame.y }
+      : { x: childOffset.x + frame.x, y: childOffset.y + frame.y };
+    const node: Record<string, unknown> = {
       id,
       type: n.type,
-      position: { x: originX + p.x, y: originY + p.y },
-      data: expandedNodeData(n, mapping),
+      position,
+      parentNode: n.parent ? idMap.get(n.parent)! : groupId,
+      expandParent: true,
+      data: expandedNodeData(n, mapping, resolveExpandedRef),
     };
+    if (n.type === "loop") {
+      node.style = frameStyle(frame);
+      node.deletable = false;
+    }
+    return node as { id: string; type: string; position: { x: number; y: number }; parentNode: string; data: Record<string, unknown> };
   });
   const stamp = Date.now();
   const newEdges = graph.edges.map((e, i) => ({
@@ -1981,12 +2364,14 @@ function materializeTemplate(
     ...templateEdgeProps(e.mappings),
   }));
 
+  // 拼接只看顶层节点：循环体成员的先后由循环框代表
   const targeted = new Set(graph.edges.map((e) => e.target));
   const sourced = new Set(graph.edges.map((e) => e.source));
-  const entries = graph.nodes
+  const topLevel = graph.nodes.filter((n) => !n.parent);
+  const entries = topLevel
     .filter((n) => !targeted.has(n.key))
     .map((n) => idMap.get(n.key)!);
-  const exits = graph.nodes
+  const exits = topLevel
     .filter((n) => !sourced.has(n.key))
     .map((n) => idMap.get(n.key)!);
 
@@ -2032,16 +2417,549 @@ function materializeTemplate(
   }
 
   if (slot) removeNodes([slot.id], true);
-  addNodes(newNodes);
+  // 父节点必须先于成员进入节点表
+  addNodes(groupNode ? [{ ...groupNode, deletable: false }, ...newNodes] : newNodes);
   addEdges([...newEdges, ...spliceEdges]);
+  if (joinGroupId) fitGroupToMembers(joinGroupId);
   lastInsertedId = exits.at(-1) ?? newNodes.at(-1)!.id;
   slotFillOpen.value = false;
   requestFitView();
   commitHistory();
-  const tplName = templateRegistry.value.get(templateId)?.name ?? templateId;
+  const tplName = template?.name ?? templateId;
   message.success(
-    slot ? `已用模板「${tplName}」填充空位` : `已插入模板「${tplName}」`,
+    slot ? `已用模板「${tplName}」填充空位` : `已插入模板「${tplName}」（成组）`,
   );
+}
+
+// ── 分组：组框操作（GroupNode 经 provide 调回来） ──
+
+/** 成员变多后把组框撑大到能装下全部成员（只增不减）。 */
+function fitGroupToMembers(groupId: string) {
+  const group = liteNodes.value.find((n) => n.id === groupId);
+  if (!group) return;
+  // 成员里的循环框按它自己的宽高算，不然组框会夹不住整个循环
+  const members = liteNodes.value
+    .filter((n) => n.parentNode === groupId)
+    .map((n) => ({ position: n.position, ...containerSizeOf(n) }));
+  const size = fitFrame(members, frameSize(group.style));
+  flow.updateNode(groupId, { style: frameStyle(size) });
+}
+
+/**
+ * 删掉组框本身。组框建出来时是 deletable:false（Delete 键不能把父节点删掉留下一堆孤儿成员），
+ * 而 Vue Flow 的 removeNodes 会跳过 deletable:false 的节点——解组 / 删除整组这两条显式路径
+ * 必须先把标记翻回来，否则成员没了、空框还留在画布上。
+ */
+function removeGroupFrame(groupId: string) {
+  if (!flow.findNode(groupId)) return;
+  flow.updateNode(groupId, { deletable: true });
+  removeNodes([groupId], false);
+}
+
+/** 解组：成员位置换算成绝对坐标、脱离父节点，再删掉组框。 */
+function ungroup(groupId: string) {
+  const members = liteNodes.value.filter((n) => n.parentNode === groupId);
+  for (const member of members) {
+    const absolute = absolutePosition(member);
+    flow.updateNode(member.id, {
+      parentNode: undefined,
+      expandParent: false,
+      position: absolute,
+    } as Parameters<typeof flow.updateNode>[1]);
+  }
+  removeGroupFrame(groupId);
+  commitHistory();
+  message.success("已解组，成员节点保留");
+}
+
+function removeGroup(groupId: string) {
+  const group = liteNodes.value.find((n) => n.id === groupId);
+  const memberIds = liteNodes.value.filter((n) => n.parentNode === groupId).map((n) => n.id);
+  dialog.warning({
+    title: "删除整组",
+    content: `将删除组「${String(group?.data.groupName ?? groupId)}」及其 ${memberIds.length} 个节点，以及相关连线。`,
+    positiveText: "删除",
+    negativeText: "取消",
+    onPositiveClick: () => {
+      if (memberIds.length) removeNodes(memberIds, true);
+      removeGroupFrame(groupId);
+      commitHistory();
+    },
+  });
+}
+
+function templateHasGuide(templateId: string): boolean {
+  const tpl = templateRegistry.value.get(templateId);
+  return Boolean(tpl && hasTemplateGuide(tpl));
+}
+
+const guideTemplateId = ref("");
+const guideTemplate = computed(() => templateRegistry.value.get(guideTemplateId.value) ?? null);
+
+provide(GROUP_ACTIONS_KEY, {
+  hasGuide: templateHasGuide,
+  showGuide: (templateId: string) => {
+    guideTemplateId.value = templateId;
+  },
+  ungroup,
+  removeGroup,
+});
+
+// ── 循环容器：包成循环 / 放入 / 移出 / 解开 / 删除 / 编辑 ──
+//
+// 循环框是 Vue Flow 父节点（成员 position 相对于它），也是图结构：有 in/out handle，提交为
+// type=loop 节点，成员带 parent_uuid。跨边界的连线在包 / 解开时改接到循环框上，运行时后端
+// 把它翻译成"循环整体先于/后于外部节点"。
+
+const LOOP_MIN_SIZE = { width: 320, height: 160 };
+
+function nodeById(id: string): LiteNode | undefined {
+  return liteNodes.value.find((n) => n.id === id);
+}
+
+function loopMemberIds(loopId: string): string[] {
+  return liteNodes.value.filter((n) => n.parentNode === loopId).map((n) => n.id);
+}
+
+function liteNodeMap(): Map<string, LiteNode> {
+  return new Map(liteNodes.value.map((n) => [n.id, n]));
+}
+
+/** 若干节点的公共直接父级（都在同一容器里或都在顶层）；不一致返回 null。 */
+function commonParentOf(nodes: LiteNode[]): { parent?: string } | null {
+  const parents = new Set(nodes.map((n) => n.parentNode ?? ""));
+  if (parents.size !== 1) return null;
+  const parent = [...parents][0];
+  return { parent: parent || undefined };
+}
+
+/** 一组节点（绝对坐标）的外接框，向上留出循环标题栏。 */
+function frameAround(nodes: LiteNode[]): { x: number; y: number; width: number; height: number } {
+  const positions = nodes.map((n) => ({ ...absolutePosition(n), size: containerSizeOf(n) }));
+  const minX = Math.min(...positions.map((p) => p.x));
+  const minY = Math.min(...positions.map((p) => p.y));
+  const maxX = Math.max(...positions.map((p) => p.x + p.size.width));
+  const maxY = Math.max(...positions.map((p) => p.y + p.size.height));
+  return {
+    x: minX - GROUP_PADDING,
+    y: minY - LOOP_HEADER_HEIGHT - GROUP_PADDING,
+    width: Math.max(LOOP_MIN_SIZE.width, maxX - minX + GROUP_PADDING * 2),
+    height: Math.max(LOOP_MIN_SIZE.height, maxY - minY + LOOP_HEADER_HEIGHT + GROUP_PADDING * 2),
+  };
+}
+
+function containerSizeOf(node: LiteNode): { width: number; height: number } {
+  if (isContainerNode(node)) {
+    const size = frameSize(node.style);
+    if (size.width && size.height) return size;
+  }
+  return { width: 220, height: 72 };
+}
+
+/** 成员变多后把循环框撑大到能装下全部成员（只增不减）。 */
+function fitLoopToMembers(loopId: string) {
+  const loop = nodeById(loopId);
+  if (!loop) return;
+  const members = liteNodes.value.filter((n) => n.parentNode === loopId);
+  const size = fitFrame(
+    members.map((n) => ({ position: n.position, ...containerSizeOf(n) })),
+    frameSize(loop.style),
+  );
+  flow.updateNode(loopId, { style: frameStyle(size) });
+}
+
+/**
+ * 把节点挂到（或脱离）容器：position 在绝对坐标与相对坐标间换算，父级为空即顶层。
+ * 调用方保证父级已在节点表里。
+ */
+function reparentNode(nodeId: string, parentId: string | undefined) {
+  const node = nodeById(nodeId);
+  if (!node) return;
+  const absolute = absolutePosition(node);
+  const parent = parentId ? nodeById(parentId) : undefined;
+  const parentAbsolute = parent ? absolutePosition(parent) : { x: 0, y: 0 };
+  flow.updateNode(nodeId, {
+    parentNode: parentId,
+    expandParent: Boolean(parentId),
+    position: { x: absolute.x - parentAbsolute.x, y: absolute.y - parentAbsolute.y },
+  } as Parameters<typeof flow.updateNode>[1]);
+}
+
+/** 跨循环边界的连线：进循环体的改接到循环框入口，出循环体的改从循环框出口发出。 */
+function rewireEdgesToContainer(memberIds: Set<string>, loopId: string) {
+  const stamp = Date.now();
+  let seq = 0;
+  const toRemove: string[] = [];
+  const toAdd: Parameters<typeof addEdges>[0] = [];
+  const seen = new Set<string>();
+  for (const e of liteEdges.value) {
+    const inside = memberIds.has(e.source);
+    const outside = memberIds.has(e.target);
+    if (inside === outside) continue;
+    toRemove.push(e.id);
+    const source = inside ? loopId : e.source;
+    const target = outside ? loopId : e.target;
+    if (source === target) continue;
+    const key = `${source}->${target}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    toAdd.push({
+      id: `e-loop-${stamp}-${seq++}`,
+      source,
+      target,
+      ...templateEdgeProps(inside ? [] : cloneJson(e.data?.mappings ?? [])),
+    });
+  }
+  if (toRemove.length) removeEdges(toRemove);
+  if (toAdd.length) addEdges(toAdd);
+}
+
+/** 解开循环时的反向改线：循环框的入边接到循环体入口，出边从循环体出口发出。 */
+function rewireEdgesFromContainer(loopId: string, memberIds: string[]) {
+  const memberSet = new Set(memberIds);
+  const internalTargets = new Set(liteEdges.value.filter((e) => memberSet.has(e.source) && memberSet.has(e.target)).map((e) => e.target));
+  const internalSources = new Set(liteEdges.value.filter((e) => memberSet.has(e.source) && memberSet.has(e.target)).map((e) => e.source));
+  const entries = memberIds.filter((id) => !internalTargets.has(id));
+  const exits = memberIds.filter((id) => !internalSources.has(id));
+  const incoming = liteEdges.value.filter((e) => e.target === loopId);
+  const outgoing = liteEdges.value.filter((e) => e.source === loopId);
+  const stamp = Date.now();
+  let seq = 0;
+  const toAdd: Parameters<typeof addEdges>[0] = [];
+  for (const e of incoming) {
+    for (const entry of entries) {
+      toAdd.push({ id: `e-unloop-${stamp}-${seq++}`, source: e.source, target: entry, ...templateEdgeProps([]) });
+    }
+  }
+  for (const e of outgoing) {
+    for (const exit of exits) {
+      toAdd.push({ id: `e-unloop-${stamp}-${seq++}`, source: exit, target: e.target, ...templateEdgeProps([]) });
+    }
+  }
+  removeEdges([...incoming, ...outgoing].map((e) => e.id));
+  if (toAdd.length) addEdges(toAdd);
+}
+
+function newLoopNodeId(): string {
+  return `loop-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+}
+
+/** 在指定位置放一个空循环框（成员之后用"放入循环"或拖入模板加）。 */
+function insertLoopNode(data: LoopNodeData, position: { x: number; y: number }, chainFrom = ""): string {
+  const id = newLoopNodeId();
+  addNodes([
+    {
+      id,
+      type: LOOP_NODE_TYPE,
+      position,
+      style: frameStyle(LOOP_MIN_SIZE),
+      data: data as unknown as Record<string, unknown>,
+      deletable: false,
+    },
+  ]);
+  if (chainFrom && nodeById(chainFrom)) {
+    addEdges([{ id: `e-${chainFrom}-${id}`, source: chainFrom, target: id, ...templateEdgeProps([]) }]);
+  }
+  lastInsertedId = id;
+  ensureVisible(position);
+  commitHistory();
+  return id;
+}
+
+/**
+ * 把一组节点包成一个新循环：节点成为循环体（同一父级下），跨边界连线改接到循环框。
+ * 条件分支节点在提交前会被拼接掉，不能进循环体。
+ */
+function wrapNodesInLoop(nodeIds: string[], data: LoopNodeData): string | null {
+  const seeds = liteNodes.value.filter((n) => nodeIds.includes(n.id) && !isGroupNode(n));
+  if (!seeds.length) {
+    message.info("先选中要包进循环的节点");
+    return null;
+  }
+  if (seeds.some((n) => n.type === "branch")) {
+    message.warning("条件分支节点不能进循环体，请先移出选区");
+    return null;
+  }
+  const common = commonParentOf(seeds);
+  if (!common) {
+    message.warning("选中的节点必须在同一层级（同一个组 / 循环里，或都在顶层）");
+    return null;
+  }
+  const frame = frameAround(seeds);
+  const parent = common.parent ? nodeById(common.parent) : undefined;
+  const parentAbsolute = parent ? absolutePosition(parent) : { x: 0, y: 0 };
+  const loopId = newLoopNodeId();
+  addNodes([
+    {
+      id: loopId,
+      type: LOOP_NODE_TYPE,
+      position: { x: frame.x - parentAbsolute.x, y: frame.y - parentAbsolute.y },
+      style: frameStyle(frame),
+      data: data as unknown as Record<string, unknown>,
+      deletable: false,
+      ...(common.parent ? { parentNode: common.parent, expandParent: true } : {}),
+    },
+  ]);
+  for (const seed of seeds) {
+    const absolute = absolutePosition(seed);
+    flow.updateNode(seed.id, {
+      parentNode: loopId,
+      expandParent: true,
+      position: { x: absolute.x - frame.x, y: absolute.y - frame.y },
+    } as Parameters<typeof flow.updateNode>[1]);
+  }
+  rewireEdgesToContainer(new Set(seeds.map((n) => n.id)), loopId);
+  if (common.parent && isGroupNode(parent ?? {})) fitGroupToMembers(common.parent);
+  lastInsertedId = loopId;
+  commitHistory();
+  message.success(`已把 ${seeds.length} 个节点包成循环「${data.label}」`);
+  return loopId;
+}
+
+/** 把节点放进已有的循环：脱离原父级、改挂循环框，连线按边界改接。 */
+function moveNodesIntoLoop(nodeIds: string[], loopId: string) {
+  const loop = nodeById(loopId);
+  if (!loop || !isLoopNode(loop)) return;
+  const nodes = liteNodes.value.filter((n) => nodeIds.includes(n.id) && !isGroupNode(n) && n.id !== loopId);
+  if (!nodes.length) return;
+  if (nodes.some((n) => n.type === "branch")) {
+    message.warning("条件分支节点不能进循环体");
+    return;
+  }
+  const byId = liteNodeMap();
+  // 不能把循环放进自己的循环体
+  for (const node of nodes) {
+    if (isLoopNode(node)) {
+      let current: string | undefined = loopId;
+      while (current) {
+        if (current === node.id) {
+          message.warning("不能把循环放进它自己的循环体");
+          return;
+        }
+        current = byId.get(current)?.parentNode;
+      }
+    }
+  }
+  const loopAbsolute = absolutePosition(loop);
+  const loopSize = frameSize(loop.style);
+  // 放到循环框标题栏下方，按当前成员数往右排
+  const existing = loopMemberIds(loopId).length;
+  nodes.forEach((node, index) => {
+    const absolute = {
+      x: loopAbsolute.x + GROUP_PADDING + (existing + index) * (220 + 32),
+      y: loopAbsolute.y + LOOP_HEADER_HEIGHT + GROUP_PADDING,
+    };
+    flow.updateNode(node.id, {
+      parentNode: loopId,
+      expandParent: true,
+      position: { x: absolute.x - loopAbsolute.x, y: absolute.y - loopAbsolute.y },
+    } as Parameters<typeof flow.updateNode>[1]);
+  });
+  const memberIds = new Set([...loopMemberIds(loopId), ...nodes.map((n) => n.id)]);
+  rewireEdgesToContainer(memberIds, loopId);
+  void nextTick(() => {
+    fitLoopToMembers(loopId);
+    if (loopSize.width === 0) fitLoopToMembers(loopId);
+  });
+  commitHistory();
+  message.success(`已把 ${nodes.length} 个节点放入循环`);
+}
+
+/** 把循环体成员移出到循环框所在的层级；它与外部的连线改成与循环框断开。 */
+function moveNodesOutOfLoop(nodeIds: string[]) {
+  const byId = liteNodeMap();
+  const moved: string[] = [];
+  for (const id of nodeIds) {
+    const node = byId.get(id);
+    const loopId = node ? nearestLoopAncestor(id, byId) : undefined;
+    if (!node || !loopId || node.parentNode !== loopId) continue;
+    const loop = byId.get(loopId)!;
+    // 成员与循环体内其它节点的连线拆掉（跨边界的边不允许）
+    const others = new Set(loopMemberIds(loopId).filter((m) => m !== id));
+    removeEdges(
+      liteEdges.value
+        .filter((e) => (e.source === id && others.has(e.target)) || (e.target === id && others.has(e.source)))
+        .map((e) => e.id),
+    );
+    const absolute = absolutePosition(node);
+    const loopAbsolute = absolutePosition(loop);
+    const size = frameSize(loop.style);
+    const parent = loop.parentNode ? byId.get(loop.parentNode) : undefined;
+    const parentAbsolute = parent ? absolutePosition(parent) : { x: 0, y: 0 };
+    // 落到循环框下方
+    const target = { x: absolute.x, y: loopAbsolute.y + size.height + GROUP_PADDING };
+    flow.updateNode(id, {
+      parentNode: loop.parentNode,
+      expandParent: Boolean(loop.parentNode),
+      position: { x: target.x - parentAbsolute.x, y: target.y - parentAbsolute.y },
+    } as Parameters<typeof flow.updateNode>[1]);
+    moved.push(id);
+  }
+  if (!moved.length) return;
+  commitHistory();
+  message.success(`已把 ${moved.length} 个节点移出循环`);
+}
+
+/** 解开循环：成员回到循环框所在层级，循环框的连线接回循环体入口/出口，再删掉循环框。 */
+function dissolveLoop(loopId: string) {
+  const loop = nodeById(loopId);
+  if (!loop) return;
+  const memberIds = loopMemberIds(loopId);
+  rewireEdgesFromContainer(loopId, memberIds);
+  for (const id of memberIds) reparentNode(id, loop.parentNode);
+  flow.updateNode(loopId, { deletable: true });
+  removeNodes([loopId], false);
+  if (loop.parentNode && isGroupNode(nodeById(loop.parentNode) ?? {})) fitGroupToMembers(loop.parentNode);
+  commitHistory();
+  message.success("已解开循环，成员节点保留");
+}
+
+function removeLoop(loopId: string) {
+  const loop = nodeById(loopId);
+  const collect = (id: string): string[] => loopMemberIds(id).flatMap((m) => [m, ...(isLoopNode(nodeById(m) ?? {}) ? collect(m) : [])]);
+  const memberIds = collect(loopId);
+  const label = String(loop?.data.label ?? loopId);
+  dialog.warning({
+    title: "删除循环",
+    content: `将删除循环「${label}」及其 ${memberIds.length} 个节点，以及相关连线。`,
+    positiveText: "删除",
+    negativeText: "取消",
+    onPositiveClick: () => {
+      // 内层容器也是 deletable:false，先翻回来再一起删
+      for (const id of [...memberIds, loopId]) {
+        if (isContainerNode(nodeById(id) ?? {})) flow.updateNode(id, { deletable: true });
+      }
+      if (memberIds.length) removeNodes(memberIds, true);
+      removeNodes([loopId], true);
+      commitHistory();
+    },
+  });
+}
+
+provide(LOOP_ACTIONS_KEY, {
+  edit: (loopId: string) => openLoopEditor({ kind: "edit", nodeId: loopId }),
+  dissolve: dissolveLoop,
+  remove: removeLoop,
+  memberCount: (loopId: string) => loopMemberIds(loopId).length,
+});
+
+// ── 循环配置弹窗：编辑已有循环 / 包成循环 / 插入空循环 共用一张表单 ──
+
+type LoopEditTarget =
+  | { kind: "edit"; nodeId: string }
+  | { kind: "wrap"; nodeIds: string[] }
+  | { kind: "insert"; position: { x: number; y: number }; chainFrom: string };
+
+const loopEditOpen = ref(false);
+const loopEditTarget = ref<LoopEditTarget>({ kind: "insert", position: { x: 0, y: 0 }, chainFrom: "" });
+const loopForm = ref<LoopNodeData>(defaultLoopNodeData("for"));
+
+const LOOP_MODE_OPTIONS: { label: string; value: LoopMode }[] = [
+  { label: "固定次数 for", value: "for" },
+  { label: "按条件 while", value: "while" },
+];
+const LOOP_SOURCE_OPTIONS: { label: string; value: LoopConditionSource }[] = [
+  { label: "设备状态字段", value: "device_state" },
+  { label: "某节点的返回值", value: "node_output" },
+];
+const LOOP_OP_OPTIONS = LOOP_OPS.map((op) => ({ label: op === "exists" ? "存在（非空）" : op, value: op }));
+
+/** 条件可选设备：设备库里的全部设备 id。 */
+const loopDeviceOptions = computed(() => libDevices.value.map((id) => ({ label: id, value: id })));
+
+/** 选定设备最近上报的状态字段（telemetry properties，也就是运行时判定读的那份），带当前值；没有就手填。 */
+const loopFieldOptions = computed(() => {
+  const properties = devicesStore.byId(loopForm.value.deviceId)?.telemetry?.properties ?? {};
+  return Object.entries(properties).map(([field, value]) => ({
+    label: `${field} = ${typeof value === "string" ? value : JSON.stringify(value)}`,
+    value: field,
+  }));
+});
+
+/** 条件可引用的节点：画布上的设备动作 / 人工确认节点（不含循环框、组框、空位、分支）。 */
+const loopNodeOptions = computed(() =>
+  liteNodes.value
+    .filter((n) => n.type === "action" || n.type === "manual")
+    .map((n) => ({
+      label:
+        n.type === "manual"
+          ? `${String(n.data.label ?? "人工确认")} (${n.id})`
+          : `${String(n.data.deviceId ?? "?")}/${String(n.data.actionName ?? "?")} (${n.id})`,
+      value: n.id,
+    })),
+);
+
+const loopEditTitle = computed(() => {
+  const target = loopEditTarget.value;
+  if (target.kind === "edit") return `编辑循环 · ${target.nodeId}`;
+  if (target.kind === "wrap") return `把 ${target.nodeIds.length} 个节点包成循环`;
+  return "插入循环";
+});
+
+function openLoopEditor(target: LoopEditTarget) {
+  loopEditTarget.value = target;
+  if (target.kind === "edit") {
+    const node = nodeById(target.nodeId);
+    if (!node) return;
+    loopForm.value = { ...defaultLoopNodeData(), ...(node.data as Partial<LoopNodeData>) } as LoopNodeData;
+  } else {
+    loopForm.value = defaultLoopNodeData("for");
+  }
+  loopEditOpen.value = true;
+}
+
+function onLoopModeChange(mode: LoopMode) {
+  const current = loopForm.value;
+  const fresh = defaultLoopNodeData(mode);
+  // 切换模式时只换默认标签 / 间隔，保留已填的条件字段
+  const autoLabel = !current.label || current.label === describeLoopNode(current) || current.label === defaultLoopNodeData(current.mode).label;
+  loopForm.value = { ...current, mode, intervalSeconds: fresh.intervalSeconds, label: autoLabel ? fresh.label : current.label };
+}
+
+function saveLoopEditor() {
+  const form = loopForm.value;
+  const data: LoopNodeData = {
+    ...form,
+    label: form.label.trim() || describeLoopNode(form),
+    deviceId: form.deviceId.trim(),
+    field: form.field.trim(),
+    dataKey: form.dataKey.trim(),
+    count: Math.max(1, Math.floor(Number(form.count) || 1)),
+    maxIterations: Math.max(1, Math.floor(Number(form.maxIterations) || 1)),
+    intervalSeconds: Math.max(0, Number(form.intervalSeconds) || 0),
+  };
+  if (data.mode === "while") {
+    if (data.conditionSource === "device_state" && (!data.deviceId || !data.field)) {
+      message.warning("while 循环需要选择设备与状态字段");
+      return;
+    }
+    if (data.conditionSource === "node_output" && !data.conditionNodeId) {
+      message.warning("while 循环需要选择被判定的节点");
+      return;
+    }
+    if (data.op !== "exists" && !String(data.value ?? "").trim()) {
+      message.warning(`比较运算 ${data.op} 需要对比值`);
+      return;
+    }
+  }
+  const target = loopEditTarget.value;
+  if (target.kind === "edit") {
+    const node = nodeById(target.nodeId);
+    if (node) {
+      Object.assign(node.data, data);
+      commitHistory();
+      saveDraftSoon();
+    }
+  } else if (target.kind === "wrap") {
+    if (!wrapNodesInLoop(target.nodeIds, data)) return;
+  } else {
+    insertLoopNode(data, target.position, target.chainFrom);
+  }
+  loopEditOpen.value = false;
+}
+
+function openWrapLoopModal(nodeId: string) {
+  openLoopEditor({ kind: "wrap", nodeIds: selectionOr(nodeId) });
 }
 
 // ── 空位填充弹窗 ──
@@ -2069,7 +2987,9 @@ function replaceSlotWithNode(
   if (!slot) return false;
   const id = nextNodeId();
   const stamp = Date.now();
+  // 空位在组里：替换后的节点留在同一组（相对坐标原样沿用）
   const position = { ...slot.position };
+  const grouping = slot.parentNode ? { parentNode: slot.parentNode, expandParent: true } : {};
   const incoming = liteEdges.value.filter((e) => e.target === slot.id);
   const outgoing = liteEdges.value.filter((e) => e.source === slot.id);
   const rewired = [
@@ -2088,7 +3008,7 @@ function replaceSlotWithNode(
     })),
   ];
   removeNodes([slot.id], true);
-  addNodes([{ id, type, position, data }]);
+  addNodes([{ id, type, position, data, ...grouping }]);
   addEdges(rewired);
   slotFillOpen.value = false;
   commitHistory();
@@ -2144,9 +3064,13 @@ function confirmSaveTemplate() {
     return;
   }
   const id = `user-${Date.now()}`;
+  const byId = liteNodeMap();
   const tpl = templateFromCanvas(
     { id, name, description: saveTplDesc.value.trim() || `${nodeCount.value} 步流程` },
-    liteNodes.value.map((n) => ({ id: n.id, type: n.type, data: { ...n.data } })),
+    // 组框不是步骤：存模板时打平，只保留成员节点；循环框保留，成员记所在循环
+    liteNodes.value
+      .filter((n) => !isGroupNode(n))
+      .map((n) => ({ id: n.id, type: n.type, data: { ...n.data }, parent: nearestLoopAncestor(n.id, byId) })),
     liteEdges.value.map((e) => ({
       source: e.source,
       target: e.target,
@@ -2204,6 +3128,12 @@ const SPECIAL_ITEMS: {
     title: "条件分支 if",
     desc: "按参数真假选一条路走，另一条不执行",
   },
+  {
+    kind: "loop",
+    icon: markRaw(RepeatOutline),
+    title: "循环 for / while",
+    desc: "框住一段步骤反复执行：固定次数，或按设备状态 / 节点返回值判定",
+  },
 ];
 
 /**
@@ -2246,6 +3176,7 @@ function specialNodeData(kind: SpecialKind): Record<string, unknown> {
     };
   }
   if (kind === "branch") return { variableId: "", op: "==", value: "" };
+  if (kind === "loop") return defaultLoopNodeData("for") as unknown as Record<string, unknown>;
   return { slotLabel: "空位", slotHint: "" };
 }
 
@@ -2294,6 +3225,16 @@ function placeNode(
 function insertSpecial(kind: SpecialKind) {
   if (kind === "manual" && !ensureManualConfirmHostAvailable()) return;
   const anchorId = chainAnchorId();
+  if (kind === "loop") {
+    // 有多选就直接把选中的节点包成循环，否则插一个空循环框（先配参数）
+    const selected = flow.getSelectedNodes.value.map((n) => String(n.id)).filter((id) => !isGroupNode(nodeById(id) ?? {}));
+    if (selected.length > 1 || (selected.length === 1 && !isLoopNode(nodeById(selected[0]) ?? {}))) {
+      openLoopEditor({ kind: "wrap", nodeIds: selected });
+    } else {
+      openLoopEditor({ kind: "insert", position: insertPosition(anchorId), chainFrom: anchorId });
+    }
+    return;
+  }
   placeNode(kind, specialNodeData(kind), insertPosition(anchorId), anchorId);
 }
 
@@ -2400,6 +3341,10 @@ function onCanvasDrop(event: DragEvent) {
     return;
   }
   if (payload.special === "manual" && !ensureManualConfirmHostAvailable()) return;
+  if (payload.special === "loop") {
+    openLoopEditor({ kind: "insert", position, chainFrom: "" });
+    return;
+  }
   placeNode(payload.special, specialNodeData(payload.special), position);
 }
 
@@ -2556,7 +3501,8 @@ function evalBranch(data: Record<string, unknown>): boolean | null {
 function buildSubmitGraph():
   | { nodes: LiteNode[]; edges: SubmitEdgeLite[]; disabled: Set<string>; notes: string[] }
   | { error: string } {
-  const keptNodes = liteNodes.value.filter((n) => n.type !== "branch");
+  // 分支在提交前求值消失；组框只是画布上的可见边界，不进图
+  const keptNodes = liteNodes.value.filter((n) => n.type !== "branch" && !isGroupNode(n));
   let edges: SubmitEdgeLite[] = liteEdges.value.map((e) => ({
     source: e.source,
     target: e.target,
@@ -2568,7 +3514,7 @@ function buildSubmitGraph():
   // 原图入口（含分支边在内无任何入边的节点）
   const targeted = new Set(liteEdges.value.map((e) => e.target));
   const entries = new Set(
-    liteNodes.value.filter((n) => !targeted.has(n.id)).map((n) => n.id),
+    liteNodes.value.filter((n) => !isGroupNode(n) && !targeted.has(n.id)).map((n) => n.id),
   );
 
   for (const branch of liteNodes.value.filter((n) => n.type === "branch")) {
@@ -2601,7 +3547,8 @@ function buildSubmitGraph():
     );
   }
 
-  // 变换后从入口做可达性；不可达节点（未选分支）disabled
+  // 变换后从入口做可达性；不可达节点（未选分支）disabled。
+  // 循环体成员没有来自外部的连线：到达循环框即视为到达它的全部成员（含嵌套）。
   const remaining = new Set(keptNodes.map((n) => n.id));
   const adjacency = new Map<string, string[]>();
   for (const e of edges) {
@@ -2610,13 +3557,23 @@ function buildSubmitGraph():
     next.push(e.target);
     adjacency.set(e.source, next);
   }
+  const membersOf = new Map<string, string[]>();
+  for (const n of keptNodes) {
+    if (!n.parentNode || !remaining.has(n.parentNode)) continue;
+    const list = membersOf.get(n.parentNode) ?? [];
+    list.push(n.id);
+    membersOf.set(n.parentNode, list);
+  }
   const reached = new Set<string>();
-  const queue = [...entries].filter((id) => remaining.has(id));
+  // 入口只算顶层（不在任何循环体里）的节点：成员由容器带入
+  const byId = new Map(liteNodes.value.map((n) => [n.id, n]));
+  const queue = [...entries].filter((id) => remaining.has(id) && !nearestLoopAncestor(id, byId));
   while (queue.length) {
     const current = queue.pop()!;
     if (reached.has(current)) continue;
     reached.add(current);
     for (const next of adjacency.get(current) ?? []) queue.push(next);
+    for (const member of membersOf.get(current) ?? []) queue.push(member);
   }
   const disabled = new Set(
     keptNodes.filter((n) => !reached.has(n.id)).map((n) => n.id),
@@ -2649,6 +3606,13 @@ function confirmRepeat() {
     message.warning("条件分支节点不参与重复展开，请先移出选区");
     return;
   }
+  if (seeds.some((n) => isContainerNode(n))) {
+    message.warning("请选中组 / 循环里的节点再重复展开，组框和循环框本身不参与（循环框可用「创建副本」）");
+    return;
+  }
+  // 同在一个循环体里的片段：复制件留在该循环里（相对坐标），否则落到顶层
+  const sharedParent = commonParentOf(seeds);
+  const loopParent = sharedParent?.parent && isLoopNode(nodeById(sharedParent.parent) ?? {}) ? sharedParent.parent : "";
   const idSet = new Set(seeds.map((n) => n.id));
   const internal = liteEdges.value.filter(
     (e) => idSet.has(e.source) && idSet.has(e.target),
@@ -2657,8 +3621,12 @@ function confirmRepeat() {
   const internalSources = new Set(internal.map((e) => e.source));
   const entryIds = seeds.filter((n) => !internalTargets.has(n.id)).map((n) => n.id);
   const exitIds = seeds.filter((n) => !internalSources.has(n.id)).map((n) => n.id);
-  const minX = Math.min(...seeds.map((n) => n.position.x));
-  const maxX = Math.max(...seeds.map((n) => n.position.x));
+  // 复制件落在组外（绝对坐标），不跟原组绑定；在循环体里则沿用相对坐标留在循环里
+  const seedPositions = new Map(
+    seeds.map((n) => [n.id, loopParent ? { ...n.position } : absolutePosition(n)] as const),
+  );
+  const minX = Math.min(...[...seedPositions.values()].map((p) => p.x));
+  const maxX = Math.max(...[...seedPositions.values()].map((p) => p.x));
   const strideX = maxX - minX + INSERT_GAP_X;
   const stamp = Date.now();
 
@@ -2667,6 +3635,8 @@ function confirmRepeat() {
     type: string;
     position: { x: number; y: number };
     data: Record<string, unknown>;
+    parentNode?: string;
+    expandParent?: boolean;
   };
   const newNodes: NewNode[] = [];
   const newEdges: ReturnType<typeof buildRepeatEdge>[] = [];
@@ -2693,11 +3663,13 @@ function confirmRepeat() {
     for (const n of seeds) {
       const id = nextNodeId();
       idMap.set(n.id, id);
+      const base = seedPositions.get(n.id)!;
       newNodes.push({
         id,
         type: n.type ?? "action",
-        position: { x: n.position.x + strideX * round, y: n.position.y },
+        position: { x: base.x + strideX * round, y: base.y },
         data: cloneNodeDataForNewInstance({ ...n.data }),
+        ...(loopParent ? { parentNode: loopParent, expandParent: true } : {}),
       });
     }
     for (const e of internal) {
@@ -2720,6 +3692,7 @@ function confirmRepeat() {
 
   addNodes(newNodes);
   addEdges(newEdges);
+  if (loopParent) void nextTick(() => fitLoopToMembers(loopParent));
   repeatModalOpen.value = false;
   requestFitView();
   commitHistory();
@@ -2736,14 +3709,7 @@ function restoreDraft(draft: Draft) {
   priority.value = draft.priority || "normal";
   workflowVariables.value = normalizeVariables(draft.variables);
   ensurePriorityOption(priority.value);
-  setNodes(
-    draft.nodes.map((n) => ({
-      id: n.id,
-      type: n.type ?? "action",
-      position: { x: n.x, y: n.y },
-      data: n.data,
-    })),
-  );
+  setNodes(hydrateDraftNodes(draft.nodes));
   setEdges(
     draft.edges.map((e) => ({
       id: e.id,
@@ -2903,6 +3869,29 @@ async function cloneFrom(sourceId: string) {
           .map((item) => ({ key: item.key, template_id: item.template_uuid, quantity: item.quantity, unit: item.unit })),
       );
     };
+    // 循环容器：type=loop 的节点是循环框，parent_uuid 指向它的节点是循环体（坐标改成相对循环框）
+    const loopUuids = new Set(graph.nodes.filter((n) => String(n.type).toLowerCase() === "loop").map((n) => n.uuid));
+    const poseOf = (n: (typeof graph.nodes)[number], i: number) => {
+      const pose = (n.pose ?? {}) as Record<string, unknown>;
+      return {
+        x: typeof pose.x === "number" ? pose.x : 80 + i * 280,
+        y: typeof pose.y === "number" ? pose.y : 110,
+      };
+    };
+    const absoluteByUuid = new Map(graph.nodes.map((n, i) => [n.uuid, poseOf(n, i)] as const));
+    const loopParentOf = (n: (typeof graph.nodes)[number]): string | undefined =>
+      n.parent_uuid && loopUuids.has(n.parent_uuid) ? n.parent_uuid : undefined;
+    const loopFrameSize = (loopUuid: string): { width: number; height: number } => {
+      const origin = absoluteByUuid.get(loopUuid) ?? { x: 0, y: 0 };
+      const members = graph.nodes
+        .filter((m) => loopParentOf(m) === loopUuid)
+        .map((m) => {
+          const abs = absoluteByUuid.get(m.uuid)!;
+          const size = loopUuids.has(m.uuid) ? loopFrameSize(m.uuid) : { width: 220, height: 72 };
+          return { position: { x: abs.x - origin.x, y: abs.y - origin.y }, ...size };
+        });
+      return fitFrame(members, { width: 320, height: 160 });
+    };
     restoreDraft({
       workflowId: `wf-${Date.now()}`,
       workflowName: graph.workflow.name ? `${graph.workflow.name} 副本` : "",
@@ -2915,7 +3904,27 @@ async function cloneFrom(sourceId: string) {
         const isManual =
           String(template?.node_type ?? n.type).toLowerCase() === "manual_confirm";
         const meta = (n.meta_data ?? {}) as Record<string, unknown>;
-        const pose = (n.pose ?? {}) as Record<string, unknown>;
+        const absolute = poseOf(n, i);
+        const loopParent = loopParentOf(n);
+        const parentAbsolute = loopParent ? absoluteByUuid.get(loopParent)! : { x: 0, y: 0 };
+        const relative = { x: absolute.x - parentAbsolute.x, y: absolute.y - parentAbsolute.y };
+        if (loopUuids.has(n.uuid)) {
+          const size = loopFrameSize(n.uuid);
+          return {
+            id: n.uuid,
+            type: LOOP_NODE_TYPE,
+            x: relative.x,
+            y: relative.y,
+            ...(loopParent ? { parentNode: loopParent } : {}),
+            width: size.width,
+            height: size.height,
+            data: loopNodeDataFromSpec(
+              (n.param ?? {}) as Record<string, unknown>,
+              String(n.name ?? ""),
+              (ref) => (nodeUuids.has(ref) ? ref : undefined),
+            ) as unknown as Record<string, unknown>,
+          };
+        }
         const manualParam = (n.param ?? {}) as Record<string, unknown>;
         const manualData: Record<string, unknown> = {
           label: String(manualParam.label ?? n.name ?? "人工确认"),
@@ -2937,8 +3946,9 @@ async function cloneFrom(sourceId: string) {
         return {
           id: n.uuid,
           type: isManual ? "manual" : "action",
-          x: typeof pose.x === "number" ? pose.x : 80 + i * 280,
-          y: typeof pose.y === "number" ? pose.y : 110,
+          x: loopParent ? relative.x : absolute.x,
+          y: loopParent ? relative.y : absolute.y,
+          ...(loopParent ? { parentNode: loopParent } : {}),
           data: isManual
             ? manualData
             : {
@@ -3052,13 +4062,34 @@ const DEDUCTION_STATUS_LABEL: Record<DryRunDeductionRow["status"], string> = {
   "unit-mismatch": "单位不一致",
 };
 
+/**
+ * 把一个节点平移到画布视野中央并适度放大，返回过渡结束的 Promise。
+ *
+ * 不用 fitView 单节点：那会把缩放一路顶到 maxZoom，观感突兀；这里保留用户当前缩放
+ * （至少 1×，最多 1.5×）。节点落在视野中线略偏下，给随后在其上方打开的参数浮层留出空间。
+ */
+async function focusNode(nodeId: string): Promise<void> {
+  const node = flow.findNode(nodeId);
+  if (!node) return;
+  const width = node.dimensions?.width || 220;
+  const height = node.dimensions?.height || 72;
+  const zoom = Math.min(Math.max(flow.viewport.value.zoom, 1), 1.5);
+  const viewportHeight = flow.dimensions.value.height || 0;
+  await flow.setCenter(
+    node.computedPosition.x + width / 2,
+    node.computedPosition.y + height / 2 - (viewportHeight * 0.15) / zoom,
+    { zoom, duration: 250 },
+  );
+}
+
 /** 点击报告条目：画布定位节点并打开对应编辑入口（浮层/空位/特殊节点）。 */
-function locateIssue(issue: DryRunIssue): void {
+async function locateIssue(issue: DryRunIssue): Promise<void> {
   if (!issue.nodeId) return;
   const node = flow.findNode(issue.nodeId);
   if (!node) return;
   dryRunOpen.value = false;
-  void fitView({ nodes: [issue.nodeId], padding: 0.5, duration: 250 });
+  // 等平移/缩放过渡结束再开浮层：浮层锚点跟随节点，动画途中打开会跟着滑动
+  await focusNode(issue.nodeId);
   const type = String(node.type ?? "action");
   if (type === "action") openNodePanel(issue.nodeId);
   else if (type === "slot") openSlotFill(issue.nodeId);
@@ -3066,6 +4097,8 @@ function locateIssue(issue: DryRunIssue): void {
 }
 
 // ── 提交 ──
+const submissionOpen = ref(false);
+const runMode = ref<WorkflowExecutionMode>("normal");
 
 function validateVariableGroups(): boolean {
   const lengths = new Map<string, Set<number>>();
@@ -3087,6 +4120,8 @@ function validateVariableGroups(): boolean {
 
 /** 提交入口：先跑一遍本地校验，有 error 级问题给确认拦截（可跳过）。 */
 function submit(): void {
+  if (submitting.value) return;
+  const mode = runMode.value;
   if (!nodeCount.value) {
     message.warning("画布为空，先从上方设备按钮插入节点");
     return;
@@ -3100,7 +4135,7 @@ function submit(): void {
     lots: null,
   });
   if (!gate.errorCount) {
-    void performSubmit();
+    void performSubmit({ runMode: mode });
     return;
   }
   dialog.warning({
@@ -3109,7 +4144,7 @@ function submit(): void {
     positiveText: "仍要提交",
     negativeText: "查看报告",
     onPositiveClick: () => {
-      void performSubmit();
+      void performSubmit({ runMode: mode });
     },
     onNegativeClick: () => {
       void runDryRun();
@@ -3124,7 +4159,8 @@ function submit(): void {
  * 边为空（与 @workflow 声明式步骤同一套约定）。节点 uuid 首次分配后写回草稿，定义 uuid 也绑定到草稿，
  * 再次提交是更新同一定义（PUT graph 带 revision）。
  */
-async function performSubmit(options: { saveOnly?: boolean } = {}) {
+async function performSubmit(options: { saveOnly?: boolean; runMode?: WorkflowExecutionMode } = {}) {
+  if (submitting.value) return;
   if (!nodeCount.value) {
     message.warning("画布为空，先从上方设备按钮插入节点");
     return;
@@ -3149,8 +4185,31 @@ async function performSubmit(options: { saveOnly?: boolean } = {}) {
   try {
     // 设备 → material_uuid / action_type 从设备目录解析（materials 根物料 + runtime 能力）
     if (!devicesStore.loaded) await devicesStore.refresh();
+    const groupsById = new Map(
+      liteNodes.value.filter((n) => isGroupNode(n)).map((n) => [n.id, groupSubmitMeta(n)] as const),
+    );
+    const nodesById = new Map(liteNodes.value.map((n) => [n.id, n]));
+    // 所属组框：沿父链找最近的组（循环框在组里时，成员也算在那个组里）
+    const groupOf = (nodeId: string) => {
+      let current = nodesById.get(nodeId)?.parentNode;
+      const seen = new Set<string>();
+      while (current && !seen.has(current)) {
+        seen.add(current);
+        if (groupsById.has(current)) return groupsById.get(current);
+        current = nodesById.get(current)?.parentNode;
+      }
+      return undefined;
+    };
     const build = await buildAuthorityGraph({
-      nodes: transformed.nodes.map((node) => ({ id: node.id, type: node.type ?? "action", position: node.position, data: node.data })),
+      nodes: transformed.nodes.map((node) => ({
+        id: node.id,
+        type: node.type ?? "action",
+        // 落库的 pose 用绝对坐标：组内成员的 position 是相对组框的
+        position: absolutePosition(node),
+        data: node.data,
+        group: groupOf(node.id),
+        loopId: nearestLoopAncestor(node.id, nodesById),
+      })),
       edges: transformed.edges.map((edge) => ({ source: edge.source, target: edge.target, mappings: edge.mappings })),
       disabled: transformed.disabled,
       // 未绑定权威定义时，草稿里的 UUID 可能来自另一个已删除的 Workflow；
@@ -3191,6 +4250,7 @@ async function performSubmit(options: { saveOnly?: boolean } = {}) {
     const name = workflowName.value.trim() || `画布流程 ${new Date().toLocaleString("zh-CN", { hour12: false })}`;
     const result = await submitWorkflow(conn.api.domains.workflowBackend, {
       workflowUuid: authorityWorkflowUuid.value || undefined,
+      runMode: options.runMode ?? "normal",
       name,
       description: transformed.notes.length ? `分支求值：${transformed.notes.join("；")}` : undefined,
       metaData: {
@@ -3204,7 +4264,8 @@ async function performSubmit(options: { saveOnly?: boolean } = {}) {
     if (!workflowName.value.trim()) workflowName.value = name;
     flushDraftNow();
     if (result.task) {
-      message.success(`已提交运行：${name}（${build.nodes.length} 个节点）`);
+      submissionOpen.value = false;
+      message.success(result.task.run_mode === "step" ? `已提交逐步运行：${name}，请在详情页执行下一步` : `已提交运行：${name}（${build.nodes.length} 个节点）`);
       void router.push(`/workflow-tasks/${result.task.uuid}`);
     } else {
       message.success(`${result.created ? "已创建" : "已更新"}工作流定义 ${name}（revision ${result.workflow.revision}）`);
@@ -3228,6 +4289,7 @@ const draftHint = computed(() => {
 onMounted(() => {
   window.addEventListener("keydown", onEditorKeydown);
   loadUserTemplates();
+  void loadRegistryTemplates();
   void loadLibrary();
   resetHistory();
   const from = String(route.query.from ?? "");
@@ -3598,16 +4660,25 @@ onUnmounted(() => {
           >
             {{ authorityWorkflowUuid ? "更新定义" : "保存为定义" }}
           </NButton>
-          <NButton
-            size="small"
-            type="primary"
+          <WorkflowRunButton
+            v-model="runMode"
             :loading="submitting"
-            :disabled="!conn.schedulerOnline"
-            title="定义 → 图 → 运行：先本地试运行把关，再 POST /workflows、PUT graph、POST /workflow-tasks"
-            @click="submit"
-          >
-            提交运行
-          </NButton>
+            :disabled="!conn.schedulerOnline || !nodeCount"
+            @submit="submissionOpen = true"
+          />
+          <NModal v-model:show="submissionOpen" preset="card" title="提交工作流运行" style="width: 480px">
+            <p>{{ workflowName || '当前画布' }} · {{ nodeCount }} 个节点</p>
+            <NSelect v-model:value="runMode" :options="WORKFLOW_RUN_OPTIONS" :disabled="submitting" aria-label="运行方式" />
+            <p>{{ runMode === 'step' ? '提交后先等待。在运行详情页点击「执行下一步」，每次只放行一个动作，也可切换自动执行。' : '提交后由微后端按依赖和资源情况自动执行到结束。' }}</p>
+            <template #footer>
+              <NSpace justify="end">
+                <NButton :disabled="submitting" @click="submissionOpen = false">取消</NButton>
+                <NButton type="primary" :loading="submitting" :disabled="!conn.schedulerOnline" @click="submit">
+                  {{ runMode === 'step' ? '提交并逐步运行' : '提交并自动执行' }}
+                </NButton>
+              </NSpace>
+            </template>
+          </NModal>
         </div>
 
         <!-- 节点参数浮层：左=上游输出字段，右=本节点输入参数；映射写回边 mappings -->
@@ -3940,6 +5011,18 @@ onUnmounted(() => {
       @clickoutside="ctxMenu.show = false"
     />
 
+    <!-- 组框「流程说明」：来源模板的运行前准备 / 步骤 / 预期效果 -->
+    <NModal
+      :show="guideTemplate !== null"
+      preset="card"
+      :title="guideTemplate ? `${guideTemplate.name} · 流程说明` : ''"
+      style="width: 560px; max-height: min(720px, calc(100vh - 48px))"
+      content-style="overflow-y: auto"
+      @update:show="(show: boolean) => { if (!show) guideTemplateId = '' }"
+    >
+      <TemplateGuide v-if="guideTemplate" :template="guideTemplate" />
+    </NModal>
+
     <!-- 模板角色映射 -->
     <NModal
       v-model:show="roleModalOpen"
@@ -3949,6 +5032,13 @@ onUnmounted(() => {
       content-style="overflow-y: auto"
     >
       <div class="role-help">为模板中的每个设备角色选一台实际设备；也可以先留空，之后再补。</div>
+      <!-- 设备包模板的运行前准备（出库、挂到哪个位点、确认设备在线）：绑定设备前先看一眼 -->
+      <div v-if="pendingTemplatePreparation.length" class="role-preparation">
+        <div class="role-preparation-title">运行前准备</div>
+        <ol>
+          <li v-for="(item, index) in pendingTemplatePreparation" :key="`prep-${index}`">{{ item }}</li>
+        </ol>
+      </div>
       <!-- 在线设备平铺成 chip 点选（无下拉、不会被弹窗裁剪），再点一次取消；也可手输 -->
       <div v-for="role in pendingRoles" :key="role.role" class="role-row">
         <span class="role-label">
@@ -4169,6 +5259,120 @@ onUnmounted(() => {
       </NSpace>
     </NModal>
 
+    <!-- 循环配置：编辑 / 包成循环 / 插入空循环 -->
+    <NModal v-model:show="loopEditOpen" preset="card" :title="loopEditTitle" style="width: 480px">
+      <NSpace vertical :size="10">
+        <NSpace :size="8">
+          <div style="width: 160px">
+            <div class="field-label">循环方式</div>
+            <NSelect
+              :value="loopForm.mode"
+              :options="LOOP_MODE_OPTIONS"
+              size="small"
+              @update:value="(mode: LoopMode) => onLoopModeChange(mode)"
+            />
+          </div>
+          <div style="flex: 1">
+            <div class="field-label">标题</div>
+            <NInput v-model:value="loopForm.label" size="small" :placeholder="describeLoopNode(loopForm)" />
+          </div>
+        </NSpace>
+        <template v-if="loopForm.mode === 'for'">
+          <NSpace :size="8">
+            <div style="width: 160px">
+              <div class="field-label">重复次数</div>
+              <NInputNumber v-model:value="loopForm.count" size="small" :min="1" :max="100000" />
+            </div>
+            <div style="width: 160px">
+              <div class="field-label">每轮间隔（秒）</div>
+              <NInputNumber v-model:value="loopForm.intervalSeconds" size="small" :min="0" :step="0.5" />
+            </div>
+          </NSpace>
+          <div class="role-help">
+            循环体每轮重新执行，运行页按轮次显示。循环体节点的参数里可以写
+            <code v-pre>{{loop.iteration}}</code>（第几轮，从 1 起）、<code v-pre>{{loop.index}}</code>（从 0 起）、
+            <code v-pre>{{loop.count}}</code>（总轮数），整个值恰为占位符时保持数字类型。
+          </div>
+        </template>
+        <template v-else>
+          <div>
+            <div class="field-label">继续条件的数据源</div>
+            <NSelect v-model:value="loopForm.conditionSource" :options="LOOP_SOURCE_OPTIONS" size="small" />
+          </div>
+          <NSpace v-if="loopForm.conditionSource === 'device_state'" :size="8">
+            <div style="flex: 1; min-width: 180px">
+              <div class="field-label">设备</div>
+              <NSelect v-model:value="loopForm.deviceId" :options="loopDeviceOptions" size="small" filterable tag placeholder="设备 id" />
+            </div>
+            <div style="flex: 1; min-width: 180px">
+              <div class="field-label">状态字段</div>
+              <NSelect
+                v-model:value="loopForm.field"
+                :options="loopFieldOptions"
+                size="small"
+                filterable
+                tag
+                placeholder="设备上报的状态字段名"
+              />
+            </div>
+          </NSpace>
+          <NSpace v-else :size="8">
+            <div style="flex: 1; min-width: 220px">
+              <div class="field-label">被判定的节点</div>
+              <NSelect
+                v-model:value="loopForm.conditionNodeId"
+                :options="loopNodeOptions"
+                size="small"
+                filterable
+                placeholder="取该节点最近一次的返回值"
+              />
+            </div>
+            <div style="width: 150px">
+              <div class="field-label">返回值里的字段</div>
+              <NInput v-model:value="loopForm.dataKey" size="small" placeholder="如 ready / temperature" />
+            </div>
+          </NSpace>
+          <NSpace :size="8">
+            <div style="width: 150px">
+              <div class="field-label">比较</div>
+              <NSelect v-model:value="loopForm.op" :options="LOOP_OP_OPTIONS" size="small" />
+            </div>
+            <div style="flex: 1">
+              <div class="field-label">对比值</div>
+              <NInput
+                v-model:value="loopForm.value"
+                size="small"
+                :disabled="loopForm.op === 'exists'"
+                placeholder="如 80 / true / ready（数字、布尔按 JSON 解析）"
+              />
+            </div>
+          </NSpace>
+          <NSpace :size="8">
+            <div style="width: 150px">
+              <div class="field-label">判定间隔（秒）</div>
+              <NInputNumber v-model:value="loopForm.intervalSeconds" size="small" :min="0" :step="0.5" />
+            </div>
+            <div style="width: 150px">
+              <div class="field-label">最多轮数（保护）</div>
+              <NInputNumber v-model:value="loopForm.maxIterations" size="small" :min="1" :max="100000" />
+            </div>
+          </NSpace>
+          <div class="role-help">
+            每轮开始前判定：<b>{{ describeLoopNode(loopForm) }}</b>——成立就再执行一轮循环体，不成立结束循环。
+            设备状态取设备最新上报的字段值；节点返回值取该节点最近一次成功的结果，它还没产出时循环体先跑一轮
+            （"重复直到达标"就是把探测步骤放进循环体、条件引用它）。达到最多轮数仍未结束按失败处理。
+            循环体为空时就是"等到某状态"，必须设判定间隔。
+          </div>
+        </template>
+      </NSpace>
+      <NSpace justify="end" style="margin-top: 16px">
+        <NButton size="small" @click="loopEditOpen = false">取消</NButton>
+        <NButton size="small" type="primary" @click="saveLoopEditor">
+          {{ loopEditTarget.kind === "edit" ? "保存" : loopEditTarget.kind === "wrap" ? "包成循环" : "插入" }}
+        </NButton>
+      </NSpace>
+    </NModal>
+
     <!-- 节点检查器 -->
     <NDrawer v-model:show="nodeDrawerOpen" :width="380" placement="right">
       <NDrawerContent :title="`节点全部设置 · ${editingNodeId}`" closable>
@@ -4345,7 +5549,7 @@ onUnmounted(() => {
               class="dry-run-item"
               :class="issue.level"
               :title="issue.nodeId ? '点击定位节点' : undefined"
-              @click="locateIssue(issue)"
+              @click="void locateIssue(issue)"
             >
               <NTag
                 size="small"
@@ -4782,6 +5986,28 @@ onUnmounted(() => {
   color: #8d949d;
   font-size: 10.5px;
   line-height: 1.5;
+}
+
+.role-preparation {
+  margin-bottom: 12px;
+  padding: 9px 11px;
+  border: 1px solid #d9e2fb;
+  border-radius: 8px;
+  background: #f8faff;
+  color: #3d434c;
+  font-size: 11.5px;
+  line-height: 1.65;
+}
+
+.role-preparation-title {
+  margin-bottom: 4px;
+  font-weight: 600;
+  color: #2e5bff;
+}
+
+.role-preparation ol {
+  margin: 0;
+  padding-left: 18px;
 }
 
 .role-row {

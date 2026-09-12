@@ -11,6 +11,7 @@
 import { defineStore } from "pinia";
 import { computed, ref, shallowRef, watch } from "vue";
 import { describeNodeJob, describeTask } from "../features/task-jobs";
+import { createRefreshQueue } from "../features/refresh-queue";
 import { useConnectionStore } from "./connection";
 import { useDevicesStore } from "./devices";
 import { useSchedulerStore } from "./scheduler";
@@ -61,11 +62,8 @@ export const useEntityCacheStore = defineStore("entity-cache", () => {
   const tombstones = shallowRef<Map<string, EntityInfo>>(new Map());
   const loadedAt = ref(0);
 
-  let refreshing = false;
-
-  async function refresh() {
-    if (refreshing || !conn.online) return;
-    refreshing = true;
+  const refresh = createRefreshQueue(async () => {
+    if (!conn.online) return;
     try {
       const api = conn.api.domains.materialsV1;
       const [aggregates, templates, lots, changes] = await Promise.all([
@@ -74,6 +72,7 @@ export const useEntityCacheStore = defineStore("entity-cache", () => {
         api.lots().catch(() => []),
         api.changes(0, 500).catch(() => []),
       ]);
+      if (api !== conn.api.domains.materialsV1) return;
       const next = new Map<string, EntityInfo>();
       const templateName = new Map(templates.map((item) => [item.template_uuid, item.display_name || item.name]));
       for (const template of templates) {
@@ -150,10 +149,8 @@ export const useEntityCacheStore = defineStore("entity-cache", () => {
       loadedAt.value = Date.now();
     } catch {
       /* 仓储能力不可用时保持现有索引；EntityRef 以短码兜底。 */
-    } finally {
-      refreshing = false;
     }
-  }
+  });
 
   /** 工作流 / 任务 / 作业 / 设备：从各自 store 现场解析，随其轮询自然更新。 */
   function resolveLive(uuid: string): EntityInfo | undefined {
@@ -251,6 +248,7 @@ export const useEntityCacheStore = defineStore("entity-cache", () => {
       byUuid.value = new Map();
       tombstones.value = new Map();
       loadedAt.value = 0;
+      void refresh();
     },
   );
 

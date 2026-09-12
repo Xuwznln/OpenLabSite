@@ -91,6 +91,140 @@ describe("buildAuthorityGraph", () => {
     expect(build.notLocallyExecutable).toEqual([]);
   });
 
+  it("循环容器：提交为 type=loop（param=LoopSpec），成员带 parent_uuid，node_output 条件引用换成 uuid", async () => {
+    const build = await buildAuthorityGraph({
+      nodes: [
+        actionNode("n0", "pump_1", "dispense", 0),
+        {
+          id: "L1",
+          type: "loop",
+          position: { x: 300, y: 60 },
+          data: { label: "三轮", mode: "for", count: 3, intervalSeconds: 0 },
+        },
+        { ...actionNode("n1", "pump_1", "dispense", 340, { paramJson: '{"volume": "{{loop.iteration}}"}' }), loopId: "L1" },
+        { ...actionNode("n2", "heater_1", "read_temp", 620), loopId: "L1" },
+        {
+          id: "L2",
+          type: "loop",
+          position: { x: 900, y: 60 },
+          data: {
+            label: "直到达温",
+            mode: "while",
+            conditionSource: "node_output",
+            conditionNodeId: "n2",
+            dataKey: "temperature",
+            op: "<",
+            value: "80",
+            maxIterations: 20,
+            intervalSeconds: 2,
+          },
+        },
+        {
+          id: "L3",
+          type: "loop",
+          position: { x: 1200, y: 60 },
+          data: {
+            label: "等待就绪",
+            mode: "while",
+            conditionSource: "device_state",
+            deviceId: "heater_1",
+            field: "ready",
+            op: "==",
+            value: "false",
+            maxIterations: 100,
+            intervalSeconds: 1.5,
+          },
+        },
+      ],
+      edges: [
+        { source: "n0", target: "L1", mappings: [] },
+        { source: "n1", target: "n2", mappings: [] },
+        { source: "L1", target: "L2", mappings: [] },
+        { source: "L2", target: "L3", mappings: [] },
+      ],
+      disabled: new Set(),
+      resolveDevice,
+    });
+    const byId = new Map(build.nodes.map((node) => [String(node.meta_data?.editor_node_id), node]));
+    const loop = byId.get("L1")!;
+    expect(loop.type).toBe("loop");
+    expect(loop.param).toEqual({ mode: "for", count: 3, interval_seconds: 0 });
+    expect(loop.execution_policy).toEqual({ depends_on: [build.uuidByNodeId.get("n0")] });
+    expect(loop.parent_uuid).toBeUndefined();
+    expect(byId.get("n1")!.parent_uuid).toBe(loop.uuid);
+    expect(byId.get("n1")!.param).toEqual({ volume: "{{loop.iteration}}" });
+    expect(byId.get("n2")!.parent_uuid).toBe(loop.uuid);
+    expect(byId.get("n2")!.execution_policy).toEqual({ depends_on: [build.uuidByNodeId.get("n1")], always_free: true });
+    // while 条件：引用的节点编辑器 id → 权威 uuid；对比值按 JSON 解析
+    expect(byId.get("L2")!.param).toEqual({
+      mode: "while",
+      condition: { source: "node_output", op: "<", value: 80, node_uuid: build.uuidByNodeId.get("n2"), data_key: "temperature" },
+      max_iterations: 20,
+      interval_seconds: 2,
+    });
+    expect(byId.get("L3")!.param).toEqual({
+      mode: "while",
+      condition: { source: "device_state", op: "==", value: false, device_id: "heater_1", field: "ready" },
+      max_iterations: 100,
+      interval_seconds: 1.5,
+    });
+    // 循环是本机可执行的
+    expect(build.notLocallyExecutable).toEqual([]);
+  });
+
+  it("循环配置不完整时提交前拦下", async () => {
+    await expect(
+      buildAuthorityGraph({
+        nodes: [
+          {
+            id: "L1",
+            type: "loop",
+            position: { x: 0, y: 0 },
+            data: { label: "等状态", mode: "while", conditionSource: "device_state", deviceId: "", field: "", op: "==", value: "1" },
+          },
+        ],
+        edges: [],
+        disabled: new Set(),
+        resolveDevice,
+      }),
+    ).rejects.toThrow(SubmitGraphError);
+    // 空循环体的 while 必须有轮询间隔
+    await expect(
+      buildAuthorityGraph({
+        nodes: [
+          {
+            id: "L1",
+            type: "loop",
+            position: { x: 0, y: 0 },
+            data: { label: "等状态", mode: "while", conditionSource: "device_state", deviceId: "heater_1", field: "ready", op: "==", value: "false", intervalSeconds: 0 },
+          },
+        ],
+        edges: [],
+        disabled: new Set(),
+        resolveDevice,
+      }),
+    ).rejects.toThrow(/轮询间隔/);
+  });
+
+  it("模板插入成组：成员节点 meta_data.editor_group 记所属组，组框本身不进提交体", async () => {
+    const group = { id: "g1", name: "位点操作演示", description: "装载 → 转移 → 查看", template_id: "registry:u1" };
+    const build = await buildAuthorityGraph({
+      nodes: [
+        { id: "g1", type: "group", position: { x: 0, y: 0 }, data: { groupName: group.name } },
+        { ...actionNode("n1", "pump_1", "dispense", 80), group },
+        { ...actionNode("n2", "heater_1", "read_temp", 420), group: { id: "g2", name: "手动组", description: "" } },
+        actionNode("n3", "pump_1", "dispense", 760),
+      ],
+      edges: [{ source: "n1", target: "n2", mappings: [] }],
+      disabled: new Set(),
+      resolveDevice,
+    });
+    expect(build.nodes.map((node) => node.meta_data?.editor_node_id)).toEqual(["n1", "n2", "n3"]);
+    expect(build.nodes[0].meta_data?.editor_group).toEqual(group);
+    expect(build.nodes[1].meta_data?.editor_group).toEqual({ id: "g2", name: "手动组", description: "" });
+    expect(build.nodes[2].meta_data).not.toHaveProperty("editor_group");
+  });
+
   it("host_node / 无根物料的设备用与后端相同的占位 material_uuid，不报错；完全未知的设备只给提醒", async () => {
     const build = await buildAuthorityGraph({
       nodes: [actionNode("n1", "host_node", "create_resource", 0), actionNode("n2", "future_device", "run", 300)],
@@ -247,7 +381,7 @@ describe("buildAuthorityGraph", () => {
     expect(build.nodes[0]?.param).toEqual({ assignee_user_ids: ["1", "alice"] });
   });
 
-  it("库存需求映射为 reagent InventoryRequirement，缺 key 给出提醒", async () => {
+  it("带数量的库存需求映射为 lot InventoryRequirement，缺 key 给出提醒", async () => {
     const build = await buildAuthorityGraph({
       nodes: [
         actionNode("n1", "pump_1", "dispense", 0, {
@@ -259,9 +393,30 @@ describe("buildAuthorityGraph", () => {
       resolveDevice,
     });
     expect(build.nodes[0].meta_data?.inventory_requirements).toEqual([
-      { key: "inventory", kind: "reagent", template_uuid: "33333333-3333-4333-8333-333333333333", quantity: 40, unit: "ml" },
+      { key: "inventory", kind: "lot", template_uuid: "33333333-3333-4333-8333-333333333333", quantity: 40, unit: "ml" },
     ]);
     expect(build.warnings).toHaveLength(1);
+  });
+
+  it("不带数量或显式 kind=material 的库存需求映射为 material（按件选一件实例）", async () => {
+    const build = await buildAuthorityGraph({
+      nodes: [
+        actionNode("n1", "host_node", "apply_deduct_resource", 0, {
+          requirementsJson: JSON.stringify([
+            { key: "resource", template_uuid: "44444444-4444-4444-8444-444444444444" },
+            { key: "plate", kind: "material", template_uuid: "55555555-5555-4555-8555-555555555555", quantity: 3 },
+          ]),
+        }),
+      ],
+      edges: [],
+      disabled: new Set(),
+      resolveDevice,
+    });
+    expect(build.nodes[0].meta_data?.inventory_requirements).toEqual([
+      { key: "resource", kind: "material", template_uuid: "44444444-4444-4444-8444-444444444444" },
+      { key: "plate", kind: "material", template_uuid: "55555555-5555-4555-8555-555555555555" },
+    ]);
+    expect(build.warnings).toHaveLength(0);
   });
 
   it("带参数传递的连线、坏 JSON、空位都拒绝提交并说清原因", async () => {
@@ -307,6 +462,14 @@ describe("submitWorkflow", () => {
     expect(result.workflow.revision).toBe(2);
     expect(result.task?.uuid).toBe("task-1");
     expect(vi.mocked(api.createWorkflow).mock.calls[0][0].meta_data).toEqual({ source: "openlab-editor" });
+    expect(api.createTask).toHaveBeenCalledWith(expect.objectContaining({ run_mode: "normal" }));
+  });
+
+  it("逐步运行只改变任务运行方式，仍只提交一个完整工作流", async () => {
+    const api = fakeApi();
+    await submitWorkflow(api, { name: "逐步实验", nodes: [], runMode: "step" });
+    expect(api.calls).toEqual(["create", "save@1", "task"]);
+    expect(api.createTask).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ run_mode: "step", workflow_uuid: "wf-1" }));
   });
 
   it("已绑定定义：更新元数据后存图；revision 冲突重读一次再存；saveOnly 不建任务", async () => {

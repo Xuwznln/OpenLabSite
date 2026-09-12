@@ -60,7 +60,9 @@ import {
 import EntityRef from "../components/EntityRef.vue";
 import PageHeader from "../components/PageHeader.vue";
 import StatusPill from "../components/StatusPill.vue";
+import { actorTypeLabel } from "../features/actor-type";
 import { describeError } from "../features/errors";
+import { createRefreshQueue } from "../features/refresh-queue";
 import { useConnectionStore } from "../stores/connection";
 import { useDomainThemeStore } from "../stores/domain-theme";
 
@@ -249,11 +251,8 @@ const counts = computed(() => ({
 
 // ── 拉取 ──────────────────────────────────────────────────────
 
-let refreshing = false;
-
-async function refresh() {
-  if (refreshing || !conn.online) return;
-  refreshing = true;
+const refresh = createRefreshQueue(async () => {
+  if (!conn.online) return;
   loading.value = true;
   const api = conn.api.domains.materialsV1;
   const [aggregateResult, lotResult, reservationResult, changeResult] = await Promise.allSettled([
@@ -262,6 +261,10 @@ async function refresh() {
     api.reservations(),
     api.changes(0, 300),
   ]);
+  if (api !== conn.api.domains.materialsV1) {
+    loading.value = false;
+    return;
+  }
   if (aggregateResult.status === "fulfilled") {
     aggregates.value = aggregateResult.value;
     lastError.value = "";
@@ -273,8 +276,7 @@ async function refresh() {
   if (changeResult.status === "fulfilled") changes.value = [...changeResult.value].reverse();
   loaded.value = true;
   loading.value = false;
-  refreshing = false;
-}
+});
 
 /** 模板目录只取目录字段（不带十几 MB 的 registry definition），可放心随页面加载。 */
 async function ensureTemplates() {
@@ -324,6 +326,18 @@ onUnmounted(() => {
 });
 watch(() => conn.materialsNoticeRevision, () => void refresh());
 watch(() => conn.online, (online) => online && void refresh());
+watch(() => conn.baseUrl, () => {
+  aggregates.value = [];
+  lots.value = [];
+  reservations.value = [];
+  changes.value = [];
+  templates.value = null;
+  registryClasses.value = [];
+  selectedUuid.value = "";
+  loaded.value = false;
+  lastError.value = "";
+  void refresh();
+});
 watch(bottomTab, (tab) => {
   if (tab === "templates") void ensureTemplates();
 });
@@ -942,7 +956,12 @@ const changeColumns: DataTableColumns<MaterialsV1Change> = [
   { title: "对象", key: "aggregate_uuid", width: 170, render: (row) => h(EntityRef, { uuid: row.aggregate_uuid }) },
   { title: "操作", key: "operation", width: 110, render: (row) => OPERATION_LABELS[row.operation] ?? row.operation },
   { title: "版本", key: "aggregate_version", width: 70 },
-  { title: "来源", key: "actor_type", width: 90 },
+  {
+    title: "来源",
+    key: "actor_type",
+    width: 110,
+    render: (row) => h("span", { title: row.actor_type }, actorTypeLabel(row.actor_type)),
+  },
 ];
 
 const templateColumns: DataTableColumns<MaterialsV1Template> = [

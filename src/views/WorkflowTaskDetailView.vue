@@ -7,14 +7,15 @@
  * - interventions：干预记录 revision 序列 + resume_control_status
  * - per-job results / feedback-history：attempt 时间线
  *
- * §6.3 渲染路径红线：「多 attempt」= 同 task+node 的多个 job 行（job 根字段
- * attempt）；必须先 GET /workflow-tasks/{task}/jobs 再逐 job 取 results。
- * results 响应保持列表形状但每 job 至多一条，渲染取 rows[0]、不假设多条。
+ * §6.3 渲染路径红线：「多 attempt」= 同一节点运行下的多个 job 行（attempt_no）；
+ * 顺序取 node-runs 的 topological_index。attempt 的返回值 / 异常在 job 行上
+ * （return_info / error_info / error_resolution）；`results` 是 Backend ↔ Edge 的结果信封，
+ * 本机调度不产生，只在接入云端 Backend 时作为附加信息展示（每 job 至多一条，取 rows[0]）。
  *
  * 降级：旧基座无这些路由（HTTP 404）→ 显示「后端版本不支持」；
  * code=3002 → task 不存在或已删；code=1000 → 非法 uuid。
  */
-import { computed, onMounted, ref, shallowReactive, shallowRef, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, shallowReactive, shallowRef, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   NAlert,
@@ -23,6 +24,8 @@ import {
   NEmpty,
   NIcon,
   NInput,
+  NProgress,
+  NSelect,
   NSpin,
   NTag,
   NTooltip,
@@ -37,12 +40,26 @@ import {
   type BackendNodeJobFeedback,
   type BackendNodeJobResult,
   type BackendWorkflowNodeJob,
+  type BackendWorkflowNodeRun,
   type BackendWorkflowTask,
 } from "@openlab/protocol";
 import EntityRef from "../components/EntityRef.vue";
+import ActionResult from "../components/ActionResult.vue";
 import StatusPill from "../components/StatusPill.vue";
+import TaskGraphCanvas from "../components/TaskGraphCanvas.vue";
 import { describeError } from "../features/errors";
-import { describeNodeJob, describeTask, parseIsoMs, snapshotNodes, snapshotWorkflowName } from "../features/task-jobs";
+import { stepExecutionControl } from "../features/workflow-execution";
+import { createRefreshQueue } from "../features/refresh-queue";
+import {
+  describeJobTrigger,
+  describeNodeJob,
+  describeTask,
+  parseIsoMs,
+  snapshotNodes,
+  snapshotWorkflowName,
+} from "../features/task-jobs";
+import { describeLoopProgress } from "../features/workflow-loops";
+import type { BackendLoopProgress } from "@openlab/protocol";
 import { beginWorkflowPrint } from "../features/workflow-print";
 import { useConnectionStore } from "../stores/connection";
 import { useDomainThemeStore } from "../stores/domain-theme";
@@ -56,7 +73,7 @@ const taskUuid = String(route.params.id ?? "");
 const wb = () => conn.api.domains.workflowBackend;
 
 const loading = ref(true);
-/** ""=正常；unsupported=旧基座 404；not-found=code 3002；bad-uuid=code 1000 */
+/** ""=正常；unsupported=端点缺失；not-found=code 3002；bad-uuid=code 1000 */
 const degraded = ref<"" | "unsupported" | "not-found" | "bad-uuid">("");
 const lastError = ref("");
 
@@ -64,10 +81,44 @@ const lastError = ref("");
 // 加载后整体替换引用即可触发更新
 const task = shallowRef<BackendWorkflowTask | null>(null);
 const jobs = shallowRef<BackendWorkflowNodeJob[]>([]);
+/** 节点运行视图（每节点一条、拓扑序），与任务控制状态一并读取。 */
+const runs = shallowRef<BackendWorkflowNodeRun[]>([]);
 const confirmations = shallowRef<BackendManualConfirmation[]>([]);
 const interventions = shallowRef<BackendIntervention[]>([]);
-const manualDecisionActor = ref("operator");
+/** 每张确认单各自的确认人：有指派名单时只能从名单里选，否则自由填写。 */
+const manualDecisionActor = shallowReactive<Record<string, string>>({});
 const manualDecisionBusy = shallowReactive<Record<string, boolean>>({});
+const manualDecisionError = shallowReactive<Record<string, string>>({});
+/** 画布里点中的节点，用来高亮并滚到对应作业组。 */
+const activeNodeUuid = ref("");
+const controlBusy = ref(false);
+const controlError = ref("");
+const controlErrorType = ref<"warning" | "error">("error");
+const controlBaseUrl = ref("");
+const stepControl = computed(() => stepExecutionControl(task.value, runs.value));
+
+async function commandTask(type: "step" | "resume") {
+  const current = task.value;
+  if (!current || current.control_revision === undefined || controlBusy.value || loading.value || !conn.schedulerLocal || controlBaseUrl.value !== conn.baseUrl) return;
+  if (!(type === "step" ? stepControl.value.canStep : stepControl.value.canResume)) return;
+  controlBusy.value = true;
+  controlError.value = "";
+  try {
+    await wb().commandTask(current.uuid, {
+      type, expected_revision: current.control_revision, idempotency_key: crypto.randomUUID(),
+    });
+  } catch (err) {
+    const conflict = err instanceof BackendBusinessError && err.isConflict;
+    controlErrorType.value = conflict ? "warning" : "error";
+    controlError.value = conflict
+      ? "任务状态已变化或已有单步在执行，已重新读取状态；本次没有额外放行动作。"
+      : describeError(err);
+  } finally {
+    // 包括 revision 过期/另一页面已操作的情况都重拉，不在浏览器自行推进节点或修改控制态。
+    await refresh();
+    controlBusy.value = false;
+  }
+}
 
 function classifyError(err: unknown): boolean {
   if (err instanceof ApiError && err.status === 404) {
@@ -84,36 +135,51 @@ function classifyError(err: unknown): boolean {
   return false;
 }
 
-async function refresh() {
+async function refreshOnce() {
+  const baseUrl = conn.baseUrl;
+  const api = wb();
   loading.value = true;
+  controlBaseUrl.value = "";
   degraded.value = "";
   lastError.value = "";
   try {
-    // task 与 jobs 是既有端点；confirmations/interventions 是新端点，
-    // 旧基座只会在新端点上 404 —— 分开捕获，避免整页误判为不支持
-    task.value = await wb().task(taskUuid);
-    jobs.value = await wb().taskJobs(taskUuid);
+    const [nextTask, nextJobs, nextConfirmations, nextInterventions, nextRuns] = await Promise.all([
+      api.task(taskUuid), api.taskJobs(taskUuid), api.taskManualConfirmations(taskUuid),
+      api.taskInterventions(taskUuid), api.taskNodeRuns(taskUuid),
+    ]);
+    if (baseUrl !== conn.baseUrl) return;
+    task.value = nextTask;
+    jobs.value = nextJobs;
+    confirmations.value = nextConfirmations;
+    interventions.value = nextInterventions;
+    runs.value = nextRuns;
+    controlBaseUrl.value = baseUrl;
   } catch (err) {
-    classifyError(err);
-    loading.value = false;
+    if (baseUrl === conn.baseUrl) classifyError(err);
     return;
+  } finally {
+    loading.value = false;
   }
-  try {
-    confirmations.value = await wb().taskManualConfirmations(taskUuid);
-    interventions.value = await wb().taskInterventions(taskUuid);
-  } catch (err) {
-    classifyError(err);
+  for (const confirmation of confirmations.value) {
+    if (confirmation.status === "pending" && !manualDecisionActor[confirmation.uuid]) {
+      manualDecisionActor[confirmation.uuid] = confirmation.assignee_user_ids[0] ?? "operator";
+    }
   }
-  loading.value = false;
 }
+const refresh = createRefreshQueue(refreshOnce);
 
 async function decideManualConfirmation(
   confirmation: BackendManualConfirmation,
   action: BackendManualConfirmationDecisionInput["action"],
 ) {
   if (confirmation.status !== "pending" || manualDecisionBusy[confirmation.uuid]) return;
-  const actor = manualDecisionActor.value.trim() || "operator";
+  const actor = (manualDecisionActor[confirmation.uuid] ?? "").trim() || "operator";
+  if (confirmation.assignee_user_ids.length && !confirmation.assignee_user_ids.includes(actor)) {
+    manualDecisionError[confirmation.uuid] = `只有被指派的用户（${confirmation.assignee_user_ids.join("、")}）可以确认`;
+    return;
+  }
   manualDecisionBusy[confirmation.uuid] = true;
+  manualDecisionError[confirmation.uuid] = "";
   try {
     await wb().decideManualConfirmation(confirmation.uuid, {
       action,
@@ -122,10 +188,63 @@ async function decideManualConfirmation(
     });
     await refresh();
   } catch (err) {
-    classifyError(err);
+    // 后端给的是具体原因（不在指派名单 / 已被处理 / 幂等键冲突），贴在卡片上而不是页顶
+    manualDecisionError[confirmation.uuid] = describeError(err);
+    if (!(err instanceof BackendBusinessError)) classifyError(err);
   } finally {
     manualDecisionBusy[confirmation.uuid] = false;
   }
+}
+
+// ── 人工确认倒计时：有 pending 单时每秒走表 ──
+
+const now = ref(Date.now());
+let clock: ReturnType<typeof setInterval> | null = null;
+const pendingConfirmations = computed(() => confirmations.value.filter((c) => c.status === "pending"));
+watch(
+  () => pendingConfirmations.value.length > 0,
+  (active) => {
+    if (active && clock === null) clock = setInterval(() => (now.value = Date.now()), 1000);
+    if (!active && clock !== null) {
+      clearInterval(clock);
+      clock = null;
+    }
+  },
+  { immediate: true },
+);
+onUnmounted(() => {
+  if (clock !== null) clearInterval(clock);
+});
+
+/** 距截止的剩余时间；到期后显示"已到期，等待调度器收敛为超时"。 */
+function confirmRemaining(c: BackendManualConfirmation): { text: string; percent: number; overdue: boolean } | null {
+  const deadline = parseIsoMs(c.deadline_at);
+  if (!deadline) return null;
+  const opened = parseIsoMs(c.opened_at) ?? deadline;
+  const total = Math.max(deadline - opened, 1);
+  const left = deadline - now.value;
+  if (left <= 0) return { text: "已到期，等待调度器收敛为超时", percent: 100, overdue: true };
+  const s = Math.floor(left / 1000);
+  const text =
+    s >= 3600
+      ? `剩余 ${Math.floor(s / 3600)} 小时 ${Math.floor((s % 3600) / 60)} 分`
+      : s >= 60
+        ? `剩余 ${Math.floor(s / 60)} 分 ${s % 60} 秒`
+        : `剩余 ${s} 秒`;
+  return { text, percent: Math.min(100, Math.round(((total - left) / total) * 100)), overdue: false };
+}
+
+/** job → 挂在它上面的待确认单（有则该 job 实际处于"等待人工确认"，不是"等待依赖"）。 */
+const pendingConfirmationByJob = computed(() => new Map(pendingConfirmations.value.map((c) => [c.workflow_node_job_uuid, c])));
+
+function jobDisplayStatus(job: BackendWorkflowNodeJob): { status: string; label?: string } {
+  if (pendingConfirmationByJob.value.has(job.uuid)) return { status: "running", label: "等待人工确认" };
+  return { status: job.status };
+}
+
+function focusNode(nodeUuid: string) {
+  activeNodeUuid.value = nodeUuid;
+  document.getElementById(`node-${nodeUuid}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
 // ── attempt 时间线：同 node 的 job 行按 attempt 分组（§6.3） ──
@@ -137,14 +256,27 @@ const nodeGroups = computed(() => {
     list.push(job);
     groups.set(job.workflow_node_uuid, list);
   }
-  const order = new Map(snapshotNodes(task.value).map((node, index) => [node.uuid, index]));
+  // 顺序：节点运行的 topological_index（调度器实际的 DAG 序）；没有 node-runs 时退回快照节点顺序
+  const runOrder = new Map(runs.value.map((run) => [run.workflow_node_uuid, run.topological_index]));
+  const snapshotOrder = new Map(snapshotNodes(task.value).map((node, index) => [node.uuid, index]));
+  const orderOf = (nodeUuid: string) => runOrder.get(nodeUuid) ?? (snapshotOrder.get(nodeUuid) ?? 1e9) + 10_000;
+  const runByNode = new Map(runs.value.map((run) => [run.workflow_node_uuid, run]));
   return [...groups.entries()]
     .map(([nodeUuid, list]) => {
       const sorted = [...list].sort((a, b) => a.attempt_no - b.attempt_no);
       const info = describeNodeJob(task.value, sorted[0]!);
-      return { nodeUuid, jobs: sorted, ...info };
+      const run = runByNode.get(nodeUuid) ?? null;
+      // 循环容器：节点头上显示轮次进度（control_data.loop），循环体节点每轮一个 attempt
+      const loopProgress =
+        run?.executor_kind === "loop"
+          ? describeLoopProgress(
+              (run.control_data as Record<string, unknown> | undefined)?.loop as Partial<BackendLoopProgress> | undefined,
+              run.status,
+            )
+          : "";
+      return { nodeUuid, jobs: sorted, run, loopProgress, ...info };
     })
-    .sort((a, b) => (order.get(a.nodeUuid) ?? 1e9) - (order.get(b.nodeUuid) ?? 1e9));
+    .sort((a, b) => orderOf(a.nodeUuid) - orderOf(b.nodeUuid));
 });
 
 // ── 任务摘要（标题 / 时间 / 用时 / 计数） ──
@@ -158,9 +290,9 @@ const EXECUTION_KIND_LABEL: Record<string, string> = {
 };
 
 const RUN_MODE_LABEL: Record<string, string> = {
-  normal: "普通",
+  normal: "自动执行",
   dry_run: "试运行",
-  step: "单步",
+  step: "逐步执行",
 };
 
 function fmtDuration(ms: number): string {
@@ -292,6 +424,24 @@ function jsonPreview(value: unknown): string {
   return text.length > 160 ? `${text.slice(0, 160)}…` : text;
 }
 
+function prettyJson(value: unknown): string {
+  const text = JSON.stringify(value, null, 2) ?? "";
+  return text.length > 4000 ? `${text.slice(0, 4000)}\n…` : text;
+}
+
+function hasEntries(value: unknown): boolean {
+  if (value === null || value === undefined) return false;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "object") return Object.keys(value as object).length > 0;
+  return true;
+}
+
+const TERMINAL_JOB = new Set<BackendWorkflowNodeJob["status"]>(["succeeded", "failed", "skipped", "canceled", "timeout"]);
+
+function jobIsTerminal(job: BackendWorkflowNodeJob): boolean {
+  return TERMINAL_JOB.has(job.status);
+}
+
 function printTask() {
   if (!task.value) return;
   const session = beginWorkflowPrint();
@@ -335,7 +485,7 @@ watch(
         </div>
         <StatusPill v-if="task" :status="task.status" />
         <NTag v-if="task && task.control_status !== 'active'" size="small" type="warning" :bordered="false">
-          控制态 {{ task.control_status }}
+          {{ task.control_status === 'paused' && task.run_mode === 'step' ? '等待下一步' : `控制态 ${task.control_status}` }}
         </NTag>
         <NButton size="small" secondary style="margin-left: auto" @click="refresh()">
           刷新
@@ -344,6 +494,18 @@ watch(
           打印实验单
         </NButton>
       </div>
+      <NAlert v-if="stepControl.visible" type="info" title="逐步执行" style="margin-top: 12px">
+        <p>{{ stepControl.hint }}</p>
+        <div class="head-row">
+          <NButton type="primary" size="small" :loading="controlBusy"
+            :disabled="!conn.schedulerLocal || !conn.online || controlBaseUrl !== conn.baseUrl || loading || controlBusy || !stepControl.canStep"
+            @click="commandTask('step')">执行下一步</NButton>
+          <NButton size="small"
+            :disabled="!conn.schedulerLocal || !conn.online || controlBaseUrl !== conn.baseUrl || loading || controlBusy || !stepControl.canResume"
+            @click="commandTask('resume')">切换自动执行</NButton>
+        </div>
+      </NAlert>
+      <NAlert v-if="controlError" :type="controlErrorType" style="margin-top: 8px">{{ controlError }}</NAlert>
       <div v-if="task" class="summary-grid">
         <div class="summary-item">
           <span class="summary-k">类型</span>
@@ -389,7 +551,7 @@ watch(
 
     <NSpin v-else-if="loading && !task" style="margin: 48px auto; display: block" />
 
-    <!-- 旧基座降级：新端点 404 → 后端版本不支持 -->
+    <!-- 端点缺失要明确报错，不改用 jobs 推导权威运行状态。 -->
     <NAlert v-else-if="degraded === 'unsupported'" type="info">
       当前进程不提供任务运行时读取端点（manual-confirmations / interventions /
       results / feedback-history）；请连接带 Workflow Authority 的进程后重试。
@@ -411,22 +573,42 @@ watch(
         {{ lastError }}
       </NAlert>
 
+      <!-- ── 只读画布：快照图 + 节点运行状态着色 ── -->
+      <NCard v-if="task && snapshotNodes(task).length" size="small" title="流程画布">
+        <template #header-extra>
+          <span class="dim">任务提交时固化的图，只读；点节点定位到下方作业</span>
+        </template>
+        <TaskGraphCanvas :task="task" :runs="runs" :confirmations="confirmations" :active-node-uuid="activeNodeUuid" @select="focusNode" />
+      </NCard>
+
       <!-- ── attempt 时间线（§6.3 红线：多 attempt = 同 node 多 job 行） ── -->
       <NCard size="small" title="节点作业">
         <template #header-extra>
           <span class="dim">按流程拓扑顺序；同一节点的多次 attempt 依次列出</span>
         </template>
         <NEmpty v-if="nodeGroups.length === 0" description="本任务尚未产生节点作业" size="small" />
-        <div v-for="group in nodeGroups" :key="group.nodeUuid" class="node-group">
+        <div
+          v-for="group in nodeGroups"
+          :id="`node-${group.nodeUuid}`"
+          :key="group.nodeUuid"
+          class="node-group"
+          :class="{ 'node-active': group.nodeUuid === activeNodeUuid }"
+          @click="activeNodeUuid = group.nodeUuid"
+        >
           <div class="node-head">
             <span class="node-name">{{ group.nodeName }}</span>
             <span v-if="group.deviceId" class="node-meta mono">{{ group.deviceId }} · {{ group.actionName }}</span>
             <span class="node-meta mono dim">node {{ shortId(group.nodeUuid) }}</span>
+            <span v-if="group.run" class="node-meta mono dim">#{{ group.run.topological_index + 1 }}</span>
+            <span v-if="group.run?.executor_kind === 'loop'" class="node-meta loop-chip">
+              循环{{ group.loopProgress ? ` · ${group.loopProgress}` : "" }}
+            </span>
           </div>
           <div v-for="job in group.jobs" :key="job.uuid" class="job-row">
             <div class="row-head clickable" @click="toggleJob(job.uuid)">
               <span class="attempt-chip">attempt {{ job.attempt_no }}</span>
-              <StatusPill :status="job.status" size="small" />
+              <span v-if="describeJobTrigger(job.trigger)" class="dim small">{{ describeJobTrigger(job.trigger) }}</span>
+              <StatusPill :status="jobDisplayStatus(job).status" :label="jobDisplayStatus(job).label" size="small" />
               <span class="mono dim">job {{ shortId(job.uuid) }}</span>
               <span v-if="job.started_at" class="dim">{{ fmtIso(job.started_at) }}<template v-if="job.finished_at"> → {{ fmtIso(job.finished_at) }}</template></span>
               <span v-if="jobDuration(job)" class="dim">用时 {{ jobDuration(job) }}</span>
@@ -439,48 +621,49 @@ watch(
             <div v-if="expanded.has(job.uuid)" class="job-runtime">
               <NSpin v-if="runtime[job.uuid]?.loading" size="small" />
               <template v-else-if="runtime[job.uuid]?.unsupported">
-                <span class="dim">后端版本不支持 results / feedback-history 端点。</span>
+                <span class="err">results / feedback-history 端点不存在，请检查服务部署及当前协议。</span>
               </template>
               <template v-else-if="runtime[job.uuid]?.error">
                 <span class="err">{{ runtime[job.uuid]?.error }}</span>
               </template>
               <template v-else>
                 <!-- result：每 job 至多一条 -->
+                <!--
+                  attempt 的结果就在 job 行上（return_info / error_info / error_resolution，
+                  record_job_terminal 写入）；`results` 端点是 Backend ↔ Edge 的结果信封，
+                  本机调度的 Host 不产生这张表，只有接入云端 Backend 时才有行。
+                -->
                 <div class="rt-block">
                   <div class="rt-title">执行结果</div>
-                  <div v-if="!runtime[job.uuid]?.result" class="dim small">
-                    尚无结果（job 未提交 result）
+                  <div v-if="!jobIsTerminal(job)" class="dim small">
+                    attempt 尚未结束，结束后返回值会写在这里。
                   </div>
-                  <div v-else class="small">
-                    <NTag
-                      size="small"
-                      :type="tagType(runtime[job.uuid]!.result!.outcome)"
-                      :bordered="false"
-                    >
-                      {{ runtime[job.uuid]!.result!.outcome }}
+                  <template v-else>
+                    <ActionResult :info="job.return_info" :errors="job.error_info" />
+                    <div v-if="hasEntries(job.error_resolution)" class="small">
+                      <span class="dim">异常处置（error_resolution）</span>
+                      <span class="mono">{{ jsonPreview(job.error_resolution) }}</span>
+                    </div>
+                  </template>
+                  <div v-if="runtime[job.uuid]?.result" class="small result-envelope">
+                    <NTag size="small" :type="tagType(runtime[job.uuid]!.result!.outcome)" :bordered="false">
+                      Backend 结果信封 · {{ runtime[job.uuid]!.result!.outcome }}
                     </NTag>
-                    <span class="dim">
-                      提交 {{ fmtIso(runtime[job.uuid]!.result!.committed_at) }}
-                    </span>
+                    <span class="dim">提交 {{ fmtIso(runtime[job.uuid]!.result!.committed_at) }}</span>
                     <span v-if="runtime[job.uuid]!.result!.consumed_at" class="dim">
                       · 已消费 {{ fmtIso(runtime[job.uuid]!.result!.consumed_at) }}
                     </span>
-                    <div class="mono small">
-                      return_info: {{ jsonPreview(runtime[job.uuid]!.result!.return_info) }}
-                    </div>
-                    <div
-                      v-if="runtime[job.uuid]!.result!.error_info.length"
-                      class="mono small err"
-                    >
-                      error_info: {{ jsonPreview(runtime[job.uuid]!.result!.error_info) }}
-                    </div>
                   </div>
                 </div>
-                <!-- feedback：sequence 自然序 -->
+                <!-- feedback：归档流按 sequence；本机调度只有 job 行上的最新一次 feedback_data -->
                 <div class="rt-block">
-                  <div class="rt-title">反馈归档</div>
-                  <div v-if="runtime[job.uuid]?.feedback.length === 0" class="dim small">
-                    没有反馈记录
+                  <div class="rt-title">反馈</div>
+                  <div v-if="runtime[job.uuid]?.feedback.length === 0 && !hasEntries(job.feedback_data)" class="dim small">
+                    动作执行期间没有上报反馈。
+                  </div>
+                  <div v-else-if="runtime[job.uuid]?.feedback.length === 0" class="small">
+                    <span class="dim">最新反馈（feedback_data，序号 {{ job.feedback_sequence }}）</span>
+                    <pre class="mono json-block">{{ prettyJson(job.feedback_data) }}</pre>
                   </div>
                   <div
                     v-for="fb in runtime[job.uuid]?.feedback ?? []"
@@ -522,10 +705,20 @@ watch(
               <span class="dim">开启 {{ fmtIso(c.opened_at) }}</span>
               <span v-if="c.deadline_at" class="dim">截止 {{ fmtIso(c.deadline_at) }}</span>
             </div>
+            <div v-if="c.status === 'pending' && confirmRemaining(c)" class="confirm-countdown" :class="{ overdue: confirmRemaining(c)!.overdue }">
+              <span class="countdown-text">{{ confirmRemaining(c)!.text }}</span>
+              <NProgress
+                type="line"
+                :percentage="confirmRemaining(c)!.percent"
+                :show-indicator="false"
+                :height="4"
+                :status="confirmRemaining(c)!.overdue ? 'error' : confirmRemaining(c)!.percent > 80 ? 'warning' : 'default'"
+              />
+            </div>
             <div v-if="c.description" class="desc">{{ c.description }}</div>
             <div class="mono small">param: {{ jsonPreview(c.param) }}</div>
             <div v-if="c.assignee_user_ids.length" class="small dim">
-              指派：{{ c.assignee_user_ids.join("、") }}
+              指派：{{ c.assignee_user_ids.join("、") }}（只有名单中的用户可以确认）
             </div>
             <div v-else-if="c.status === 'pending'" class="small confirm-unrestricted">
               未指派：任何已登录操作员均可确认
@@ -534,12 +727,23 @@ watch(
               {{ c.confirmed_by ?? "—" }} 于 {{ fmtIso(c.decided_at) }} 决策
               <span v-if="c.comment" class="dim">：{{ c.comment }}</span>
             </div>
+            <div v-if="manualDecisionError[c.uuid]" class="small err">{{ manualDecisionError[c.uuid] }}</div>
             <div v-if="c.status === 'pending'" class="confirm-actions">
-              <NInput
-                v-model:value="manualDecisionActor"
+              <NSelect
+                v-if="c.assignee_user_ids.length"
+                v-model:value="manualDecisionActor[c.uuid]"
                 size="small"
                 class="confirm-actor"
-                placeholder="确认人 ID"
+                :options="c.assignee_user_ids.map((id) => ({ label: id, value: id }))"
+                placeholder="以谁的身份确认"
+                @click.stop
+              />
+              <NInput
+                v-else
+                v-model:value="manualDecisionActor[c.uuid]"
+                size="small"
+                class="confirm-actor"
+                placeholder="确认人 ID（可留空，记为 operator）"
                 @click.stop
               />
               <NButton
@@ -754,7 +958,24 @@ watch(
 }
 
 .confirm-actor {
-  width: 150px;
+  width: 170px;
+}
+
+.confirm-countdown {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 2px 0 4px;
+}
+
+.countdown-text {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: #b45309;
+}
+
+.confirm-countdown.overdue .countdown-text {
+  color: #b42318;
 }
 
 .desc {
@@ -790,6 +1011,15 @@ watch(
 
 .node-group {
   margin-bottom: 12px;
+  padding: 4px 6px;
+  margin-left: -6px;
+  margin-right: -6px;
+  border-radius: 8px;
+  transition: background 0.2s;
+}
+
+.node-group.node-active {
+  background: #eaf0ff;
 }
 
 .node-head {
@@ -833,6 +1063,16 @@ watch(
   font-family: var(--font-mono);
 }
 
+.loop-chip {
+  display: inline-flex;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #5b21b6;
+  background: #ede9fe;
+}
+
 .expand-hint {
   margin-left: auto;
   font-size: 12px;
@@ -862,6 +1102,33 @@ watch(
   align-items: center;
   gap: 8px;
   padding: 2px 0;
+}
+
+.json-block {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  max-height: 240px;
+  overflow: auto;
+  background: #f7f8f9;
+  border-radius: 8px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: #3d4650;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.json-block.err {
+  background: #fff5f5;
+  color: #b42318;
+}
+
+.result-envelope {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .seq {

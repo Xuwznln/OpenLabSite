@@ -13,10 +13,26 @@ export interface SnapshotNode {
   action_name?: string;
   action_type?: string;
   type?: string;
+  /** 循环体成员：所在循环节点（type=loop）的 uuid */
+  parent_uuid?: string | null;
   meta_data?: Record<string, unknown>;
   param?: Record<string, unknown>;
   execution_policy?: Record<string, unknown>;
   execution_timeout_seconds?: number;
+}
+
+/** attempt 触发原因的人话：首次 / 重试 / 循环下一轮。 */
+export function describeJobTrigger(trigger: string | undefined): string {
+  switch (trigger) {
+    case "retry_decision":
+      return "重试";
+    case "loop_iteration":
+      return "循环下一轮";
+    case "recovery":
+      return "恢复";
+    default:
+      return "";
+  }
 }
 
 export interface NodeJobDescription {
