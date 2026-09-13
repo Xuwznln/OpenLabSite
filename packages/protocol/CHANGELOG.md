@@ -1,5 +1,13 @@
 # Changelog
 
+## 未发布：SDK 包规范化
+
+- 以 OpenLab TypeScript SDK 明确包定位，保留 `@openlab/protocol` 和全部公共 API。
+- 仓库、主页与问题反馈链接迁移至 OpenLabSite，增加 SDK 关键词。
+- 按项目许可证声明 Apache-2.0，并随包携带 LICENSE。
+- 补齐中英文 README、源码安装、导出入口和发布前检查说明。
+- 本次不修改运行时、OpenAPI 快照或版本号，不执行 npm 发布。
+
 - 发布前同步：从当前微后端重新生成快照，移除已删除的设备进程日志路由，更新统一事件流声明；
   日志客户端和 smoke 继续使用 system.logSources / system.logs，不引入新端点。
 

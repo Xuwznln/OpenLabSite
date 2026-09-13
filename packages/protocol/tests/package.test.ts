@@ -8,6 +8,10 @@ import { OPENLAB_API_PREFIX, OPENLAB_PROTOCOL_VERSION } from "../src/common";
 
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
   version: string;
+  name: string;
+  license: string;
+  repository: { url: string; directory: string };
+  bugs: { url: string };
   type: string;
   exports: Record<string, unknown>;
   files: string[];
@@ -16,6 +20,21 @@ const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url),
 };
 
 describe("@openlab/protocol 发包形态", () => {
+  it("SDK 元数据、双语文档和许可证完整", () => {
+    expect(pkg.name).toBe("@openlab/protocol");
+    expect(pkg.license).toBe("Apache-2.0");
+    expect(pkg.repository.url).toBe("git+https://github.com/Xuwznln/OpenLabSite.git");
+    expect(pkg.repository.directory).toBe("packages/protocol");
+    expect(pkg.bugs.url).toBe("https://github.com/Xuwznln/OpenLabSite/issues");
+    expect(pkg.files).toEqual(expect.arrayContaining(["LICENSE", "README.en.md", "CHANGELOG.md"]));
+    const license = readFileSync(new URL("../LICENSE", import.meta.url), "utf8").replace(/\r\n/g, "\n").trim();
+    expect(license).toBe(readFileSync(new URL("../../../LICENSE", import.meta.url), "utf8").replace(/\r\n/g, "\n").trim());
+    for (const file of ["README.md", "README.en.md"]) {
+      const readme = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+      expect(readme).toContain("OpenLab TypeScript SDK");
+      expect(readme).not.toContain("github.com/Xuwznln/OpenLab/");
+    }
+  });
   it("OPENLAB_PROTOCOL_VERSION 与 package.json 版本一致", () => {
     expect(OPENLAB_PROTOCOL_VERSION).toBe(pkg.version);
     expect(pkg.version).toMatch(/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/);

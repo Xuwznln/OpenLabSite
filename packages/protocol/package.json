@@ -1,7 +1,7 @@
 {
   "name": "@openlab/protocol",
   "version": "2.0.0",
-  "description": "Typed, framework-agnostic client and machine-readable catalog for the Uni-Lab-OS microbackend HTTP API (OpenLab Edge protocol v1)",
+  "description": "OpenLab TypeScript SDK for the Uni-Lab-OS backend: typed API clients, error handling, operation catalog and OpenAPI definitions.",
   "keywords": [
     "openlab",
     "uni-lab-os",
@@ -9,18 +9,19 @@
     "laboratory-automation",
     "edge",
     "api-client",
+    "sdk",
     "typescript"
   ],
-  "homepage": "https://github.com/Xuwznln/OpenLab/tree/main/packages/protocol#readme",
+  "homepage": "https://github.com/Xuwznln/OpenLabSite/tree/main/packages/protocol#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Xuwznln/OpenLab.git",
+    "url": "git+https://github.com/Xuwznln/OpenLabSite.git",
     "directory": "packages/protocol"
   },
   "bugs": {
-    "url": "https://github.com/Xuwznln/OpenLab/issues"
+    "url": "https://github.com/Xuwznln/OpenLabSite/issues"
   },
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "type": "module",
   "sideEffects": false,
   "engines": {
@@ -29,7 +30,9 @@
   "files": [
     "dist",
     "openapi",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "README.en.md",
+    "LICENSE"
   ],
   "types": "./dist/index.d.ts",
   "module": "./dist/index.js",
