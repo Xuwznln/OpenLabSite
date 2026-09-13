@@ -156,12 +156,13 @@ index for its "推荐前端" cards.
 
 ## Deployment
 
-Static Vite build with hash routing and relative base path, suitable for GitHub Pages or any
-static host; the microbackend itself does not host the UI. `pnpm run build` writes to `dist/`
-(not committed). On `main`, GitHub Actions validates the protocol package, builds the web
-application and pushes the static files to the public
-[`OpenLab-site`](https://github.com/Xuwznln/OpenLab-site) repository. Operators open the site and
-enter the `unilab` process address in the connection popover (default `http://127.0.0.1:8002`).
+Static Vite build with hash routing and relative base path. The microbackend does not host
+the UI. GitHub Actions checks the protocol and application, builds `dist/` (not committed),
+and deploys an artifact directly to this repository's GitHub Pages:
+[OpenLabSite](https://xuwznln.github.io/OpenLabSite/).
+Set Settings → Pages → Source to **GitHub Actions**. No deploy key or cross-repository push
+is used. Pull requests only validate; deployment runs on `main`.
+Operators connect to their own microbackend (default `http://127.0.0.1:8002`).
 
 ## AI-assisted Domain Adaptation
 
