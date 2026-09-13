@@ -9,7 +9,7 @@
 - rethinklab.jpg： https://thinklab.sjtu.edu.cn/ 首页带有 `SJTU-ReThinkLab logo` 替代文本的内嵌 JPEG。
 - rethinklab.png：从上述 JPG 使用内置 imagegen 背景提取得到的透明 PNG；原始 JPG 保留。提示要求仅将灰白背景变成真实透明，保留蓝黄红标志和黑色 RETHINKLAB 字样，不重设计。
 - sjtu.png： https://vi.sjtu.edu.cn/img/base/Logo.png （上海交通大学视觉形象识别系统的校徽原图）。
-- bza.png： https://www.bza.edu.cn/adminapi/public/default/logo.png （学院官网首页标识）。
+- bza.png：用户于 2026-09-13 提供的 `北京学院.png`，北京中关村学院中英文横版透明标识，按原图替换。
 - deepmodeling.png： https://avatars.githubusercontent.com/u/32671488?v=4 （https://github.com/deepmodeling 官方组织头像）。
 
 图片随站点托管，运行时不依赖机构网站提供图片。
