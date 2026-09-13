@@ -8,6 +8,9 @@ const assetBase = import.meta.env.BASE_URL;
 <template>
   <header class="project-header" aria-label="项目机构与开源入口">
     <div class="institutions">
+      <a class="institution" href="https://www.sjtu.edu.cn/" target="_blank" rel="noopener noreferrer" aria-label="上海交通大学">
+        <img :src="`${assetBase}brands/sjtu.png`" alt="上海交通大学校徽" width="38" height="38" />
+      </a>
       <a class="institution" href="https://thinklab.sjtu.edu.cn/" target="_blank" rel="noopener noreferrer">
         <img :src="`${assetBase}brands/rethinklab.jpg`" alt="" width="38" height="38" />
         <span><small>上海交通大学</small>ReThinkLab</span>

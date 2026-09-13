@@ -7,6 +7,7 @@
 这些标识的商标和图像权利归各机构所有，不因本仓库代码许可证而重新授权。
 
 - rethinklab.jpg： https://thinklab.sjtu.edu.cn/ 首页带有 `SJTU-ReThinkLab logo` 替代文本的内嵌 JPEG。
+- sjtu.png： https://vi.sjtu.edu.cn/img/base/Logo.png （上海交通大学视觉形象识别系统的校徽原图）。
 - bza.png： https://www.bza.edu.cn/adminapi/public/default/logo.png （学院官网首页标识）。
 - deepmodeling.png： https://avatars.githubusercontent.com/u/32671488?v=4 （https://github.com/deepmodeling 官方组织头像）。
 

@@ -1,5 +1,7 @@
 <div align="center">
 
+**简体中文** | [English](README.en.md)
+
 <img src="public/brands/openlab.svg" alt="OpenLab" width="88" />
 
 # OpenLab
@@ -19,6 +21,8 @@
 
 <br />
 
+<a href="https://www.sjtu.edu.cn/"><img src="public/brands/sjtu.png" alt="上海交通大学校徽" height="68" /></a>
+&nbsp;&nbsp;
 <a href="https://thinklab.sjtu.edu.cn/"><img src="public/brands/rethinklab.jpg" alt="上海交通大学 ReThinkLab" height="76" /></a>
 &nbsp;&nbsp;&nbsp;&nbsp;
 <a href="https://www.bza.edu.cn/"><img src="public/brands/bza.png" alt="北京中关村学院" height="56" /></a>
@@ -111,7 +115,7 @@ HTTP 拉取业务正文，SSE 通知触发重新读取；调度、物料权威�
 | `packages/protocol/` | 类型化客户端、契约校验与协议测试 |
 | `docs/protocol/` | 接口约定与各业务域规范 |
 
-进一步阅读：[架构说明](docs/ARCHITECTURE.md) · [协议总览](docs/protocol/README.md) · [AI 改造指南](docs/VIBE_GUIDE.md)
+进一步阅读：[TypeScript SDK](packages/protocol/README.md) · [架构说明](docs/ARCHITECTURE.md) · [协议总览](docs/protocol/README.md) · [AI 改造指南](docs/VIBE_GUIDE.md)
 
 ### 验证
 
