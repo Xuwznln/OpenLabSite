@@ -21,13 +21,12 @@ Connect devices · Manage materials · Build workflows · Trace every execution
 
 <br />
 
-<a href="https://www.sjtu.edu.cn/"><img src="public/brands/sjtu.png" alt="Shanghai Jiao Tong University emblem" height="68" /></a>
-&nbsp;&nbsp;
-<a href="https://thinklab.sjtu.edu.cn/"><img src="public/brands/rethinklab.png" alt="Shanghai Jiao Tong University ReThinkLab" height="76" /></a>
-&nbsp;&nbsp;&nbsp;&nbsp;
-<a href="https://www.bza.edu.cn/"><img src="public/brands/bza.png" alt="Beijing Zhongguancun Academy" height="56" /></a>
-&nbsp;&nbsp;&nbsp;&nbsp;
-<a href="https://github.com/deepmodeling"><img src="public/brands/deepmodeling.png" alt="DeepModeling" height="64" /></a>
+<table><tr>
+<td align="center" valign="middle"><a href="https://www.sjtu.edu.cn/"><img src="public/brands/sjtu.png" alt="Shanghai Jiao Tong University emblem" height="56" /></a></td>
+<td align="center" valign="middle"><a href="https://thinklab.sjtu.edu.cn/"><img src="public/brands/rethinklab.png" alt="Shanghai Jiao Tong University ReThinkLab" height="64" /></a></td>
+<td align="center" valign="middle"><a href="https://www.bza.edu.cn/"><img src="public/brands/bza.png" alt="Beijing Zhongguancun Academy" height="56" /></a></td>
+<td align="center" valign="middle"><a href="https://github.com/deepmodeling"><img src="public/brands/deepmodeling.png" alt="DeepModeling" height="56" /></a></td>
+</tr></table>
 
 Shanghai Jiao Tong University **ReThinkLab** &nbsp; · &nbsp; **Beijing Zhongguancun Academy** &nbsp; · &nbsp; **DeepModeling**
 

@@ -21,13 +21,12 @@
 
 <br />
 
-<a href="https://www.sjtu.edu.cn/"><img src="public/brands/sjtu.png" alt="上海交通大学校徽" height="68" /></a>
-&nbsp;&nbsp;
-<a href="https://thinklab.sjtu.edu.cn/"><img src="public/brands/rethinklab.png" alt="上海交通大学 ReThinkLab" height="76" /></a>
-&nbsp;&nbsp;&nbsp;&nbsp;
-<a href="https://www.bza.edu.cn/"><img src="public/brands/bza.png" alt="北京中关村学院" height="56" /></a>
-&nbsp;&nbsp;&nbsp;&nbsp;
-<a href="https://github.com/deepmodeling"><img src="public/brands/deepmodeling.png" alt="DeepModeling" height="64" /></a>
+<table><tr>
+<td align="center" valign="middle"><a href="https://www.sjtu.edu.cn/"><img src="public/brands/sjtu.png" alt="上海交通大学校徽" height="56" /></a></td>
+<td align="center" valign="middle"><a href="https://thinklab.sjtu.edu.cn/"><img src="public/brands/rethinklab.png" alt="上海交通大学 ReThinkLab" height="64" /></a></td>
+<td align="center" valign="middle"><a href="https://www.bza.edu.cn/"><img src="public/brands/bza.png" alt="北京中关村学院" height="56" /></a></td>
+<td align="center" valign="middle"><a href="https://github.com/deepmodeling"><img src="public/brands/deepmodeling.png" alt="DeepModeling" height="56" /></a></td>
+</tr></table>
 
 上海交通大学 **ReThinkLab** &nbsp; · &nbsp; **北京中关村学院** &nbsp; · &nbsp; **DeepModeling**
 
