@@ -1,58 +1,60 @@
 <div align="center">
 
-**简体中文** | [English](README.en.md)
+**English** | [简体中文](README.zh-CN.md)
 
 <img src="https://raw.githubusercontent.com/Xuwznln/OpenLabSite/main/public/brands/openlab.svg" alt="OpenLab" width="64" />
 
 # OpenLab TypeScript SDK
 
-面向 Uni-Lab-OS 后端的类型化 API 客户端
+A typed API client for the Uni-Lab-OS backend
 
 `@openlab/protocol` · TypeScript · ESM · Node.js 22+ · Apache-2.0
 
-[项目首页](https://github.com/Xuwznln/OpenLabSite) · [接口规范](../../docs/protocol/README.md) · [版本记录](CHANGELOG.md) · [反馈问题](https://github.com/Xuwznln/OpenLabSite/issues)
+[Project](https://github.com/Xuwznln/OpenLabSite) · [API specification](https://github.com/Xuwznln/OpenLabSite/tree/main/docs/protocol) · [Changelog](CHANGELOG.md) · [Issues](https://github.com/Xuwznln/OpenLabSite/issues)
 
 </div>
 
 ---
 
-## 概述
+## Overview
 
-本包提供框架无关的后端 API 客户端、请求与响应类型、统一错误处理、机器可读操作目录以及 OpenAPI 快照。
-可用于浏览器应用、Node.js 工具和自动化测试，不依赖 Vue 或应用状态管理。
+This framework-independent SDK provides backend API clients, request and response types, normalized errors,
+a machine-readable operation catalog, and an OpenAPI snapshot. It supports browser applications, Node.js tools,
+and automated tests without depending on Vue or application state management.
 
-**SDK 名称与 HTTP 协议版本分开管理。** npm 包名保持 `@openlab/protocol`，
-现有入口 `createEdgeApi` 保持兼容；它访问的是后端 API，不负责设备驱动、调度或数据库访问。
+The package name remains `@openlab/protocol`, and the existing `createEdgeApi` entry point is preserved.
+It accesses backend APIs; it does not execute device drivers, schedule workflows, or access databases directly.
 
-## 安装与运行环境
+## Installation and requirements
 
-- Node.js 22+；浏览器应用需支持 ESM，并由调用方处理 CORS 和网络访问权限。
-- 唯一运行时依赖为 `axios`。
-- 提供 ESM、TypeScript 声明、声明映射和 source map，不提供 CommonJS 入口。
+- Node.js 22+; browser consumers need ESM support and appropriate CORS/network access.
+- The only runtime dependency is `axios`.
+- ESM, TypeScript declarations, declaration maps, and source maps are provided. There is no CommonJS entry point.
 
-### 本仓库内使用
+### In this workspace
 
-应用通过 `workspace:*` 引用 SDK：
+The application consumes the SDK through `workspace:*`:
 
 ```bash
 pnpm install --frozen-lockfile
 pnpm --filter @openlab/protocol build
 ```
 
-### 从源码打包安装
+### Install a source-built package
 
-没有可用的 npm 发布版本时，使用本仓库源码构建的安装包：
+If an npm release is not available, build a tarball from this repository:
 
 ```bash
 pnpm --dir packages/protocol pack --pack-destination ../../artifacts
-# 在消费项目中，用上一步实际生成的文件名安装：
+# From your consumer project, use the actual filename produced above:
 npm install /path/to/openlab-protocol-<version>.tgz
 ```
 
-`prepack` 会执行契约检查与测试。正式发布后，可按已发布版本安装
-`npm install @openlab/protocol@<version>`；源码中的版本号不代表该版本已经发布到 npm。
+The `prepack` hook runs contract checks and tests.
+After a release is published, install an available version with `npm install @openlab/protocol@<version>`.
+A version in the source tree does not by itself mean that version is published on npm.
 
-## 快速使用
+## Quick start
 
 ```ts
 import { createEdgeApi, ApiError, BackendBusinessError } from "@openlab/protocol";
@@ -66,42 +68,43 @@ try {
   console.log({ health, roots, tasks });
 } catch (error) {
   if (error instanceof BackendBusinessError) {
-    console.error("后端业务错误", error.message);
+    console.error("Backend business error", error.message);
   } else if (error instanceof ApiError) {
-    console.error("请求失败", error.status, error.message);
+    console.error("Request failed", error.status, error.message);
   } else {
     throw error;
   }
 }
 ```
 
-`127.0.0.1:8002` 是调用方机器上的后端管理 API，不是 HostLink 设备通信端口。
-能力是否可用取决于后端版本、进程角色和当前运行状态。
+The default endpoint is the backend management API on the caller's computer, not the HostLink device port.
+Availability depends on the backend build, process role, and runtime state.
 
-### 实时通知
+### Real-time notifications
 
-SDK 提供事件流地址；订阅生命周期由应用管理。通知用于触发 HTTP 重读，不应作为完整业务正文。
+The SDK exposes event-stream URLs; the caller manages subscriptions.
+Notifications trigger fresh HTTP reads and are not complete business data.
 
 ```ts
 const events = new EventSource(api.domains.workflowBackend.eventsUrl());
-// 根据接口规范订阅所需事件，并重新读取对应资源。
-// 页面卸载或切换连接时关闭订阅：
+// Subscribe to documented events and refresh the relevant resources.
+// Close the stream when the view unmounts or its connection changes:
 events.close();
 ```
 
-Node.js 调用方如需订阅事件，应自行选择兼容的 SSE 客户端。
+Node.js consumers should supply their own compatible SSE client when needed.
 
-## API 导出
+## Public exports
 
-| 入口 | 内容 |
+| Entry point | Contents |
 | --- | --- |
-| `@openlab/protocol` | 客户端、类型、错误类与公共辅助函数 |
-| `@openlab/protocol/catalog` | 操作目录与检索工具 |
-| `@openlab/protocol/openapi` | 生成的 OpenAPI 类型 |
-| `@openlab/protocol/openapi.json` | 后端导出的原始 OpenAPI 快照 |
-| `@openlab/protocol/package.json` | 包元数据 |
+| `@openlab/protocol` | Clients, types, error classes, and public helpers |
+| `@openlab/protocol/catalog` | Operation catalog and lookup helpers |
+| `@openlab/protocol/openapi` | Generated OpenAPI types |
+| `@openlab/protocol/openapi.json` | Backend-exported OpenAPI snapshot |
+| `@openlab/protocol/package.json` | Package metadata |
 
-不要直接导入 `dist/` 内部文件。
+Do not import internal `dist/` paths.
 
 ```ts
 import { operationsOf, findOperation } from "@openlab/protocol/catalog";
@@ -113,46 +116,47 @@ type HealthOperation = OpenApiPaths["/api/v1/health"]["get"];
 type InstallRequest = OpenApiComponents["schemas"]["DriverPackageInstallRequest"];
 ```
 
-## 业务域
+## API domains
 
-| `api.domains.*` | 用途 |
+| `api.domains.*` | Purpose |
 | --- | --- |
-| `system` | 健康、日志、组网与运行诊断 |
-| `runtimeV1` | 执行端点、命令与作业投影 |
-| `workflowBackend` | 工作流、任务、节点作业与执行控制 |
-| `registry` | 设备和物料类型注册表 |
-| `materialsV1` | 物料、位点、库存与变更账本 |
-| `graphsV1` | 设备图 |
-| `telemetryV1` / `historyV1` | 遥测状态与历史记录 |
-| `decisions` | 状态告警与动作异常处理 |
-| `driverPackages` / `deviceProcesses` | 驱动包与受管设备进程 |
-| `labV1` / `debug` | 实验室布局与只读数据库诊断 |
+| `system` | Health, logs, networking, and runtime diagnostics |
+| `runtimeV1` | Execution endpoints, commands, and job projections |
+| `workflowBackend` | Workflows, tasks, node jobs, and execution control |
+| `registry` | Device and material type registry |
+| `materialsV1` | Materials, sites, inventory, and change ledger |
+| `graphsV1` | Device graphs |
+| `telemetryV1` / `historyV1` | Telemetry state and history |
+| `decisions` | Status alerts and action-error handling |
+| `driverPackages` / `deviceProcesses` | Driver packages and managed device processes |
+| `labV1` / `debug` | Laboratory layout and read-only database diagnostics |
 
-具体角色、字段和路由以 [协议规范](../../docs/protocol/README.md) 及随包 OpenAPI 快照为准。
-操作目录是契约描述，不替代后端权限检查。
+Use the [API specification](https://github.com/Xuwznln/OpenLabSite/tree/main/docs/protocol)
+and bundled OpenAPI snapshot for role, field, and route details.
+The operation catalog describes the contract; it does not enforce backend authorization.
 
-## 错误与写操作
+## Errors and mutations
 
-| 错误 | 处理原则 |
+| Error | Handling |
 | --- | --- |
-| `ApiError`，`status = 0` | 检查网络、超时和 CORS；保留上次读取的数据 |
-| `ApiError`，404 / 503 | 根据接口与响应判断资源不存在、能力不可用或服务未就绪 |
-| `ApiError`，409 / 422 / 5xx | 分别处理冲突、参数校验或服务端错误；保留原始错误体用于诊断 |
-| `BackendBusinessError` | 后端信封中的业务失败；结合业务码处理，不视作成功响应 |
+| `ApiError`, `status = 0` | Check network access, timeouts, and CORS; retain previous data |
+| `ApiError`, 404 / 503 | Distinguish a missing resource, unavailable capability, or service not ready using endpoint semantics |
+| `ApiError`, 409 / 422 / 5xx | Handle conflicts, validation failures, or server errors; retain the original body for diagnostics |
+| `BackendBusinessError` | Handle the business code from the backend envelope; do not treat it as success |
 
-物料写入使用幂等信封，工作流等写入可能需要版本校验。
-**不要无条件重试写请求或重新生成幂等键**；应根据对应接口规范决定恢复策略。
-长操作应使用有间隔、有截止时间的轮询，并处理所有终态，不能忙循环等待。
+Material mutations use idempotency envelopes, and workflow mutations may require revision checks.
+Do not blindly retry writes or regenerate idempotency keys. Follow the relevant endpoint's recovery rules.
+Poll long-running operations with a delay and deadline, handling every terminal state rather than busy-waiting.
 
-## 版本与兼容性
+## Versioning and compatibility
 
-SDK 遵循 SemVer，HTTP API 版本独立存在于 `/api/v1` 路径中。
-`OPENLAB_PROTOCOL_VERSION` 与包版本一致，由测试校验。
+The SDK follows SemVer; the HTTP API version in `/api/v1` is independent.
+Tests ensure `OPENLAB_PROTOCOL_VERSION` matches the package version.
 
-兼容性不仅取决于 `unilabos` 版本号，也取决于后端构建是否包含所需端点。
-最低版本与构建条件见 [CHANGELOG.md](CHANGELOG.md)，不支持的能力应显式降级。
+Compatibility depends on both the `unilabos` version and whether a particular build includes the required endpoints.
+See [CHANGELOG.md](CHANGELOG.md) for version/build requirements and explicitly degrade unsupported features.
 
-## 维护与发布
+## Maintenance and releases
 
 ```bash
 pnpm --filter @openlab/protocol check
@@ -160,19 +164,20 @@ pnpm --filter @openlab/protocol test
 pnpm --filter @openlab/protocol build
 ```
 
-修改接口契约时，需同步后端、快照、生成类型、目录与测试，并使用独立后端环境执行 live smoke。
-只更新包说明和元数据时，不应重新生成或改变接口契约。
+Contract changes require synchronized backend, snapshot, generated-type, catalog, and test changes,
+plus live smoke tests against an isolated backend.
+Documentation and metadata updates should not regenerate or alter the API contract.
 
-发布前检查：
+Before releasing:
 
-1. 更新版本常量、包版本与 CHANGELOG，声明兼容条件。
-2. 通过契约测试及主应用检查，检查 tarball 中的导出、类型、文档和许可证。
-3. 核实 npm scope 权限、目标版本及发布身份。
-4. 从支持 npm provenance 的可信 CI 发布；普通本地打包不等于发布。
-5. 发布后从 npm 安装验证。禁止将访问令牌写入源码或文档。
+1. Update the version constant, package version, and changelog with compatibility requirements.
+2. Pass contract and application checks; inspect tarball exports, types, documentation, and license.
+3. Verify npm scope permissions, the target version, and publisher identity.
+4. Publish from trusted CI supporting npm provenance. Local packaging does not publish anything.
+5. Verify an installation from npm. Never put access tokens in source files or documentation.
 
-本仓库未因这些说明而自动配置或触发 npm 发布。
+These instructions do not configure or trigger an npm release automatically.
 
-## 许可证
+## License
 
-[Apache License 2.0](LICENSE)。后端、设备驱动与第三方标识遵循各自许可证。
+[Apache License 2.0](LICENSE). The backend, device drivers, and third-party marks retain their own licenses.

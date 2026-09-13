@@ -1,74 +1,76 @@
 <div align="center">
 
-**简体中文** | [English](README.en.md)
+**English** | [简体中文](README.zh-CN.md)
 
 <img src="public/brands/openlab.svg" alt="OpenLab" width="88" />
 
 # OpenLab
 
-### 开放实验室，一个工作台。
+### One workspace for your open laboratory.
 
-连接设备 · 管理物料 · 编排实验 · 追踪每一次执行
+Connect devices · Manage materials · Build workflows · Trace every execution
 
 <p>
-  <a href="https://xuwznln.github.io/OpenLabSite/"><img src="https://img.shields.io/badge/OpenLab-在线体验-087f5b?style=flat-square" alt="在线体验" /></a>
-  <a href="https://github.com/Xuwznln/OpenLabSite/actions/workflows/deploy.yml"><img src="https://github.com/Xuwznln/OpenLabSite/actions/workflows/deploy.yml/badge.svg?branch=main" alt="构建与部署状态" /></a>
+  <a href="https://xuwznln.github.io/OpenLabSite/"><img src="https://img.shields.io/badge/OpenLab-Try_it_online-087f5b?style=flat-square" alt="Try it online" /></a>
+  <a href="https://github.com/Xuwznln/OpenLabSite/actions/workflows/deploy.yml"><img src="https://github.com/Xuwznln/OpenLabSite/actions/workflows/deploy.yml/badge.svg?branch=main" alt="Build and deployment status" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache--2.0-blue?style=flat-square" alt="Apache-2.0" /></a>
   <a href="https://github.com/Xuwznln/OpenLabSite/stargazers"><img src="https://img.shields.io/github/stars/Xuwznln/OpenLabSite?style=flat-square&logo=github" alt="GitHub Stars" /></a>
 </p>
 
-**[在线使用](https://xuwznln.github.io/OpenLabSite/)** · **[本地启动](docs/LOCAL_START.md)** · **[接口文档](docs/protocol/README.md)** · **[反馈问题](https://github.com/Xuwznln/OpenLabSite/issues)**
+**[Open the app](https://xuwznln.github.io/OpenLabSite/)** · **[Local setup](docs/LOCAL_START.md)** · **[API reference](docs/protocol/README.md)** · **[Report an issue](https://github.com/Xuwznln/OpenLabSite/issues)**
 
 <br />
 
-<a href="https://www.sjtu.edu.cn/"><img src="public/brands/sjtu.png" alt="上海交通大学校徽" height="68" /></a>
+<a href="https://www.sjtu.edu.cn/"><img src="public/brands/sjtu.png" alt="Shanghai Jiao Tong University emblem" height="68" /></a>
 &nbsp;&nbsp;
-<a href="https://thinklab.sjtu.edu.cn/"><img src="public/brands/rethinklab.jpg" alt="上海交通大学 ReThinkLab" height="76" /></a>
+<a href="https://thinklab.sjtu.edu.cn/"><img src="public/brands/rethinklab.png" alt="Shanghai Jiao Tong University ReThinkLab" height="76" /></a>
 &nbsp;&nbsp;&nbsp;&nbsp;
-<a href="https://www.bza.edu.cn/"><img src="public/brands/bza.png" alt="北京中关村学院" height="56" /></a>
+<a href="https://www.bza.edu.cn/"><img src="public/brands/bza.png" alt="Beijing Zhongguancun Academy" height="56" /></a>
 &nbsp;&nbsp;&nbsp;&nbsp;
 <a href="https://github.com/deepmodeling"><img src="public/brands/deepmodeling.png" alt="DeepModeling" height="64" /></a>
 
-上海交通大学 **ReThinkLab** &nbsp; · &nbsp; **北京中关村学院** &nbsp; · &nbsp; **DeepModeling**
+Shanghai Jiao Tong University **ReThinkLab** &nbsp; · &nbsp; **Beijing Zhongguancun Academy** &nbsp; · &nbsp; **DeepModeling**
 
 </div>
 
 ---
 
-## 为实验室而建
+## Built for the laboratory
 
-OpenLab 是 [Uni-Lab-OS](https://github.com/deepmodeling/Uni-Lab-OS) 的本地优先操作前端。
-从设备动作到工作流执行，把物料、运行状态、异常处理和执行记录放在同一个工作台里。
+OpenLab is a local-first operations interface for [Uni-Lab-OS](https://github.com/deepmodeling/Uni-Lab-OS).
+It brings device actions, materials, workflow execution, exception handling, and execution records into one workspace.
 
-**前端独立部署，后端掌管数据。** 浏览器默认连接本机 `http://127.0.0.1:8002`，
-不默认连接公共演示服务器，不直接读写数据库。
+**The frontend is deployed independently; the backend owns the data.** By default, the browser connects to
+`http://127.0.0.1:8002` on your computer. It does not connect to a public demo server by default or access databases directly.
 
-| | 能力 | 你可以做什么 |
+| | Capability | What you can do |
 | --- | --- | --- |
-| 🧪 | 设备操作 | 查看设备与实时属性，填写动作参数，提交单点动作 |
-| 📦 | 物料管理 | 入库、挂载、移动与跨设备转运，查看位点和库存 |
-| 🧩 | 工作流编排 | 在画布中组织实验步骤，提交运行并跟踪节点进度 |
-| 🗺️ | 实验室布局 | 浏览设备与物料空间关系，配置区域、围墙和装配 |
-| 🔔 | 异常与干预 | 查看状态告警，按后端提供的选项处理动作异常 |
-| 🔎 | 追溯与诊断 | 查询执行历史、实时日志、注册表与运行状态 |
+| 🧪 | Device operation | Inspect devices and live properties, fill in action parameters, and submit individual actions |
+| 📦 | Material management | Register stock, mount, move, and transfer materials across devices; inspect sites and inventory |
+| 🧩 | Workflow authoring | Arrange experimental steps on a canvas, submit runs, and track node progress |
+| 🗺️ | Laboratory layout | Explore device and material placement; configure areas, walls, and assemblies |
+| 🔔 | Exceptions and intervention | Review status alerts and resolve action errors using options provided by the backend |
+| 🔎 | Traceability and diagnostics | Inspect execution history, live logs, registry entries, and runtime state |
 
-> 当前发布的是**通用版**，不提供有机、生物、材料等学科切换。
-> 旧版领域内容保留在旧仓库归档分支，见 [通用版边界](docs/GENERAL_EDITION.md)。
+> This release is the **general edition**, without organic chemistry, biology, or materials-science theme switching.
+> Earlier domain-specific content remains archived in the old repository; see [General edition scope](docs/GENERAL_EDITION.md).
+> The application UI and the linked detailed guides are currently primarily in Chinese.
 
-## 快速开始
+## Quick start
 
-### 直接使用
+### Use the hosted app
 
-1. 按 [本地启动教程](docs/LOCAL_START.md) 启动 Uni-Lab-OS 后端。
-2. 打开 **[OpenLabSite](https://xuwznln.github.io/OpenLabSite/)**。
-3. 在右上角「连接设置」确认地址为 `http://127.0.0.1:8002`。
+1. Start your Uni-Lab-OS backend following the [local setup guide](docs/LOCAL_START.md).
+2. Open **[OpenLabSite](https://xuwznln.github.io/OpenLabSite/)**.
+3. Open connection settings (`连接设置`) in the upper-right corner and confirm `http://127.0.0.1:8002`.
 
-后端在另一台电脑时，手动填写它的可访问地址。
-浏览器可能要求本地网络访问权限；如果 HTTPS 页面无法连接本地 HTTP 后端，可以使用下面的本地前端方式。
+If the backend runs on another computer, enter its reachable address manually.
+Your browser may request local-network permission. If the HTTPS site cannot reach your local HTTP backend,
+run the frontend locally as described below.
 
-### 本地开发
+### Local development
 
-需要 **Node.js 22+**、**pnpm 10.30.3** 和已经准备好环境的 Uni-Lab-OS 后端。
+You need **Node.js 22+**, **pnpm 10.30.3**, and a Uni-Lab-OS backend with its environment already configured.
 
 ```bash
 git clone https://github.com/Xuwznln/OpenLabSite.git
@@ -77,47 +79,58 @@ pnpm install --frozen-lockfile
 pnpm run dev
 ```
 
-打开终端提示的地址（默认 `http://localhost:5180`）。
-**5180 是前端，8002 是后端管理 API**，不要填写 HostLink 通信端口。
+Open the address printed in the terminal (default: `http://localhost:5180`).
+**5180 serves the frontend; 8002 is the backend management API.** Do not enter the HostLink communication port.
 
-后端的完整启动命令、默认分进程部署、设备加载与连接排查见 **[本地启动教程](docs/LOCAL_START.md)**。
+For a HostLink backend, run the following from your configured **Uni-Lab-OS source directory**, not the frontend directory:
+
+```bash
+python -m unilabos.app.main --backend hostlink --port 8002 --config unilabos/config/example_config.py --disable_browser
+```
+
+The default startup runs the backend scheduler and Host device runtime in separate processes.
+This example starts without a device graph; install and start devices through the frontend, or supply your graph at startup.
+See the **[local setup guide](docs/LOCAL_START.md)** for device loading, deployment details, and troubleshooting.
 
 <details>
-<summary><strong>自定义地址与代理配置</strong></summary>
+<summary><strong>Custom addresses and proxy settings</strong></summary>
 
-默认无需创建 `.env`。只有需要改变部署方式时，才配置以下选项：
+No `.env` file is required by default. Configure these options only when changing your deployment:
 
-| 配置 | 用途 |
+| Setting | Purpose |
 | --- | --- |
-| `VITE_DEFAULT_EDGE_URL` | 首次访问的默认后端地址 |
-| `OPENLAB_EDGE_PROXY_TARGET` | 开发时由 Vite 将同源 `/api` 请求代理到指定后端 |
-| `VITE_OPENLAB_DEVICE_INDEX_URL` | 自定义驱动包索引 |
-| `VITE_OPENLAB_SITE_INDEX_URL` | 自定义前端站点目录 |
+| `VITE_DEFAULT_EDGE_URL` | Default backend address on the first visit |
+| `OPENLAB_EDGE_PROXY_TARGET` | Backend target for Vite's same-origin `/api` development proxy |
+| `VITE_OPENLAB_DEVICE_INDEX_URL` | Custom driver-package index |
+| `VITE_OPENLAB_SITE_INDEX_URL` | Custom frontend-site directory |
 
-连接设置保存在浏览器本地；旧公共演示地址会一次性恢复为默认地址，其他自定义地址保留。
-生产部署请限制 CORS 和网络访问，不要将未受保护的管理端口暴露到公网。更多配置见 [.env.example](.env.example)。
+Connection settings are stored in your browser. Old public demo addresses are migrated to the default once;
+other custom addresses are preserved.
+For production deployments, restrict CORS and network access. Never expose an unprotected management port to the internet.
+See [.env.example](.env.example) for configuration details.
 
 </details>
 
-## 开发与架构
+## Development and architecture
 
 **Vue 3 · TypeScript · Pinia · Naive UI · Vue Flow · Vite**
 
-前端通过独立的 `@openlab/protocol` 客户端访问后端。
-HTTP 拉取业务正文，SSE 通知触发重新读取；调度、物料权威与执行状态仍由后端负责。
+The frontend accesses the backend through the standalone `@openlab/protocol` client.
+HTTP retrieves business data, while SSE notifications trigger fresh reads.
+Scheduling, authoritative material state, and execution state remain the backend's responsibility.
 
-| 目录 | 职责 |
+| Directory | Responsibility |
 | --- | --- |
-| `src/views/` | 设备、物料、工作流、监控等业务页面 |
-| `src/components/` | 通用交互组件 |
-| `src/stores/` | 连接与页面状态 |
-| `src/features/` | 表单、布局、工作流等纯逻辑 |
-| `packages/protocol/` | 类型化客户端、契约校验与协议测试 |
-| `docs/protocol/` | 接口约定与各业务域规范 |
+| `src/views/` | Device, material, workflow, and monitoring pages |
+| `src/components/` | Shared interaction components |
+| `src/stores/` | Connection and page state |
+| `src/features/` | Pure logic for forms, layouts, workflows, and related features |
+| `packages/protocol/` | Typed client, contract validation, and protocol tests |
+| `docs/protocol/` | API conventions and domain specifications |
 
-进一步阅读：[TypeScript SDK](packages/protocol/README.md) · [架构说明](docs/ARCHITECTURE.md) · [协议总览](docs/protocol/README.md) · [AI 改造指南](docs/VIBE_GUIDE.md)
+Further reading: [TypeScript SDK](packages/protocol/README.md) · [Architecture](docs/ARCHITECTURE.md) · [Protocol overview](docs/protocol/README.md) · [AI customization guide](docs/VIBE_GUIDE.md)
 
-### 验证
+### Validation
 
 ```bash
 pnpm run protocol:check
@@ -126,30 +139,31 @@ pnpm run app:test
 pnpm run app:build
 ```
 
-按顺序执行：协议检查会重新生成协议包构建产物，不应与其他测试同时运行。
-涉及协议变更时，还需按 [协议文档](docs/protocol/README.md) 对真实后端运行 live smoke；
-带 `--write` 的验证会写入数据，应使用独立测试环境。
+Run these commands in order: the protocol check regenerates the protocol package's build output
+and must not run concurrently with the other tests.
+Protocol changes also require a live smoke test against a real backend, as described in the
+[protocol documentation](docs/protocol/README.md). Tests using `--write` modify data; use an isolated test environment.
 
-### 发布
+### Deployment
 
-`main` 分支通过 GitHub Actions 校验、构建并发布到**本仓库的 GitHub Pages**。
-PR 只执行验证，不发布站点；无需跨仓库部署密钥，也不提交生成的 `dist/`。
+GitHub Actions validates and builds `main`, then publishes directly to **this repository's GitHub Pages**.
+Pull requests run validation only. No cross-repository deployment key is needed, and generated `dist/` files are not committed.
 
-## 参与共建
+## Contributing
 
-欢迎提交 Issue、改进文档、优化交互或贡献代码。
+Issues, documentation improvements, interaction refinements, and code contributions are welcome.
 
-- 开始前阅读 [AGENTS.md](AGENTS.md)，保持现有后端协议边界。
-- UI 缺少接口能力时，先明确提出需求，不自行发明协议。
-- 提交前通过上面的四项检查，不提交凭据、数据库或实验室数据。
-- 感谢每一位 [贡献者](https://github.com/Xuwznln/OpenLabSite/graphs/contributors)。
+- Read [AGENTS.md](AGENTS.md) first and respect the existing backend protocol boundaries.
+- If the UI needs an API capability that does not exist, raise the requirement rather than inventing a protocol.
+- Pass all four checks above before submitting. Never commit credentials, databases, or laboratory data.
+- Thank you to every [contributor](https://github.com/Xuwznln/OpenLabSite/graphs/contributors).
 
-项目代码采用 [Apache-2.0](LICENSE) 许可证。机构 Logo 的权利归各机构所有，
-来源见 [标识说明](public/brands/README.md)；后端与设备驱动遵循各自许可证。
+Project code is licensed under [Apache-2.0](LICENSE). Institution logos remain the property of their respective owners;
+see [logo sources](public/brands/README.md). The backend and device drivers have their own licenses.
 
 ## Star History
 
-如果 OpenLab 对你有帮助，欢迎点亮一颗 **Star**，也欢迎分享你的实验室使用场景。
+If OpenLab helps your work, consider giving it a **Star** and sharing how you use it in your laboratory.
 
 <div align="center">
   <a href="https://www.star-history.com/#Xuwznln/OpenLabSite&Date">
@@ -159,5 +173,5 @@ PR 只执行验证，不发布站点；无需跨仓库部署密钥，也不提�
       <img alt="OpenLabSite Star History" src="https://api.star-history.com/svg?repos=Xuwznln/OpenLabSite&amp;type=Date" width="760" />
     </picture>
   </a>
-  <p><sub>图表由 Star History 提供；无星标记录时可能显示空图。若图片无法加载，可点击前往查看。</sub></p>
+  <p><sub>Chart provided by Star History. It may be empty when there are no star records. If the image does not load, click through to view it.</sub></p>
 </div>

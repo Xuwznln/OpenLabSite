@@ -31,7 +31,7 @@
     "dist",
     "openapi",
     "CHANGELOG.md",
-    "README.en.md",
+    "README.zh-CN.md",
     "LICENSE"
   ],
   "types": "./dist/index.d.ts",

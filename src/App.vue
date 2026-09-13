@@ -19,6 +19,7 @@ import {
   GitNetworkOutline,
   HardwareChipOutline,
   LayersOutline,
+  LogoGithub,
   MapOutline,
   PauseCircleOutline,
   PulseOutline,
@@ -30,7 +31,6 @@ import {
 } from "@vicons/ionicons5";
 import CommandPalette from "./components/CommandPalette.vue";
 import ConnectionBar from "./components/ConnectionBar.vue";
-import ProjectHeader from "./components/ProjectHeader.vue";
 import SiteCatalog from "./components/SiteCatalog.vue";
 import RunDock from "./components/RunDock.vue";
 import ScanDrawer from "./components/ScanDrawer.vue";
@@ -304,7 +304,6 @@ onUnmounted(() => {
           </aside>
 
           <main class="stage">
-            <ProjectHeader />
             <div class="stage-top">
               <div class="crumb">
                 <span class="crumb-title">{{ pageTitle }}</span>
@@ -323,6 +322,10 @@ onUnmounted(() => {
                   <span class="lab-name">{{ lab.displayName }}</span>
                 </div>
                 <ConnectionBar />
+                <a class="quick-btn github-link" href="https://github.com/Xuwznln/OpenLabSite" target="_blank" rel="noopener noreferrer" title="OpenLabSite on GitHub" aria-label="OpenLabSite on GitHub">
+                  <NIcon size="17"><LogoGithub /></NIcon>
+                  <span>GitHub</span>
+                </a>
               </div>
             </div>
             <div class="stage-body">
@@ -538,6 +541,8 @@ pre,
 </style>
 
 <style scoped>
+.github-link { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
+
 .shell {
   display: flex;
   height: 100vh;

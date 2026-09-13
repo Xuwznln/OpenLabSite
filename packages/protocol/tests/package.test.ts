@@ -26,10 +26,10 @@ describe("@openlab/protocol 发包形态", () => {
     expect(pkg.repository.url).toBe("git+https://github.com/Xuwznln/OpenLabSite.git");
     expect(pkg.repository.directory).toBe("packages/protocol");
     expect(pkg.bugs.url).toBe("https://github.com/Xuwznln/OpenLabSite/issues");
-    expect(pkg.files).toEqual(expect.arrayContaining(["LICENSE", "README.en.md", "CHANGELOG.md"]));
+    expect(pkg.files).toEqual(expect.arrayContaining(["LICENSE", "README.zh-CN.md", "CHANGELOG.md"]));
     const license = readFileSync(new URL("../LICENSE", import.meta.url), "utf8").replace(/\r\n/g, "\n").trim();
     expect(license).toBe(readFileSync(new URL("../../../LICENSE", import.meta.url), "utf8").replace(/\r\n/g, "\n").trim());
-    for (const file of ["README.md", "README.en.md"]) {
+    for (const file of ["README.md", "README.zh-CN.md"]) {
       const readme = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
       expect(readme).toContain("OpenLab TypeScript SDK");
       expect(readme).not.toContain("github.com/Xuwznln/OpenLab/");
