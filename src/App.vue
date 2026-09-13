@@ -30,6 +30,7 @@ import {
 } from "@vicons/ionicons5";
 import CommandPalette from "./components/CommandPalette.vue";
 import ConnectionBar from "./components/ConnectionBar.vue";
+import ProjectHeader from "./components/ProjectHeader.vue";
 import SiteCatalog from "./components/SiteCatalog.vue";
 import RunDock from "./components/RunDock.vue";
 import ScanDrawer from "./components/ScanDrawer.vue";
@@ -300,16 +301,10 @@ onUnmounted(() => {
               </template>
             </nav>
 
-            <div class="rail-foot">
-              <span class="conn-dot" :class="conn.online ? 'conn-on' : 'conn-off'" />
-              <div class="conn-meta">
-                <span class="conn-text">{{ conn.online ? "后端已连接" : "后端未连接" }}</span>
-                <span class="conn-role">{{ conn.roleLabel }}</span>
-              </div>
-            </div>
           </aside>
 
           <main class="stage">
+            <ProjectHeader />
             <div class="stage-top">
               <div class="crumb">
                 <span class="crumb-title">{{ pageTitle }}</span>
@@ -326,7 +321,6 @@ onUnmounted(() => {
                 </button>
                 <div class="lab-chip">
                   <span class="lab-name">{{ lab.displayName }}</span>
-                  <span class="lab-domain">{{ conn.baseUrl.replace(/^https?:\/\//, "") }}</span>
                 </div>
                 <ConnectionBar />
               </div>
@@ -339,7 +333,7 @@ onUnmounted(() => {
                     <div class="offline-text">
                       <strong>后端未连接</strong>
                       <span class="offline-detail">
-                        {{ conn.baseUrl }} · {{ conn.lastError || "等待进程就绪" }}。页面保留最后一次数据，恢复后自动继续同步。
+                        启动本地服务或在右上角配置连接；已有数据暂不更新。
                       </span>
                     </div>
                     <div class="offline-actions">
@@ -359,10 +353,6 @@ onUnmounted(() => {
                 <RouterView />
               </div>
             </div>
-            <footer class="project-credits dim">
-              <a href="https://github.com/Xuwznln/OpenLabSite/blob/main/docs/LOCAL_START.md" target="_blank" rel="noopener noreferrer">本地启动教程</a>
-              <span>上海交通大学rethinklab · 北京中关村学院 · DeepModellings</span>
-            </footer>
           </main>
         </div>
 
@@ -548,18 +538,6 @@ pre,
 </style>
 
 <style scoped>
-.project-credits {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 6px 18px;
-  padding: 8px 16px;
-  flex-shrink: 0;
-  font-size: 11px;
-  border-top: 1px solid var(--hairline);
-}
-.project-credits a { color: var(--domain-accent); }
-
 .shell {
   display: flex;
   height: 100vh;

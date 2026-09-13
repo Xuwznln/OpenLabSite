@@ -18,7 +18,6 @@ import {
   PauseCircleOutline,
   ScanOutline,
   SparklesOutline,
-  TerminalOutline,
 } from "@vicons/ionicons5";
 import { hostlinkPeerState, type BackendWorkflowTask } from "@openlab/protocol";
 import StatusPill from "../components/StatusPill.vue";
@@ -280,7 +279,7 @@ function openScan() {
       </div>
       <div class="band-lab">
         <span class="lab-name">{{ lab.displayName }}</span>
-        <span class="lab-sub">{{ conn.roleLabel }} · {{ domain.config.name }}模式</span>
+        <span class="lab-sub"><template v-if="conn.online">{{ conn.roleLabel }} · </template>{{ domain.config.name }}模式</span>
       </div>
       <div class="lights">
         <div v-for="light in lights" :key="light.key" class="light" :title="light.hint">
@@ -304,15 +303,6 @@ function openScan() {
       </div>
     </header>
 
-    <div v-if="!conn.online" class="offline-note">
-      <NIcon size="18"><TerminalOutline /></NIcon>
-      <div>
-        <strong>尚未连接后端。</strong>
-        在右上角连接设置中填写 Uni-Lab-OS 管理端地址（默认 <code>http://127.0.0.1:8002</code>），
-        连接后总览会自动刷新。
-        <span v-if="conn.lastError" class="mono err">{{ conn.lastError }}</span>
-      </div>
-    </div>
 
     <div class="grid">
       <!-- ── 左主区 ── -->
@@ -518,6 +508,7 @@ function openScan() {
 /* ── 遥测带 ── */
 .band {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 24px;
   padding: 14px 20px;
@@ -528,6 +519,7 @@ function openScan() {
 
 .band-clock {
   display: flex;
+  flex-shrink: 0;
   flex-direction: column;
   line-height: 1;
 }
@@ -546,6 +538,7 @@ function openScan() {
 
 .band-lab {
   display: flex;
+  flex-shrink: 0;
   flex-direction: column;
   padding-left: 20px;
   border-left: 1px solid rgba(255, 255, 255, 0.1);
@@ -636,25 +629,6 @@ function openScan() {
   font-size: 10.5px;
   color: #7d8b99;
   letter-spacing: 0.06em;
-}
-
-.offline-note {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-  padding: 14px 18px;
-  border: 1px solid #f3d9a4;
-  background: #fff8e8;
-  border-radius: 12px;
-  font-size: 13px;
-  color: #6b4a00;
-}
-
-.offline-note .err {
-  display: block;
-  margin-top: 4px;
-  font-size: 11px;
-  color: #b91c1c;
 }
 
 /* ── 布局 ── */

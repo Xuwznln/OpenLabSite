@@ -2,7 +2,9 @@
 
 在线使用：[OpenLabSite](https://xuwznln.github.io/OpenLabSite/) · [本地启动教程](docs/LOCAL_START.md)
 
-项目署名：上海交通大学rethinklab · 北京中关村学院 · DeepModellings
+项目署名：[上海交通大学 ReThinkLab](https://thinklab.sjtu.edu.cn/) · [北京中关村学院](https://www.bza.edu.cn/) · [DeepModeling](https://github.com/deepmodeling)
+
+欢迎在 [GitHub](https://github.com/Xuwznln/OpenLabSite) Star、反馈问题与参与贡献。
 
 默认连接本机后端 `http://127.0.0.1:8002`，不默认连接公共演示服务。
 旧版保存的公共演示地址会一次性迁移为默认地址；随后仍可手动设置远程后端。

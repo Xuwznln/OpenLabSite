@@ -76,15 +76,17 @@ async function apply(url = draft.value) {
 <template>
   <div class="conn-bar">
     <StatusPill
-      :status="conn.online ? 'online' : 'offline'"
-      :label="conn.online ? conn.roleLabel : '未连接'"
+      v-if="conn.online"
+      status="online"
+      :label="conn.roleLabel"
     />
     <NPopover v-model:show="show" trigger="click" placement="bottom-end" :width="380">
       <template #trigger>
-        <NButton quaternary circle size="small" title="连接设置">
+        <NButton quaternary size="small" title="连接设置" aria-label="连接设置">
           <template #icon>
             <NIcon><SettingsOutline /></NIcon>
           </template>
+          连接设置
         </NButton>
       </template>
       <div class="pop">

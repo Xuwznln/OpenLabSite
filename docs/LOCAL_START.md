@@ -64,4 +64,4 @@ pnpm run dev
 
 ## 项目署名
 
-上海交通大学rethinklab · 北京中关村学院 · DeepModellings
+上海交通大学 ReThinkLab · 北京中关村学院 · DeepModeling
