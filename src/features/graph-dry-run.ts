@@ -23,6 +23,7 @@
  * 纯函数：所有数据（schema 缓存、批次列表）由调用方注入，便于单测。
  */
 import type { DeviceActionSchemaDetail } from "@openlab/protocol";
+import type { SiteIndex, SiteBindings } from "./site-bindings";
 import {
   missingParamEntries,
   type MissingParamEntry,
@@ -50,6 +51,8 @@ export interface DryRunIssue {
 }
 
 export interface DryRunNodeInput {
+  siteBindings?: SiteBindings;
+  siteOwners?: Record<string, string>;
   id: string;
   /** "action" | "manual" | "branch" | "slot"（画布节点类型）。 */
   type: string;
@@ -86,6 +89,7 @@ export interface DryRunLot {
 }
 
 export interface DryRunInput {
+  sites?: SiteIndex | null;
   nodes: readonly DryRunNodeInput[];
   edges: readonly DryRunEdgeInput[];
   /** 动作 schema 缓存，key 为 `${deviceId}|${actionName}`；未知传 null 值。 */
@@ -352,6 +356,8 @@ export function dryRunWorkflow(input: DryRunInput): DryRunReport {
       });
     }
     const entries = missingParamEntries({
+      sites: input.sites, siteBindings: node.siteBindings, siteOwners: node.siteOwners,
+      deviceId: node.deviceId, actionName: node.actionName,
       detail: input.schemas.get(schemaKey(node)) ?? null,
       paramJson: node.paramJson,
       mappedPaths: mappedPaths.get(node.id) ?? [],

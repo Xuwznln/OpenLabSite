@@ -32,6 +32,7 @@ import {
   type ParameterField,
 } from "./workflow-variables";
 import { describeError } from "./errors";
+import { SiteIndex, confirmSite, siteBindingStatus, siteParamValue, type SiteBindings, type SiteContext } from "./site-bindings";
 
 export interface PlaceholderOption {
   label: string;
@@ -70,6 +71,9 @@ export interface ActionParamFormOptions {
   onSuccess?: (message: string) => void;
   /** schema 带 goal_default 且当前参数为空对象时预填（设备页单点动作）。 */
   prefillFromGoalDefault?: boolean;
+  siteBindings?: Ref<SiteBindings>;
+  siteOwners?: () => Record<string, string>;
+  siteDirectory?: { readonly index: SiteIndex | null; readonly loading: boolean; readonly error: string; refresh: () => Promise<void> };
 }
 
 /** deduct（物料出库）字段的草稿状态：资源类 + 实例名 + 数量 + 条码 + 出库中标记。 */
@@ -137,6 +141,11 @@ export function useActionParamForm(options: ActionParamFormOptions) {
   const materialOptionState = ref<PlaceholderOptionState>(emptyOptionState());
   const deviceOptionState = ref<PlaceholderOptionState>(emptyOptionState());
   const siteOptionState = ref<PlaceholderOptionState>(emptyOptionState());
+  const localSiteIndex = ref<SiteIndex | null>(null);
+  const siteBindings = options.siteBindings ?? ref<SiteBindings>({});
+  const siteIndex = computed(() => options.siteDirectory ? options.siteDirectory.index : localSiteIndex.value);
+  const siteLoading = computed(() => options.siteDirectory?.loading ?? siteOptionState.value.loading);
+  const siteError = computed(() => options.siteDirectory?.error ?? siteOptionState.value.error);
   const classOptionState = ref<PlaceholderOptionState>(emptyOptionState());
   const confirmOptionState = ref<PlaceholderOptionState>(emptyOptionState());
   const deductOptionState = ref<PlaceholderOptionState>(emptyOptionState());
@@ -161,7 +170,7 @@ export function useActionParamForm(options: ActionParamFormOptions) {
   function placeholderUsable(field: PlaceholderField): boolean {
     if (field.kind === "unsupported") return false;
     // confirm 永远可用：数据源失败降级为纯自由输入，而非回退原始字段。
-    if (field.kind === "confirm") return true;
+    if (field.kind === "confirm" || field.kind === "site") return true;
     return !optionStateFor(field.kind).error;
   }
 
@@ -212,23 +221,21 @@ export function useActionParamForm(options: ActionParamFormOptions) {
   /** SiteSlot 数据源：物料聚合的 sites 展开成「物料名 · Site 标签」，值为 site uuid。 */
   async function loadSites(seq: number): Promise<void> {
     siteOptionState.value = { ...emptyOptionState(), loading: true };
+    localSiteIndex.value = null;
     try {
-      const data = await options.api().domains.materialsV1.instances();
+      if (options.siteDirectory) await options.siteDirectory.refresh();
+      else {
+        const data = await options.api().domains.materialsV1.instances();
+        if (seq !== loadSeq) return;
+        localSiteIndex.value = new SiteIndex(data);
+      }
       if (seq !== loadSeq) return;
-      const opts = data.flatMap((item) =>
-        (item.sites ?? []).map((site) => ({
-          label: `${item.material.name} · ${site.label}${
-            site.occupied_material_uuid ? "（已占用）" : ""
-          }`,
-          value: site.site_uuid,
-        })),
-      );
-      siteOptionState.value = { ...emptyOptionState(), options: opts };
+      siteOptionState.value = { ...emptyOptionState(), options: siteIndex.value?.sites ?? [] };
     } catch {
       if (seq !== loadSeq) return;
       siteOptionState.value = {
         ...emptyOptionState(),
-        error: "Site 列表拉取失败，已回退为原始输入",
+        error: "Site 列表拉取失败，参数待校验，请重试",
       };
     }
   }
@@ -421,7 +428,9 @@ export function useActionParamForm(options: ActionParamFormOptions) {
   function placeholderCurrentValue(
     field: PlaceholderField,
   ): string | string[] | null {
-    const value = paramObject.value[field.param];
+    const value = field.kind === "site"
+      ? siteParamValue(field.param, paramObject.value, schemaDetail.value?.goal_default)
+      : paramObject.value[field.param];
     if (field.kind === "resource" || field.kind === "deduct") {
       if (field.multiple) {
         return (Array.isArray(value) ? value : [])
@@ -456,6 +465,7 @@ export function useActionParamForm(options: ActionParamFormOptions) {
   function placeholderSelectOptions(
     field: PlaceholderField,
   ): { label: string; value: string }[] {
+    if (field.kind === "site") return siteCandidates(field);
     const opts = [...optionStateFor(field.kind).options];
     const current = placeholderCurrentValue(field);
     const values = Array.isArray(current) ? current : current ? [current] : [];
@@ -474,6 +484,10 @@ export function useActionParamForm(options: ActionParamFormOptions) {
     field: PlaceholderField,
     selected: string | string[] | null,
   ): void {
+    if (field.kind === "site") {
+      options.onError?.("请通过 Site 绑定窗口确认目标物料和槽位");
+      return;
+    }
     try {
       const param = parseNodeParam(options.paramJson.value);
       if (field.kind === "resource") {
@@ -506,6 +520,42 @@ export function useActionParamForm(options: ActionParamFormOptions) {
       options.onParamWritten?.(null, selected);
     } catch {
       options.onError?.("参数不是合法 JSON 对象");
+    }
+  }
+
+  /** Site 绑定单独确认，不经通用 placeholder 选择器直接写回。 */
+  const siteContext = computed<SiteContext>(() => ({ deviceId: options.device.value,
+    actionName: options.action.value, param: paramObject.value, owners: options.siteOwners?.() }));
+  const siteCandidates = (field: PlaceholderField) => siteIndex.value?.candidates(field.param, siteContext.value) ?? [];
+  function siteStatus(field: PlaceholderField) {
+    const param = siteContext.value.param;
+    return siteBindingStatus(field.param, {
+      ...siteContext.value,
+      param: { ...param, [field.param]: siteParamValue(field.param, param, schemaDetail.value?.goal_default) },
+    }, siteIndex.value, Object.hasOwn(param, field.param) ? siteBindings.value[field.param] : undefined);
+  }
+  function siteOptional(field: PlaceholderField): boolean {
+    const goal = asRecord(asRecord(asRecord(schemaDetail.value?.schema)?.properties)?.goal);
+    return Boolean(goal) && (!Array.isArray(goal?.required) || !goal.required.includes(field.param));
+  }
+  async function refreshSites() { await loadSites(loadSeq); }
+  function confirmSiteBinding(field: PlaceholderField, value: string | null) {
+    try {
+      const param = parseNodeParam(options.paramJson.value);
+      const bindings = { ...siteBindings.value };
+      if (value === null) delete bindings[field.param];
+      else {
+        if (!siteIndex.value) throw new Error("Site 目录尚不可用，请刷新后重试");
+        bindings[field.param] = confirmSite(field.param, value, siteContext.value, siteIndex.value);
+      }
+      param[field.param] = value ?? "";
+      siteBindings.value = bindings;
+      options.paramJson.value = JSON.stringify(param, null, 2);
+      options.onParamWritten?.(field.param, value ?? "");
+      return true;
+    } catch (error) {
+      options.onError?.(describeError(error));
+      return false;
     }
   }
 
@@ -665,6 +715,7 @@ export function useActionParamForm(options: ActionParamFormOptions) {
   }
 
   return {
+    siteBindings, siteIndex, siteCandidates, siteStatus, siteOptional, siteLoading, siteError, refreshSites, confirmSiteBinding,
     placeholderFields,
     actionSchemaHint,
     schemaDetail,

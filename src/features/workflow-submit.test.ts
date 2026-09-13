@@ -469,6 +469,7 @@ describe("submitWorkflow", () => {
     const api = fakeApi();
     await submitWorkflow(api, { name: "逐步实验", nodes: [], runMode: "step" });
     expect(api.calls).toEqual(["create", "save@1", "task"]);
+    expect(api.saveGraph).toHaveBeenCalledWith("wf-1", expect.objectContaining({ site_binding_mode: "preserve" }));
     expect(api.createTask).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ run_mode: "step", workflow_uuid: "wf-1" }));
   });
 

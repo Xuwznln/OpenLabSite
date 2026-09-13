@@ -124,7 +124,7 @@ describe("missingParamEntries", () => {
     });
     expect(missing).toEqual([]);
 
-    // schema 明确 required 时仍计未填；选了 site uuid 视为已填
+    // schema 明确 required 时仍计未填；仅填一个 UUID 字符串不能替代目录校验和确认。
     const requiredSite = makeDetail({
       required: ["site"],
       placeholderKeys: { site: "unilabos_sites" },
@@ -141,8 +141,8 @@ describe("missingParamEntries", () => {
         detail: requiredSite,
         paramJson: JSON.stringify({ site: "site-uuid-1" }),
         mappedPaths: [],
-      }),
-    ).toEqual([]);
+      }).map((entry) => entry.reason),
+    ).toEqual(["site-unavailable"]);
   });
 
   it("被上游 @@@ 映射覆盖的参数不算未填", () => {

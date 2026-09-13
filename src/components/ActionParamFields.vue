@@ -18,6 +18,7 @@ import {
 import type { ActionParamForm } from "../features/action-param-form";
 import type { PlaceholderOption } from "../features/action-param-form";
 import type { ParameterField } from "../features/workflow-variables";
+import SiteBindingField from "./SiteBindingField.vue";
 
 const props = withDefaults(
   defineProps<{
@@ -46,6 +47,7 @@ function fieldLayout(field: ParameterField): "compact" | "block" {
 }
 
 const {
+  siteCandidates, siteStatus, siteOptional, siteLoading, siteError, refreshSites, confirmSiteBinding,
   activePlaceholderFields,
   hasFocusConcept,
   placeholderFallbackHints,
@@ -206,6 +208,19 @@ function renderDeductOption(option: SelectOption): VNodeChild {
             已出库：{{ deductCurrentLabel(field) }}
           </div>
         </template>
+        <SiteBindingField
+          v-else-if="field.kind === 'site'"
+          :key="`${field.param}:${form.schemaDetail.value?.device_id}:${form.schemaDetail.value?.action_name}`"
+          :field="field.param"
+          :value="placeholderCurrentValue(field)"
+          :candidates="siteCandidates(field)"
+          :status="siteStatus(field)"
+          :optional="siteOptional(field)"
+          :loading="siteLoading"
+          :error="siteError"
+          :confirm="(value) => confirmSiteBinding(field, value)"
+          @refresh="refreshSites"
+        />
         <NSelect
           v-else
           :value="placeholderCurrentValue(field)"

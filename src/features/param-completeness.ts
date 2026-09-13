@@ -22,13 +22,14 @@ import {
   resourceRefUuid,
 } from "./action-placeholders";
 import { flattenParameterFields, parseNodeParam } from "./workflow-variables";
+import { siteBindingStatus, siteParamValue, type SiteIndex, type SiteBindings } from "./site-bindings";
 
 export interface MissingParamEntry {
   /** 参数 dot 路径（placeholder 为顶层参数名；invalid-json 为 "$"）。 */
   path: string;
   /** 展示用说明（placeholder 类型中文名 / 字段路径）。 */
   label: string;
-  reason: "placeholder-unselected" | "empty-required" | "invalid-json";
+  reason: "placeholder-unselected" | "empty-required" | "invalid-json" | "site-unconfirmed" | "site-unavailable";
 }
 
 export interface MissingParamInput {
@@ -37,6 +38,11 @@ export interface MissingParamInput {
   paramJson: string;
   /** 上游 @@@ 映射的写入路径（targetKey 最后一段）。 */
   mappedPaths: readonly string[];
+  sites?: SiteIndex | null;
+  siteBindings?: SiteBindings;
+  siteOwners?: Record<string, string>;
+  deviceId?: string;
+  actionName?: string;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -67,7 +73,7 @@ function requiredGoalParams(
   );
   if (!goal) return null;
   const required = goal.required;
-  if (!Array.isArray(required)) return null;
+  if (!Array.isArray(required)) return new Set();
   return new Set(required.map((item) => String(item)));
 }
 
@@ -124,11 +130,21 @@ export function missingParamEntries(input: MissingParamInput): MissingParamEntry
 
   for (const field of placeholders) {
     if (field.kind === "unsupported") continue;
-    // SiteSlot 可选语义：空串 = 由父级默认排布；schema 未声明必填时不计未填。
-    if (field.kind === "site" && required !== null && !required.has(field.param)) {
+    if (pathCoveredByMappings(field.param, input.mappedPaths)) continue;
+    if (field.kind === "site") {
+      // 非空默认值仍需确认；仅真正可选且为空的 Site 可以由父级默认排布。
+      const value = siteParamValue(field.param, param, input.detail?.goal_default);
+      if (isEmptyValue(value) && required !== null && !required.has(field.param)) continue;
+      const status = siteBindingStatus(field.param, {
+        deviceId: input.deviceId ?? input.detail?.device_id ?? "",
+        actionName: input.actionName ?? input.detail?.action_name ?? "",
+        param: { ...param, [field.param]: value }, owners: input.siteOwners,
+      }, input.sites ?? null, Object.hasOwn(param, field.param) ? input.siteBindings?.[field.param] : undefined);
+      if (status !== "bound") entries.push({ path: field.param,
+        label: `${field.param}（Site）${status === "unavailable" ? "待校验：目录尚不可用" : status === "invalid" ? "原绑定失效，请重新确认" : "请确认物料与 Site 绑定"}`,
+        reason: status === "unavailable" ? "site-unavailable" : "site-unconfirmed" });
       continue;
     }
-    if (pathCoveredByMappings(field.param, input.mappedPaths)) continue;
     if (placeholderSelected(field, param[field.param])) continue;
     entries.push({
       path: field.param,
@@ -175,3 +191,4 @@ export function missingParamEntries(input: MissingParamInput): MissingParamEntry
 export const MISSING_PARAM_COUNTS_KEY: InjectionKey<
   ComputedRef<Map<string, number>>
 > = Symbol("missing-param-counts");
+export const PARAM_VALIDATION_PENDING_KEY: InjectionKey<ComputedRef<Set<string>>> = Symbol("param-validation-pending");
