@@ -1,210 +1,159 @@
+<div align="center">
+
+<img src="public/brands/openlab.svg" alt="OpenLab" width="88" />
+
 # OpenLab
 
-在线使用：[OpenLabSite](https://xuwznln.github.io/OpenLabSite/) · [本地启动教程](docs/LOCAL_START.md)
+### 开放实验室，一个工作台。
 
-项目署名：[上海交通大学 ReThinkLab](https://thinklab.sjtu.edu.cn/) · [北京中关村学院](https://www.bza.edu.cn/) · [DeepModeling](https://github.com/deepmodeling)
+连接设备 · 管理物料 · 编排实验 · 追踪每一次执行
 
-欢迎在 [GitHub](https://github.com/Xuwznln/OpenLabSite) Star、反馈问题与参与贡献。
+<p>
+  <a href="https://xuwznln.github.io/OpenLabSite/"><img src="https://img.shields.io/badge/OpenLab-在线体验-087f5b?style=flat-square" alt="在线体验" /></a>
+  <a href="https://github.com/Xuwznln/OpenLabSite/actions/workflows/deploy.yml"><img src="https://github.com/Xuwznln/OpenLabSite/actions/workflows/deploy.yml/badge.svg?branch=main" alt="构建与部署状态" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache--2.0-blue?style=flat-square" alt="Apache-2.0" /></a>
+  <a href="https://github.com/Xuwznln/OpenLabSite/stargazers"><img src="https://img.shields.io/github/stars/Xuwznln/OpenLabSite?style=flat-square&logo=github" alt="GitHub Stars" /></a>
+</p>
 
-默认连接本机后端 `http://127.0.0.1:8002`，不默认连接公共演示服务。
-旧版保存的公共演示地址会一次性迁移为默认地址；随后仍可手动设置远程后端。
+**[在线使用](https://xuwznln.github.io/OpenLabSite/)** · **[本地启动](docs/LOCAL_START.md)** · **[接口文档](docs/protocol/README.md)** · **[反馈问题](https://github.com/Xuwznln/OpenLabSite/issues)**
 
-> OpenLabSite 当前仅发布通用版；下文遗留的领域工具及主题说明仅适用于旧仓库
-> `archive/domain-editions-20260913`。本版不支持学科切换或 `?theme=`，详见
-> [通用版边界](docs/GENERAL_EDITION.md)。物料管理、装配和实验室地图保持可用。
+<br />
 
-OpenLab is the local-first operations console for the Uni-Lab-OS backend. It gives a
-laboratory one static web application for device operation, material tracking, workflow
-authoring and execution, live telemetry, audit history and runtime diagnostics.
+<a href="https://thinklab.sjtu.edu.cn/"><img src="public/brands/rethinklab.jpg" alt="上海交通大学 ReThinkLab" height="76" /></a>
+&nbsp;&nbsp;&nbsp;&nbsp;
+<a href="https://www.bza.edu.cn/"><img src="public/brands/bza.png" alt="北京中关村学院" height="56" /></a>
+&nbsp;&nbsp;&nbsp;&nbsp;
+<a href="https://github.com/deepmodeling"><img src="public/brands/deepmodeling.png" alt="DeepModeling" height="64" /></a>
 
-The browser connects directly to a Uni-Lab-OS management endpoint (default
-`http://127.0.0.1:8002`). The backend stays the system of record: OpenLab never reads
-databases or requires a cloud control plane.
+上海交通大学 **ReThinkLab** &nbsp; · &nbsp; **北京中关村学院** &nbsp; · &nbsp; **DeepModeling**
 
-## Project Status
+</div>
 
-OpenLab tracks the Uni-Lab-OS backend HTTP API (`unilabos/server/api/`). The wire
-protocol (v1, `/api/v1`) is specified in [`docs/protocol/`](./docs/protocol/README.md) —
-[`conventions.md`](./docs/protocol/conventions.md) is the normative text — and implemented by
-[`@openlab/protocol`](./packages/protocol/README.md), a standalone package published
-separately from the web application, validated on its own and smoke-tested against a live
-backend.
+---
 
-## Pages
+## 为实验室而建
 
-| Area | Page | Backed by |
+OpenLab 是 [Uni-Lab-OS](https://github.com/deepmodeling/Uni-Lab-OS) 的本地优先操作前端。
+从设备动作到工作流执行，把物料、运行状态、异常处理和执行记录放在同一个工作台里。
+
+**前端独立部署，后端掌管数据。** 浏览器默认连接本机 `http://127.0.0.1:8002`，
+不默认连接公共演示服务器，不直接读写数据库。
+
+| | 能力 | 你可以做什么 |
 | --- | --- | --- |
-| Overview | 运行总览 | health, runtime endpoints, workflow tasks, telemetry, decisions |
-| Workspace | 设备 | runtime.v1 endpoint capabilities + telemetry states; ad-hoc actions via workflow tasks |
-|  | 物料 | materials.v1 tree, sites, instantiate / move / transfer / edit / delete, lots, ledger |
-|  | 实验室地图 · 装配视图 | materials positions and site occupancy; 2.5D tree drill-down |
-|  | 运行监控 | runtime jobs, telemetry, history and materials change streams |
-| Workflows | 实验流程 · 编排画布 · 任务排程 | Workflow Authority (definitions, graph, tasks, node jobs, authoring, SSE) |
-| Alerts | 异常审批 · 状态告警 | error-decisions, status-incidents, open interventions |
-| System | 执行历史 · 注册表 · 驱动包 · 系统诊断 · 数据库浏览 | history.v1, Registry Authority, driver-packages + device-processes (source trees fetched from GitHub into `unilabos_data`, deps via uv, safe restart, supervised local Slave processes), HostLink / scheduler / restart, read-only four-database browser |
-| Tools | 领域工具 | molar-mass, DNA/PCR, CIF viewer (frontend-only) |
-| System | 实时日志 | Host / managed Slave / remote Slave, bounded HTTP cursor reads, level/search filters, pause/follow/copy/download |
+| 🧪 | 设备操作 | 查看设备与实时属性，填写动作参数，提交单点动作 |
+| 📦 | 物料管理 | 入库、挂载、移动与跨设备转运，查看位点和库存 |
+| 🧩 | 工作流编排 | 在画布中组织实验步骤，提交运行并跟踪节点进度 |
+| 🗺️ | 实验室布局 | 浏览设备与物料空间关系，配置区域、围墙和装配 |
+| 🔔 | 异常与干预 | 查看状态告警，按后端提供的选项处理动作异常 |
+| 🔎 | 追溯与诊断 | 查询执行历史、实时日志、注册表与运行状态 |
 
-Pages are role-aware: connecting to a `--role backend` scheduling authority shows the
-workflow and registry surfaces and clearly marks device/telemetry/decision pages as living on
-the Host; connecting to a Host without a local scheduler disables workflow writes.
+> 当前发布的是**通用版**，不提供有机、生物、材料等学科切换。
+> 旧版领域内容保留在旧仓库归档分支，见 [通用版边界](docs/GENERAL_EDITION.md)。
 
-## Architecture
+## 快速开始
 
-```text
-OpenLab Web (Vue 3 · Pinia · Naive UI)
-        │  typed HTTP JSON + two SSE invalidation streams
-        ▼
-@openlab/protocol  (12 domains · 118 operations · catalog + tests + live smoke · published separately)
-        │
-        ▼
-Uni-Lab-OS backend :8002
-  ├─ runtime.db    runtime.v1, Workflow Authority, Registry Authority
-  ├─ materials.db  materials.v1, device graphs
-  ├─ telemetry.db  latest device state, telemetry events
-  └─ history.db    payloads, append-only history stream
-```
+### 直接使用
 
-Repository structure:
+1. 按 [本地启动教程](docs/LOCAL_START.md) 启动 Uni-Lab-OS 后端。
+2. 打开 **[OpenLabSite](https://xuwznln.github.io/OpenLabSite/)**。
+3. 在右上角「连接设置」确认地址为 `http://127.0.0.1:8002`。
 
-```text
-.
-├── packages/protocol/       @openlab/protocol: framework-agnostic client, catalog, tests, live smoke (npm package)
-├── docs/protocol/           protocol specification: conventions (normative) + per-domain contracts
-├── src/stores/              connection, devices, scheduler, decisions, entity cache
-├── src/views/               operational surfaces
-├── src/components/          shared UI components
-├── src/features/            pure-function helpers (param forms, dry run, variables)
-├── src/vibe-cases/          reference domain workbench for AI-assisted customization
-└── .github/workflows/       protocol gate + Pages deployment
-```
+后端在另一台电脑时，手动填写它的可访问地址。
+浏览器可能要求本地网络访问权限；如果 HTTPS 页面无法连接本地 HTTP 后端，可以使用下面的本地前端方式。
 
-See [Architecture](./docs/ARCHITECTURE.md) and the [protocol overview](./docs/protocol/README.md).
+### 本地开发
 
-## Requirements
-
-- Node.js 22 or later
-- pnpm 10.30.3 (declared in `packageManager`)
-- a reachable Uni-Lab-OS backend (`unilab -g graph.json` or `unilab --role backend`)
-
-## Development
+需要 **Node.js 22+**、**pnpm 10.30.3** 和已经准备好环境的 Uni-Lab-OS 后端。
 
 ```bash
+git clone https://github.com/Xuwznln/OpenLabSite.git
+cd OpenLabSite
 pnpm install --frozen-lockfile
-pnpm run dev            # http://localhost:5180, talks directly to http://127.0.0.1:8002 (no proxy by default)
+pnpm run dev
 ```
 
-Validation:
+打开终端提示的地址（默认 `http://localhost:5180`）。
+**5180 是前端，8002 是后端管理 API**，不要填写 HostLink 通信端口。
+
+后端的完整启动命令、默认分进程部署、设备加载与连接排查见 **[本地启动教程](docs/LOCAL_START.md)**。
+
+<details>
+<summary><strong>自定义地址与代理配置</strong></summary>
+
+默认无需创建 `.env`。只有需要改变部署方式时，才配置以下选项：
+
+| 配置 | 用途 |
+| --- | --- |
+| `VITE_DEFAULT_EDGE_URL` | 首次访问的默认后端地址 |
+| `OPENLAB_EDGE_PROXY_TARGET` | 开发时由 Vite 将同源 `/api` 请求代理到指定后端 |
+| `VITE_OPENLAB_DEVICE_INDEX_URL` | 自定义驱动包索引 |
+| `VITE_OPENLAB_SITE_INDEX_URL` | 自定义前端站点目录 |
+
+连接设置保存在浏览器本地；旧公共演示地址会一次性恢复为默认地址，其他自定义地址保留。
+生产部署请限制 CORS 和网络访问，不要将未受保护的管理端口暴露到公网。更多配置见 [.env.example](.env.example)。
+
+</details>
+
+## 开发与架构
+
+**Vue 3 · TypeScript · Pinia · Naive UI · Vue Flow · Vite**
+
+前端通过独立的 `@openlab/protocol` 客户端访问后端。
+HTTP 拉取业务正文，SSE 通知触发重新读取；调度、物料权威与执行状态仍由后端负责。
+
+| 目录 | 职责 |
+| --- | --- |
+| `src/views/` | 设备、物料、工作流、监控等业务页面 |
+| `src/components/` | 通用交互组件 |
+| `src/stores/` | 连接与页面状态 |
+| `src/features/` | 表单、布局、工作流等纯逻辑 |
+| `packages/protocol/` | 类型化客户端、契约校验与协议测试 |
+| `docs/protocol/` | 接口约定与各业务域规范 |
+
+进一步阅读：[架构说明](docs/ARCHITECTURE.md) · [协议总览](docs/protocol/README.md) · [AI 改造指南](docs/VIBE_GUIDE.md)
+
+### 验证
 
 ```bash
-pnpm run protocol:check   # standalone protocol compile + catalog validation
-pnpm run protocol:test    # client ↔ catalog parity, envelopes, idempotency
-pnpm run app:test         # frontend pure-function unit tests
-pnpm run app:build        # vue-tsc + production bundle
-pnpm run build            # complete release gate
-pnpm --filter @openlab/protocol smoke -- http://127.0.0.1:8002 --write   # live smoke against a running Host
+pnpm run protocol:check
+pnpm run protocol:test
+pnpm run app:test
+pnpm run app:build
 ```
 
-## Connecting
+按顺序执行：协议检查会重新生成协议包构建产物，不应与其他测试同时运行。
+涉及协议变更时，还需按 [协议文档](docs/protocol/README.md) 对真实后端运行 live smoke；
+带 `--write` 的验证会写入数据，应使用独立测试环境。
 
-The "backend address" is simply the management port of a `unilab` process
-(`unilab --port 8002`, default `8002`). It is editable in the top-right connection popover and
-stored in browser local storage. You only need to touch it to reach a *different* process:
+### 发布
 
-- another Host (`http://<host>:8002`) — devices, materials, telemetry, decisions, and (with
-  local scheduling) the Workflow Authority;
-- a `unilab --role backend` process — scheduling authority with Workflow and Registry
-  Authority but no device execution surface.
+`main` 分支通过 GitHub Actions 校验、构建并发布到**本仓库的 GitHub Pages**。
+PR 只执行验证，不发布站点；无需跨仓库部署密钥，也不提交生成的 `dist/`。
 
-Where the address comes from by default:
+## 参与共建
 
-| How the page is served | Default address | Why |
-| --- | --- | --- |
-| `pnpm run dev` (`localhost:5180`) | `http://127.0.0.1:8002` | direct connection; the backend allows CORS |
-| `pnpm run dev` with `OPENLAB_EDGE_PROXY_TARGET` set | the page itself | opt-in: Vite proxies `/api` to a backend the browser cannot reach directly (remote tunnel, HTTPS mixed content) |
-| GitHub Pages / any static host | `http://127.0.0.1:8002` | the UI is remote, the process is local |
-| Behind a reverse proxy that serves both the site and `/api` | the page itself | detected on first visit via `GET /api/v1/health` on the page origin |
+欢迎提交 Issue、改进文档、优化交互或贡献代码。
 
-Set a different build-time default with `VITE_DEFAULT_EDGE_URL` (see `.env.example`).
+- 开始前阅读 [AGENTS.md](AGENTS.md)，保持现有后端协议边界。
+- UI 缺少接口能力时，先明确提出需求，不自行发明协议。
+- 提交前通过上面的四项检查，不提交凭据、数据库或实验室数据。
+- 感谢每一位 [贡献者](https://github.com/Xuwznln/OpenLabSite/graphs/contributors)。
 
-### HTTPS page, `http://` backend
+项目代码采用 [Apache-2.0](LICENSE) 许可证。机构 Logo 的权利归各机构所有，
+来源见 [标识说明](public/brands/README.md)；后端与设备驱动遵循各自许可证。
 
-The hosted site is served over HTTPS while `unilab` speaks plain HTTP. Browsers apply their
-mixed-content rules:
+## Star History
 
-- `http://127.0.0.1` / `localhost` is a "potentially trustworthy origin" — Chrome, Edge and Firefox
-  allow the request; Safari blocks it.
-- `http://192.168.x.x` (any LAN address) is blocked by default. The connection popover detects
-  this and shows the fixes inline: allow "Insecure content" for the site in the browser's site
-  settings (one-time), forward the remote port to `127.0.0.1` with `netsh interface portproxy`
-  on Windows, open the site over `http://`, or reverse-proxy `/api` on the same origin.
+如果 OpenLab 对你有帮助，欢迎点亮一颗 **Star**，也欢迎分享你的实验室使用场景。
 
-The backend answers Chrome's Private Network Access preflight
-(`Access-Control-Allow-Private-Network: true`), so once the browser lets the request through,
-nothing else needs to be configured.
-
-### Driver package index
-
-The "驱动包" page lists installable device driver packages from
-[awesome-lab-devices](https://github.com/Xuwznln/awesome-lab-devices) (`index.json`, read directly
-by the browser) and sends the chosen `spec` (a GitHub repository URL) to the connected backend,
-which downloads the source tree into `unilabos_data/driver_packages/`, mounts it like `--devices`, and
-pre-installs its `pyproject` dependencies with `uv` (no `pip install` of the package itself). Override
-the index with `VITE_OPENLAB_DEVICE_INDEX_URL` at build time or
-temporarily in the page (intranet mirror / fork). Lab-private packages can be listed on the Edge side
-in `unilabos_data/driver_package_catalog.json` using the same JSON shape.
-
-### Site index
-
-The "站点" catalog next to the domain switcher lists front-end sites from
-[awesome-lab-sites](https://github.com/Xuwznln/awesome-lab-sites) (`index.json`, read directly by
-the browser): the general OpenLab site, per-domain entry points (`?theme=organic|biology|materials`
-on the same deployment, applied at startup), and community forks. Override the index with
-`VITE_OPENLAB_SITE_INDEX_URL` at build time. The `unilab` backend landing page reads the same
-index for its "推荐前端" cards.
-
-## Deployment
-
-Static Vite build with hash routing and relative base path. The backend does not host
-the UI. GitHub Actions checks the protocol and application, builds `dist/` (not committed),
-and deploys an artifact directly to this repository's GitHub Pages:
-[OpenLabSite](https://xuwznln.github.io/OpenLabSite/).
-Set Settings → Pages → Source to **GitHub Actions**. No deploy key or cross-repository push
-is used. Pull requests only validate; deployment runs on `main`.
-Operators connect to their own backend (default `http://127.0.0.1:8002`).
-
-## AI-assisted Domain Adaptation
-
-Domain workbenches are implemented by modifying Vue source code rather than loading runtime
-plugins. Read [AGENTS.md](./AGENTS.md), the [Vibe guide](./docs/VIBE_GUIDE.md) and the
-[reference case](./src/vibe-cases/README.md). When a capability is missing, the UI should
-provide a clear degraded state and propose a protocol change; it must not invent an
-undocumented endpoint.
-
-## Security
-
-- OpenLab does not proxy traffic through a project-operated cloud service.
-- Do not commit credentials, laboratory data, or database files.
-- Production deployments should restrict backend CORS origins and bind the management API
-  to trusted interfaces.
-- Material writes use the materials.v1 idempotency envelope; workflow graph writes use
-  revision optimistic locking.
-
-## Contributing
-
-Protocol changes require synchronized updates to `packages/protocol/` (types, catalog,
-tests), `docs/protocol/`, the backend implementation, and affected views — the checklist
-is [`conventions.md §11`](./docs/protocol/conventions.md#11-契约治理新增或修改一个端点). Run
-`pnpm run build` before submitting changes.
-
-## Releasing
-
-- **Web application**: `pnpm run build` produces `dist/` for static hosting (GitHub Pages workflow
-  in `.github/workflows/`). The site fetches the driver package index from
-  [awesome-lab-devices](https://github.com/Xuwznln/awesome-lab-devices) and the site index from
-  [awesome-lab-sites](https://github.com/Xuwznln/awesome-lab-sites) at runtime.
-- **`@openlab/protocol`**: bump `version` in `packages/protocol/package.json` and
-  `OPENLAB_PROTOCOL_VERSION` in `packages/protocol/src/common.ts` (a test keeps them equal), add a
-  [CHANGELOG](./packages/protocol/CHANGELOG.md) entry with the minimum compatible unilabos version,
-  then `pnpm --filter @openlab/protocol publish` (`prepack` runs the contract check and tests). The
-  application keeps consuming it through `workspace:*`.
+<div align="center">
+  <a href="https://www.star-history.com/#Xuwznln/OpenLabSite&Date">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Xuwznln/OpenLabSite&amp;type=Date&amp;theme=dark" />
+      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Xuwznln/OpenLabSite&amp;type=Date" />
+      <img alt="OpenLabSite Star History" src="https://api.star-history.com/svg?repos=Xuwznln/OpenLabSite&amp;type=Date" width="760" />
+    </picture>
+  </a>
+  <p><sub>图表由 Star History 提供；无星标记录时可能显示空图。若图片无法加载，可点击前往查看。</sub></p>
+</div>
