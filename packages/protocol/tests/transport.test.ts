@@ -229,8 +229,9 @@ describe("system 协议与传输层", () => {
       restart: () => api.restart(DUMMY_ID),
     });
     expect(called).toEqual(catalogOps("device-processes"));
-    const logs = mock.calls.find((call) => call.url.endsWith("/logs"));
-    expect(logs?.params).toEqual({ tail: 50 });
+    // 日志统一由 system.logs 提供，设备进程域不再保留旧快照入口。
+    expect(api).not.toHaveProperty("logs");
+    expect(mock.calls.some((call) => call.url.endsWith("/logs"))).toBe(false);
   });
 
   it("覆盖 lab-v1 域全部 HTTP 操作，PUT 原样携带 revision 乐观锁", async () => {

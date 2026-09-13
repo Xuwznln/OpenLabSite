@@ -79,23 +79,6 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/device-processes/{process_id}/logs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Logs */
-        get: operations["logs_api_v1_device_processes__process_id__logs_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/device-processes/{process_id}/restart": {
         parameters: {
             query?: never;
@@ -391,8 +374,8 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** Events */
-        get: operations["events_api_v1_events_get"];
+        /** Runtime Events */
+        get: operations["runtime_events_api_v1_events_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4552,41 +4535,6 @@ export interface operations {
             };
         };
     };
-    logs_api_v1_device_processes__process_id__logs_get: {
-        parameters: {
-            query?: {
-                tail?: number;
-            };
-            header?: never;
-            path: {
-                process_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     restart_api_v1_device_processes__process_id__restart_post: {
         parameters: {
             query?: never;
@@ -5072,7 +5020,7 @@ export interface operations {
             };
         };
     };
-    events_api_v1_events_get: {
+    runtime_events_api_v1_events_get: {
         parameters: {
             query?: never;
             header?: {

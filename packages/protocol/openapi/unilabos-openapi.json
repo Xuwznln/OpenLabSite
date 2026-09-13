@@ -369,63 +369,6 @@
         "x-openlab-role": "host"
       }
     },
-    "/api/v1/device-processes/{process_id}/logs": {
-      "get": {
-        "tags": [
-          "device-processes"
-        ],
-        "summary": "Logs",
-        "operationId": "logs_api_v1_device_processes__process_id__logs_get",
-        "parameters": [
-          {
-            "name": "process_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Process Id"
-            }
-          },
-          {
-            "name": "tail",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 2000,
-              "minimum": 1,
-              "default": 200,
-              "title": "Tail"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Logs Api V1 Device Processes  Process Id  Logs Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        },
-        "x-openlab-role": "host"
-      }
-    },
     "/api/v1/device-processes/{process_id}/restart": {
       "post": {
         "tags": [
@@ -1067,10 +1010,11 @@
     "/api/v1/events": {
       "get": {
         "tags": [
-          "workflow"
+          "workflow",
+          "runtime-events"
         ],
-        "summary": "Events",
-        "operationId": "events_api_v1_events_get",
+        "summary": "Runtime Events",
+        "operationId": "runtime_events_api_v1_events_get",
         "parameters": [
           {
             "name": "Last-Event-ID",

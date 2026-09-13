@@ -1,5 +1,8 @@
 # Changelog
 
+- 发布前同步：从当前微后端重新生成快照，移除已删除的设备进程日志路由，更新统一事件流声明；
+  日志客户端和 smoke 继续使用 system.logSources / system.logs，不引入新端点。
+
 `@openlab/protocol` 按 [semver](https://semver.org/) 发布。每个版本注明它面向的线上协议版本与
 最低兼容的 Uni-Lab-OS（`unilabos`）版本；规则见
 [docs/protocol/conventions.md §10](../../docs/protocol/conventions.md#10-版本与兼容)。
