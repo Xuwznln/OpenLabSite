@@ -46,8 +46,8 @@
 http(s)://<host>:<port>/api/v1/<domain-collection>[/<identifier>[/<sub-collection>[/<identifier>]]][/<action>]
 ```
 
-- 所有浏览器可调用路由**必须**以 `/api/v1/` 开头（`OPENLAB_API_PREFIX`）。大版本只在**不兼容变更**时递增，
-  且新旧版本并行挂载至少一个 unilabos 小版本周期（§10）。
+- 所有浏览器可调用路由**必须**以 `/api/v1/` 开头（`OPENLAB_API_PREFIX`）。首发前允许统一调整契约，
+  不并行保留开发期协议；首发后的版本规则见 §10。
 - 根路径 `/` 只给路标，微后端**不**托管前端页面。
 
 ### 2.2 路径
@@ -284,11 +284,12 @@ GET  /driver-packages/operations/{operation_id} ──轮询（1–2 s）──�
 | 流 | 事件 | 续传 |
 | --- | --- | --- |
 | `GET /api/v1/events` | `workflow.task.changed`、`workflow.node_job.changed`、`workflow.authoring.changed` | `Last-Event-ID` |
+| 同一 `GET /api/v1/events` | `runtime.logs.changed` | 瞬时通知，不写 SSE id；重连按 HTTP 日志游标补读 |
 | `GET /api/v1/materials/events` | `materials.changed`（携带 ledger sequence） | `Last-Event-ID`；首连不重放 |
 
 - 事件**只是失效通知**：正文不含业务数据，客户端收到后重拉 HTTP。
 - 没有 SSE 的域按 3–8 s 轮询，页面可见性恢复时立即刷新。
-- 实时日志页是有界只读例外：只在可见且未暂停时按 1 s 增量拉取选中进程，来源目录 5 s 刷新；
+- 实时日志页复用 `/events`，收到来源索引后有界增量读取；空闲不查询，隐藏/暂停不读取。
   不新增长连接，读取与窗口上限见 [logs.md](./logs.md)。
 - 浏览器同源连接数有限（HTTP/1.1 每源 6 条）：一个页面**至多**各打开一条流，跨 tab 复用由应用层保证。
 - 新增流必须登记到 `catalog.ts`（`method: "SSE"`）并更新校验脚本的 SSE 清单。
@@ -325,13 +326,17 @@ GET /api/v1/health → { "status": "ok", "scheduler": "local" | "remote", "execu
 
 ## 10. 版本与兼容
 
+当前尚未发布首个微后端协议版本：开发期端点、字段及前端存储可以直接收敛，不保留旧接口回退、
+自动迁移或升级提示分支；前后端必须使用同一契约。`legacy` 是连接旧后端的独立适配层，保持不变。
+下表是首次正式发布后的版本规则，不要求为尚未发布的代码建立兼容层。
+
 | 层 | 版本载体 | 规则 |
 | --- | --- | --- |
 | 线上协议 | 路径 `/api/v1` | 只做**加法变更**（新端点、新可选字段、新枚举值）；删除 / 改名 / 改语义 = 新大版本 |
 | `@openlab/protocol` | npm semver，`OPENLAB_PROTOCOL_VERSION` 与 `package.json.version` 必须一致（有测试守护） | major：线上协议大版本变更或客户端 API 不兼容；minor：新端点 / 字段；patch：客户端修复 |
 | unilabos | `unilabos.__version__` | 发布说明列出协议影响；新增端点先发 unilabos，再发协议包 |
 
-- **废弃流程**：字段 / 端点先在 OpenAPI `description` 与域文档标 `Deprecated`，协议包类型加 `@deprecated`，
+- **正式发布后的废弃流程**：字段 / 端点先在 OpenAPI `description` 与域文档标 `Deprecated`，协议包类型加 `@deprecated`，
   至少保留一个 unilabos 小版本后才可移除（同时升大版本）。
 - 客户端**必须**容忍未知字段与未知枚举值；服务端**必须**容忍缺失的新可选字段。
 - 兼容矩阵在 `packages/protocol/CHANGELOG.md` 维护：每个协议包版本注明最低 unilabos 版本。

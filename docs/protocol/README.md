@@ -86,9 +86,10 @@ Uni-Lab-OS 微后端 :8002（unilab --port）
 | 流 | 事件 | 语义 |
 | --- | --- | --- |
 | `GET /api/v1/events` | `workflow.task.changed` `workflow.node_job.changed` `workflow.authoring.changed` | Workflow Authority 变更；`Last-Event-ID` 续传 |
+| 同一 `GET /api/v1/events` | `runtime.logs.changed` | 日志来源索引；不写 SSE id，重连按 HTTP 日志游标补读 |
 | `GET /api/v1/materials/events` | `materials.changed` | 物料账本推进；首连不重放，重连按游标补齐 |
 
-`stores/connection.ts` 为每条流维护 `revision` 计数；store 监听 revision 重拉 HTTP。没有 SSE
+`stores/connection.ts` 为持久数据通知维护 `revision` 计数；日志通知按来源定向重拉，不触发工作流刷新。没有 SSE
 的域（telemetry / runtime / decisions / device-processes）按 3–8 秒轮询，可见性恢复时立即刷新。
 
 恢复基线来自四库：执行状态读 `runtime.execution_job`，设备当前值读 `telemetry.device_state_latest`，
@@ -113,7 +114,8 @@ Uni-Lab-OS 微后端 :8002（unilab --port）
 
 ## 5. 版本与兼容
 
-- 线上协议大版本在路径（`/api/v1`）；v1 内只做加法变更。
+- 当前尚未首发，前后端直接对齐当前契约，不保留开发期兼容分支；旧后端 `legacy` 适配器不动。
+- 正式发布后，线上协议大版本在路径（`/api/v1`）；v1 内只做加法变更。
 - `@openlab/protocol` 按 semver 发布，`OPENLAB_PROTOCOL_VERSION` 与 `package.json` 版本一致；
   每个版本在 CHANGELOG 注明最低 unilabos 版本。
 - 细则与废弃流程见 [conventions.md §10](./conventions.md#10-版本与兼容)。
@@ -127,7 +129,7 @@ Uni-Lab-OS 微后端 :8002（unilab --port）
 - `materials.templates` 携带 registry 全量定义（可达数十 MB），只在需要时按需加载，不轮询；
   列表场景用 `include_definition=false`。
 - 浏览器只读的外部资源（驱动包索引）由 `features/` 层负责，不进协议包。
-- 人工标注类数据（实验室布局）也走微后端（`lab-v1`），localStorage 只做老微后端降级与一次性迁移。
+- 人工标注类数据（实验室布局）也走微后端（`lab-v1`），读取失败明确报错，不退回 localStorage 或自动迁移。
 
 ## 7. 验证门槛
 

@@ -9688,6 +9688,16 @@
             },
             "type": "array",
             "title": "Edges"
+          },
+          "site_binding_mode": {
+            "type": "string",
+            "enum": [
+              "resolve",
+              "preserve"
+            ],
+            "title": "Site Binding Mode",
+            "description": "SiteSlot 导入策略；浏览器保存草稿必须传 preserve，确认后参数中存放 site_uuid。",
+            "default": "resolve"
           }
         },
         "type": "object",
@@ -12210,6 +12220,16 @@
               }
             ],
             "title": "Name"
+          },
+          "site_binding_mode": {
+            "type": "string",
+            "enum": [
+              "resolve",
+              "preserve"
+            ],
+            "title": "Site Binding Mode",
+            "description": "resolve：程序化导入按目标物料解析 Site 标签；preserve：保留浏览器草稿，等待用户确认。",
+            "default": "resolve"
           }
         },
         "type": "object",

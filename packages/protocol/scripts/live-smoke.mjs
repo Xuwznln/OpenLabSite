@@ -115,6 +115,19 @@ async function workflowStepSmoke() {
 }
 
 async function runtimeLogsSmoke() {
+  // 日志复用已有事件流，纯 Host 无 Workflow Authority 时也必须可连接。
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const stream = await fetch(api.workflowBackend.eventsUrl(), { signal: controller.signal });
+    if (!stream.ok || !stream.headers.get("content-type")?.includes("text/event-stream")) {
+      throw new Error(`日志通知 SSE 不可用: ${stream.status}`);
+    }
+    const reader = stream.body.getReader();
+    const first = await reader.read();
+    if (first.done) throw new Error("日志通知 SSE 立即断开");
+    await reader.cancel();
+  } finally { clearTimeout(timeout); controller.abort(); }
   const listing = await api.system.logSources();
   expectKeys(listing, ["sources"], "log sources");
   const readable = listing.sources.filter((source) => source.supported && (source.online || source.managed));
@@ -133,7 +146,7 @@ async function runtimeLogsSmoke() {
       if (JSON.stringify(a.lines.slice(0, common)) !== JSON.stringify(b.lines.slice(0, common))) throw new Error("日志读取者互相干扰");
     }
   }
-  return `${readable.length} 个来源可读（Host / 受管 Slave / 外部 Slave）`;
+  return `共享 SSE 可连接，${readable.length} 个来源可读（Host / 受管 Slave / 外部 Slave）`;
 }
 
 if (args.includes("--logs-only")) {

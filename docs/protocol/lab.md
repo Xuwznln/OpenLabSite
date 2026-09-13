@@ -39,8 +39,7 @@
 
 - 进页面读一次；每次绘制 600 ms 防抖后 `PUT`，成功用返回的 `revision` 覆盖本地版本；
 - 409 → 提示"布局刚被其他人修改"，重读服务端版本，这一笔改动作废；
-- 微后端没有该接口（老版本 404 / 503）→ 退回 localStorage（`openlab:lab-layout:<baseUrl>`），页面上说明；
-- 迁移：服务端 `revision = 0` 而浏览器里有旧版布局时，自动 `PUT` 上去并清掉本地副本，提示一次；
+- 布局接口读取失败明确报错并禁止编辑，不退回 localStorage，不自动导入开发期浏览器存储；
 - 导出 / 导入 JSON 仍保留，用于在不同 Host 之间搬运布局。
 
 客户端：`api.domains.labV1.layout()` / `saveLayout(input)` / `resetLayout()`；类型 `LabV1Layout`、

@@ -63,6 +63,29 @@ rejected`。`retry_of_job_uuid` / `attempt_no` 表达重试链；`terminal_gate_
 
 ### 2.1 提交运行
 
+#### Site 模板参数的导入与确认
+
+`SiteSlot` / `unilabos_sites` 参数保存权威 `site_uuid`，不是 `T1` 这样的标签。普通 `str`
+（例如 `tips_site` / `plate_site`）仍按驱动的标签语义处理，不做名称推断。
+
+`POST /workflows/from-template` 和 `PUT /workflows/{uuid}/graph` 的
+`site_binding_mode` 默认 `resolve`：程序化导入在目标物料范围将标签唯一解析为 UUID；
+缺设备/动作声明、缺 Site 或有歧义返回 Backend 业务码 1000（HTTP 200），失败不改原图。
+浏览器保存必须显式传 `preserve`，即使只有一个候选，也必须通过确认窗口选择目标物料及 Site。
+省略参数但 `goal_default` 存在非空 Site 建议时也需确认；明确清空的可选参数或空默认值才跳过。
+
+作用域依次为 `node.meta_data.site_binding_owners[param]`（owner material_uuid）、Host
+物料动作的 `param.mount_resource`、目标设备的物料子树；前两种只查 owner 自身的 Site。
+禁止全局按名称选第一个，不进行 category 强检验或物料创建/转移。
+
+确认后写 `param[param] = site_uuid`，并保留
+`meta_data.site_bindings[param] = {site_uuid, owner_material_uuid, device_id, action_name}`。
+打开/保存草稿、唯一预选、在高级 JSON 粘贴 UUID 均不等于确认。设备、动作、物料或 Site
+发生变化后旧记录须重新核对；目录加载失败标为“待校验”。确认记录不是锁或鉴权凭证。
+节点卡和工作流卡计入“待补全 N 项”，已确认并仍有效的引用、合法可选空值和上游动态映射不计入。
+运行（含逐步/单点）之前重新读取权威校验；流程列表可直接补全原定义，无须复制工作流。
+单点动作不走模板导入自动解析，客户端应提交已确认的实际 UUID。
+
 ```jsonc
 // 整图运行
 { "execution_kind": "workflow", "workflow_uuid": "…", "run_mode": "normal|step|single_node", "target_node_uuid": null }
@@ -73,7 +96,7 @@ rejected`。`retry_of_job_uuid` / `attempt_no` 表达重试链；`terminal_gate_
   "device_id": "sample_rack",
   "action_name": "load_sample",
   "action_type": "UniLabJsonCommand",
-  "param": { "sample_name": "s1", "site": "<site uuid or label>" },
+  "param": { "sample_name": "s1", "site": "<已确认的 site_uuid>" },
   "execution_policy": { "always_free": true },   // registry 动作元数据，决定并发模式
   "idempotency_key": "…"                          // 可选；同键同参重复提交返回既有任务
 }
@@ -86,7 +109,7 @@ rejected`。`retry_of_job_uuid` / `attempt_no` 表达重试链；`terminal_gate_
 #### 逐步运行（微后端持有许可）
 
 以 `run_mode="step"` 提交完整工作流，初始 `control_status="paused"`，不下发动作。
-任务详情返回 `control_revision`（初始 0；列表与旧微后端可能不提供）。调用
+任务详情必须返回 `control_revision`（初始 0；列表投影不提供）。调用
 `workflowBackend.commandTask(taskUuid, {type: "step", expected_revision: task.control_revision, idempotency_key})`
 只放行一个满足依赖的动作 attempt；并行分支也只选一个，循环/子流程展开后的叶动作同样逐步。
 该步等待资源或执行期间 `control_status="active"`，不接受下一次 step；完成后回到 paused。
@@ -105,8 +128,8 @@ target_node_uuid 关联工作流节点；不创建新任务。每条受理命令
 状态变化沿用 `workflow.task.changed` / `workflow.node_run.changed` SSE；正文仍经 HTTP 重拉。
 重启后已成功动作不重跑，已下发但结果未知的动作转 waiting_reconciliation 等待人工裁决。
 
-旧微后端缺少 control_revision 或命令端点时，前端显示升级提示并禁用步进控制。
-这是 v1 加法扩展，需要包含本接口的 Uni-Lab-OS 构建；仅旧 step 枚举不代表具备逐步执行能力。
+缺少 control_revision、node-runs 或命令端点属于契约/部署错误：显示错误并禁止不安全放行，
+不能通过 jobs 推导来替代缺失的权威节点运行状态，不保留开发期旧协议回退。
 
 ### 2.2 状态词汇（canonical，页面不得改写）
 

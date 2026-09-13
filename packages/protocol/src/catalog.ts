@@ -68,7 +68,7 @@ export const OPERATIONS = [
   { id: "workflow.authoring.get", domain: "workflow", method: "GET", path: "/api/v1/workflows/{workflow_uuid}/authoring", summary: "Authoring 状态机聚合（Draft/Candidate）", mutates: false, role: "any" },
   { id: "workflow.authoring.draft", domain: "workflow", method: "PUT", path: "/api/v1/workflows/{workflow_uuid}/authoring/draft", summary: "保存 Draft 源码（hash+revision 前置校验）", mutates: true, role: "any" },
   { id: "workflow.authoring.apply", domain: "workflow", method: "POST", path: "/api/v1/workflows/{workflow_uuid}/authoring/apply", summary: "Apply Candidate 到 Graph", mutates: true, role: "any" },
-  { id: "workflow.events", domain: "workflow", method: "SSE", path: "/api/v1/events", summary: "frontend_event 失效通知流（Last-Event-ID 续传）", mutates: false, role: "any" },
+  { id: "workflow.events", domain: "workflow", method: "SSE", path: "/api/v1/events", summary: "工作流持久通知（Last-Event-ID）及 runtime.logs.changed 瞬时日志通知（无 id）", mutates: false, role: "any" },
 
   // ── registry：Registry Authority（默认本机调度 Host 与 --role backend 均挂载；接入远端调度权威的受控 Edge 返回 404） ──
   { id: "registry.entries.list", domain: "registry", method: "GET", path: "/api/v1/registry/entries", summary: "注册表条目状态列表（status 过滤 active/pending/removed/unusable）", mutates: false, role: "any" },

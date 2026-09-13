@@ -15,17 +15,25 @@
 最低兼容的 Uni-Lab-OS（`unilabos`）版本；规则见
 [docs/protocol/conventions.md §10](../../docs/protocol/conventions.md#10-版本与兼容)。
 
-## 未发布：Host / Slave 实时日志
+## 未发布：首版契约收敛与 Host / Slave 实时日志
 
 - 新增 `system.logSources()` / `system.logs()`：来源目录与有界增量只读查询，响应含独立游标、文件切换标记。
-- Host 及远端 Slave 需使用包含本功能的 Uni-Lab-OS 0.12.1 构建并重启；远端声明 `process-logs` 能力。
-- 旧 Host 降级为受管 Slave 尾部日志；没有新数据库、SSE 流或浏览器到 Slave 的直连端口。
+- 日志追加经 HostLink + 控制 WS 转为既有 `/events` 上的 `runtime.logs.changed`，空闲不轮询日志；跨页共用通知连接。
+- 移除 `deviceProcesses.logs` 及旧接口回退、地图 localStorage 权威回退/自动迁移；第一版发布前直接统一契约。
+- 没有新数据库、SSE 流或浏览器到 Slave 的直连端口；旧后端 `legacy` 适配器不变。
 - OpenAPI / 目录 / 类型 / 测试 / live smoke 同步，详见 `docs/protocol/logs.md`。
+
+## 未发布：Site 模板默认值确认
+
+- `BackendWorkflowFromTemplateInput` / `BackendGraphWriteInput` 增加 `site_binding_mode`（resolve / preserve，默认 resolve）。
+- 程序化导入自动在目标物料范围解析 SiteSlot；缺声明/目标/唯一匹配时业务码 1000。前端草稿显式 preserve，确认后保存实际 UUID 与 node.meta_data.site_bindings。
+- 节点与流程卡计数、原定义补全窗口、提交前校验使用同一口径；模板标签不被覆盖，不增加数据库、锁或 legacy 分支。
+- 需要 Uni-Lab-OS 0.12.1 中包含本次 Site 导入策略的构建；OpenAPI、SDK 类型与测试同步更新。
 
 ## 未发布：工作流逐步执行
 
 - 新增 `workflowBackend.commandTask()`：同一任务内单点放行 / 切回自动，版本校验与幂等键防重复。
-- Task 详情新增可选 `control_revision`；旧构建缺少此字段时前端禁用控制并提示升级。
+- Task 详情必须有 `control_revision`，列表不带；缺失是契约错误，禁用控制而不自行猜测节点状态。
 - 要求 Uni-Lab-OS 0.12.1 **包含 2026-09-13 逐步执行接口的构建**；版本号相同的旧构建不支持。
 - 没有数据库 schema 变更，复用 workflow_task_command；已同步 OpenAPI 快照、目录与客户端测试。
 
