@@ -545,7 +545,7 @@ watch(
     </NCard>
 
     <div v-if="!task && !conn.online" class="degraded">
-      <span class="degraded-title">等待微后端连接</span>
+      <span class="degraded-title">等待后端连接</span>
       连接恢复后会自动载入任务、节点作业与运行记录。
     </div>
 

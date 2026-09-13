@@ -8,7 +8,7 @@
  * - 展开子台面，位点按 pose.position / pose.size 画在所属物料内部，占用者高亮；
  * - 点击设备进入 2.5D 装配视图；
  * - 「编辑布局」：按像素格给实验室划分区域、画围墙（features/lab-layout），
- *   叠在设备之下；布局权威在微后端 runtime.db（lab-v1，revision 乐观锁），
+ *   叠在设备之下；布局权威在后端 runtime.db（lab-v1，revision 乐观锁），
  *   可导出 / 导入 JSON 跨 Host 搬运，接口错误不退回浏览器存储。
  */
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from "vue";
@@ -130,8 +130,8 @@ const blocks = computed<MapBlock[]>(() => {
 
 // ── 布局（区域 / 围墙）编辑 ────────────────────────────────────
 //
-// 权威在微后端 runtime.db（lab-v1），一个 Host 一份、所有浏览器共享；这里保存的是
-// 当前读到的 revision，写回带上它做乐观锁。老微后端没有该接口时退回 localStorage。
+// 权威在后端 runtime.db（lab-v1），一个 Host 一份、所有浏览器共享；这里保存的是
+// 当前读到的 revision，写回带上它做乐观锁。老后端没有该接口时退回 localStorage。
 
 const layoutScope = computed(() => conn.baseUrl);
 const layout = ref<LabLayout>(emptyLayout());
@@ -210,7 +210,7 @@ function scheduleLayoutSave() {
 
 function commitLayout(next: LabLayout) {
   if (!conn.online || layoutBacking.value !== "server") {
-    message.warning("布局尚未从微后端读取成功，暂不能修改");
+    message.warning("布局尚未从后端读取成功，暂不能修改");
     return;
   }
   layout.value = next;
@@ -574,7 +574,7 @@ onUnmounted(() => {
     </PageHeader>
 
     <div v-if="!conn.online" class="degraded">
-      <span class="degraded-title">尚未连接微后端</span>
+      <span class="degraded-title">尚未连接后端</span>
       连接后地图会按设备位置自动绘制。
     </div>
     <div v-if="conn.online && materialsError" class="degraded">物料快照读取失败：{{ materialsError }}。保留上次成功读取的地图，正在重试。</div>
@@ -756,7 +756,7 @@ onUnmounted(() => {
             </NPopconfirm>
           </div>
           <p v-if="layoutBacking === 'server'" class="dim small edit-note">
-            区域与围墙保存在微后端（runtime.db），所有连接这台 Host 的人共享，改动约 1 秒后自动写回
+            区域与围墙保存在后端（runtime.db），所有连接这台 Host 的人共享，改动约 1 秒后自动写回
             <template v-if="layoutSaving">（正在保存…）</template>
             <template v-else-if="layoutSyncedAt">（revision {{ layoutRevision }}，{{ new Date(layoutSyncedAt).toLocaleTimeString("zh-CN", { hour12: false }) }} 已同步）</template>；
             导出 / 导入用于在不同 Host 之间搬运。

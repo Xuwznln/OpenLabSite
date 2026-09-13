@@ -278,7 +278,7 @@ onMounted(() => void refresh());
     </PageHeader>
 
     <div v-if="!conn.online" class="degraded">
-      <span class="degraded-title">尚未连接微后端</span>
+      <span class="degraded-title">尚未连接后端</span>
       连接调度权威进程后可管理注册表版本。
     </div>
     <div v-else-if="unsupported" class="degraded">

@@ -6,7 +6,7 @@ export const WORKFLOW_RUN_OPTIONS = [
   { label: "逐步执行（每次一个动作）", value: "step" },
 ];
 
-/** UI 只解释权威状态；许可与依赖选择均由微后端负责。 */
+/** UI 只解释权威状态；许可与依赖选择均由后端负责。 */
 export function stepExecutionControl(task: BackendWorkflowTask | null, runs: BackendWorkflowNodeRun[]) {
   const visible = task?.run_mode === "step";
   const controlReady = Number.isSafeInteger(task?.control_revision) && (task?.control_revision ?? -1) >= 0;

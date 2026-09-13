@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 连接状态 + 微后端地址设置。
+ * 连接状态 + 后端地址设置。
  *
  * 地址 = `unilab` 进程管理端口（`--port`，默认 8002），默认直连本机。只有要连别的
  * 进程（另一台 Host、`--role backend` 调度权威）或显式启用了 Vite 代理 / 反向代理
@@ -27,7 +27,7 @@ const hostPort = computed(() => stripScheme(conn.baseUrl));
 const isDefault = computed(() => conn.baseUrl === conn.defaultUrl);
 
 /**
- * HTTPS 页面（GitHub Pages）直连 http:// 微后端时的浏览器拦截提示。
+ * HTTPS 页面（GitHub Pages）直连 http:// 后端时的浏览器拦截提示。
  * 对输入框里的草稿判定，用户还没点「连接」就能看到怎么处理。
  */
 const target = computed(() => normalizeBaseUrl(draft.value) || DEFAULT_LOCAL_EDGE_URL);
@@ -89,7 +89,7 @@ async function apply(url = draft.value) {
       </template>
       <div class="pop">
         <div class="pop-head">
-          <span class="pop-title">微后端地址</span>
+          <span class="pop-title">后端地址</span>
           <span v-if="conn.online" class="pop-role">
             <span class="dot" />{{ conn.roleLabel }}
           </span>
@@ -146,6 +146,7 @@ async function apply(url = draft.value) {
           Safari 会拦截，请改用其他浏览器或用 <code>http://</code> 打开本站。
         </p>
 
+        <a class="link-btn" href="https://github.com/Xuwznln/OpenLabSite/blob/main/docs/LOCAL_START.md" target="_blank" rel="noopener noreferrer">首次使用？查看本地启动教程</a>
         <div class="pop-foot">
           <span v-if="conn.online && conn.health" class="health mono">
             scheduler {{ conn.health.scheduler }} · execution {{ conn.health.execution }} · registry

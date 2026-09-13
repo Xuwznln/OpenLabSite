@@ -659,7 +659,7 @@ onUnmounted(() => {
     </PageHeader>
 
     <NAlert v-if="unavailable" type="info" title="设备列表暂时不可用">
-      尚未连接微后端；连接恢复后设备目录会自动刷新。
+      尚未连接后端；连接恢复后设备目录会自动刷新。
     </NAlert>
     <NAlert v-else-if="executionDisabled && !devices.length" type="info" title="当前进程没有设备执行面">
       你连接的是 <code>--role backend</code> 调度权威进程，它不直接管理设备。要查看设备与遥测，请连接带 HostNode 的 Host 进程（默认 <code>:8002</code>）。

@@ -1,5 +1,5 @@
 /**
- * 连接管理：微后端地址（localStorage 持久化）+ 健康轮询 + 进程角色识别。
+ * 连接管理：后端地址（localStorage 持久化）+ 健康轮询 + 进程角色识别。
  *
  * `/api/v1/health` 同时给出两个维度，页面据此决定哪些能力可用：
  * - `scheduler`：local = 本进程持有 Workflow Authority；remote = 已接入云端，
@@ -17,11 +17,13 @@ import { bindWorkflowInvalidations, WORKFLOW_INVALIDATION_EVENT_TYPES } from "..
 import { openNoticeSource, type NoticeSource } from "../features/shared-notice";
 import { describeError, isOfflineError } from "../features/errors";
 import { classifyTarget } from "../features/insecure-target";
+import { DEFAULT_LOCAL_EDGE_URL, initialBackendUrl } from "../config/edge-endpoints";
 
 const STORAGE_KEY = "openlab:base-url";
 const RECENT_KEY = "openlab:recent-base-urls";
 
-export const DEFAULT_LOCAL_EDGE_URL = "http://127.0.0.1:8002";
+export { DEFAULT_LOCAL_EDGE_URL };
+const LOCAL_DEFAULT_MIGRATION_KEY = "openlab:local-default-v1";
 
 export function normalizeBaseUrl(value: string): string {
   return value.trim().replace(/\/+$/, "");
@@ -103,16 +105,16 @@ const CONFIGURED_BASE_URL = normalizeBaseUrl(
 );
 /** 页面自身的 origin（显式配置了 Vite 代理，或前端与 API 被同一反向代理托管时，/api 就在这里）。 */
 export const PAGE_ORIGIN = normalizeBaseUrl(window.location.origin);
-/** Vite dev 代理把 /api 转发到的微后端地址；未配置 OPENLAB_EDGE_PROXY_TARGET 或生产构建为空串。 */
+/** Vite dev 代理把 /api 转发到的后端地址；未配置 OPENLAB_EDGE_PROXY_TARGET 或生产构建为空串。 */
 export const DEV_PROXY_TARGET: string =
   typeof __OPENLAB_DEV_PROXY_TARGET__ === "string" ? normalizeBaseUrl(__OPENLAB_DEV_PROXY_TARGET__) : "";
-/** 默认直连微后端；只有显式配置了代理目标（远程 / HTTPS 场景）才走页面同源。 */
+/** 默认直连后端；只有显式配置了代理目标（远程 / HTTPS 场景）才走页面同源。 */
 const DEV_PROXY_ACTIVE = import.meta.env.DEV && DEV_PROXY_TARGET !== "" && !CONFIGURED_BASE_URL;
 const DEFAULT_BASE_URL =
   CONFIGURED_BASE_URL || (DEV_PROXY_ACTIVE ? PAGE_ORIGIN : DEFAULT_LOCAL_EDGE_URL);
 
 /**
- * 首次访问且页面不是由 Vite dev 提供时，探测「页面同源是否就是微后端」
+ * 首次访问且页面不是由 Vite dev 提供时，探测「页面同源是否就是后端」
  * （前端与 /api 被同一反向代理托管的部署）。命中则无需用户填任何地址。
  */
 async function detectSameOriginBackend(): Promise<boolean> {
@@ -138,14 +140,16 @@ function readRecent(): string[] {
 
 export const useConnectionStore = defineStore("connection", () => {
   const storedUrl = localStorage.getItem(STORAGE_KEY);
-  const initialUrl = normalizeBaseUrl(storedUrl ?? DEFAULT_BASE_URL) || DEFAULT_BASE_URL;
-  if (!storedUrl) localStorage.setItem(STORAGE_KEY, initialUrl);
+  const initialUrl = initialBackendUrl(storedUrl, DEFAULT_BASE_URL,
+    localStorage.getItem(LOCAL_DEFAULT_MIGRATION_KEY) === "done");
+  localStorage.setItem(STORAGE_KEY, initialUrl);
+  localStorage.setItem(LOCAL_DEFAULT_MIGRATION_KEY, "done");
 
   const baseUrl = ref(initialUrl);
-  /** 页面同源本身就是微后端（dev 代理或 --ui_dir 托管）；决定「默认地址」是什么。 */
+  /** 页面同源本身就是后端（dev 代理或 --ui_dir 托管）；决定「默认地址」是什么。 */
   const sameOriginBackend = ref(DEV_PROXY_ACTIVE);
   const defaultUrl = computed(() => (sameOriginBackend.value ? PAGE_ORIGIN : DEFAULT_BASE_URL));
-  /** 当前地址就是页面自身的 origin（dev 代理 / 微后端托管），此时地址由托管方决定。 */
+  /** 当前地址就是页面自身的 origin（dev 代理 / 后端托管），此时地址由托管方决定。 */
   const sameOrigin = computed(() => baseUrl.value === PAGE_ORIGIN);
   /** 开发代理生效：/api 由 Vite 转发到 DEV_PROXY_TARGET。 */
   const devProxyActive = computed(() => DEV_PROXY_ACTIVE && sameOrigin.value);
@@ -281,7 +285,7 @@ export const useConnectionStore = defineStore("connection", () => {
     void checkHealth();
     for (const channel of noticeChannels) channel.start();
     pollTimer = setInterval(() => void checkHealth(), intervalMs);
-    // 页面同源若就是微后端（同一反向代理托管），记为默认地址；用户从未手动设过
+    // 页面同源若就是后端（同一反向代理托管），记为默认地址；用户从未手动设过
     // 地址时直接切过去（探测期间用户已手动改过则不覆盖）。
     if (!DEV_PROXY_ACTIVE) {
       void detectSameOriginBackend().then((hit) => {

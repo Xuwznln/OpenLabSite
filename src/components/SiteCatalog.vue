@@ -1,9 +1,9 @@
 <script setup lang="ts">
 /**
- * 站点目录：awesome-lab-sites 索引里列出的前端站点（浏览器直接读 index.json，与微后端无关）。
+ * 站点目录：awesome-lab-sites 索引里列出的前端站点（浏览器直接读 index.json，与后端无关）。
  *
  * 本站固定通用；其他前端在新标签页打开，不切换本站主题。
- * 与「驱动包」页读 awesome-lab-devices 是同一套模式；微后端导航页（unilab 管理端口的 /）也读同一份索引。
+ * 与「驱动包」页读 awesome-lab-devices 是同一套模式；后端导航页（unilab 管理端口的 /）也读同一份索引。
  */
 import { computed, onMounted, ref, shallowRef } from "vue";
 import { NButton, NPopover, NTag } from "naive-ui";

@@ -30,7 +30,7 @@ const viewport = ref<HTMLElement | null>(null);
 const guard = createLogReadGuard();
 const current = computed(() => sources.value.find((source) => source.source_id === selected.value));
 const readStatus = computed(() => {
-  const waiting = !conn.online ? "微后端离线"
+  const waiting = !conn.online ? "后端离线"
     : !conn.executionReady ? "等待 Host"
     : paused.value ? "已暂停"
     : !current.value ? "等待日志来源"
@@ -179,7 +179,7 @@ onUnmounted(() => { stopped = true; guard.invalidate(); releaseNotices?.(); if (
         <NButton :loading="loading" :disabled="!conn.online || !conn.executionReady" @click="manualRefresh">刷新</NButton>
       </template>
     </PageHeader>
-    <div v-if="!conn.online" class="degraded"><span class="degraded-title">微后端离线</span>保留最后读取的日志，恢复连接后继续；切换地址会清空窗口。</div>
+    <div v-if="!conn.online" class="degraded"><span class="degraded-title">后端离线</span>保留最后读取的日志，恢复连接后继续；切换地址会清空窗口。</div>
     <div v-else-if="!conn.executionReady" class="degraded"><span class="degraded-title">Host 执行面未就绪</span>纯调度进程没有 Host / Slave 日志；分离部署中请等待 Host 接入。</div>
     <div class="log-layout">
       <aside class="source-list">

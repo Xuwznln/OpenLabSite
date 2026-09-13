@@ -3,8 +3,8 @@
  *
  * 与驱动包索引（`device-index.ts` / awesome-lab-devices）同一套模式：官方目录放在独立仓库
  * https://github.com/Xuwznln/awesome-lab-sites 的 index.json，由**浏览器直接读取**，
- * 列出能连接 Uni-Lab-OS 微后端的前端站点——通用 OpenLab、按学科主题进入的入口、社区分发。
- * 顶栏学科切换器旁的「站点」目录用它；微后端自己的导航页（`unilab` 管理端口的 `/`）也读同一份。
+ * 列出能连接 Uni-Lab-OS 后端的前端站点——通用 OpenLab、按学科主题进入的入口、社区分发。
+ * 顶栏学科切换器旁的「站点」目录用它；后端自己的导航页（`unilab` 管理端口的 `/`）也读同一份。
  *
  * 索引条目的 `url` 可带 `?theme=<学科主题 id>`：本站点启动时读该参数选主题
  * （见 `stores/domain-theme.ts`），所以同一份构建可以在索引里出现多次、各自带不同主题。

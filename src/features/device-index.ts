@@ -3,10 +3,10 @@
  *
  * 官方可安装目录放在独立仓库 https://github.com/Xuwznln/awesome-lab-devices 的 index.json，
  * 由**浏览器直接读取**（前端是静态站，索引与前端一起演进，Edge 不需要出网、也不需要配置），
- * 选中条目后把 `spec`（GitHub 仓库地址 / 归档地址，+ `name`）下发给连接中的微后端，由它把源码树
+ * 选中条目后把 `spec`（GitHub 仓库地址 / 归档地址，+ `name`）下发给连接中的后端，由它把源码树
  * 下载到 unilabos_data 并用 uv 预装依赖（不 pip install 包体）。
  *
- * 微后端自己的 `GET /driver-packages/catalog`（Edge 侧内网镜像 + 本地 driver_package_catalog.json）
+ * 后端自己的 `GET /driver-packages/catalog`（Edge 侧内网镜像 + 本地 driver_package_catalog.json）
  * 作为补充来源合并展示；同名以浏览器读到的官方索引为准。
  */
 import type { DriverPackageCatalog, DriverPackageCatalogEntry } from "@openlab/protocol";
@@ -44,7 +44,7 @@ export interface DeviceIndex {
 /** 目录面板的一行：索引条目 / Edge 侧镜像条目 / Edge 本地文件条目统一形状。 */
 export interface CatalogRow extends DeviceIndexEntry {
   source: "index" | "edge-remote" | "edge-local";
-  /** 微后端台账里已有同名包（大小写、-/_ 不敏感）。 */
+  /** 后端台账里已有同名包（大小写、-/_ 不敏感）。 */
   installed: boolean;
 }
 
@@ -57,7 +57,7 @@ export interface CatalogSourceStatus {
   missing?: boolean;
 }
 
-/** 与微后端台账一致的分发名归一：小写、`-` → `_`。 */
+/** 与后端台账一致的分发名归一：小写、`-` → `_`。 */
 export function normalizePackageName(name: string): string {
   return name.trim().toLowerCase().replace(/-/g, "_");
 }
@@ -166,7 +166,7 @@ function fromEdgeEntry(entry: DriverPackageCatalogEntry): DeviceIndexEntry {
 
 /**
  * 合并三个来源：浏览器读到的索引 → Edge 侧镜像 → Edge 本地文件；同名只保留先出现的。
- * `installed` 按微后端台账里的包名判定（索引里的 installed 标记不可信，它不知道台账）。
+ * `installed` 按后端台账里的包名判定（索引里的 installed 标记不可信，它不知道台账）。
  */
 export function mergeCatalog(
   index: DeviceIndex | null,

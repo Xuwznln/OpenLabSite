@@ -94,7 +94,7 @@ onMounted(() => void decisions.refreshIncidents());
       当前连接的进程没有设备执行面，状态告警只在带 HostNode 的 Host 进程可用。
     </NAlert>
 
-    <!-- host_ready=false：微后端已装配但 HostNode 启动中 -->
+    <!-- host_ready=false：后端已装配但 HostNode 启动中 -->
     <NAlert
       v-else-if="!status.hostReady"
       type="warning"

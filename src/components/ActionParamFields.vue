@@ -142,7 +142,7 @@ function renderDeductOption(option: SelectOption): VNodeChild {
         >
           {{ fieldMeta(field.param).description }}
         </div>
-        <!-- 物料出库：资源类 + 实例名 + 数量 + 可选条码 → 微后端实例化并
+        <!-- 物料出库：资源类 + 实例名 + 数量 + 可选条码 → 后端实例化并
              权威登记，产物写回参数；数量 >1 时循环出库并自动加序号后缀 -->
         <template v-if="field.kind === 'deduct'">
           <div class="deduct-row">

@@ -204,7 +204,7 @@ onUnmounted(() => {
     </PageHeader>
 
     <div v-if="!conn.online" class="degraded">
-      <span class="degraded-title">尚未连接微后端</span>
+      <span class="degraded-title">尚未连接后端</span>
       {{ conn.lastError || "在右上角连接设置中填写管理端地址。" }}
     </div>
 

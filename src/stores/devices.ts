@@ -1,5 +1,5 @@
 /**
- * 设备目录：把微后端四处分散的设备事实合成一份浏览器视图。
+ * 设备目录：把后端四处分散的设备事实合成一份浏览器视图。
  *
  * - runtime.v1 `endpoints`：谁在执行哪些设备（device_routes）、每个动作的
  *   registry 定义与当前可用性（action_capabilities）——动作目录的权威；

@@ -2,7 +2,7 @@
 /**
  * 异常审批：三类需要操作员介入的事件。
  *
- * - 动作异常（error-decisions）：动作失败后由微后端持有，等待选择 Host 给出的
+ * - 动作异常（error-decisions）：动作失败后由后端持有，等待选择 Host 给出的
  *   处理选项（重试 / 跳过 / 中止 / 人工替换结果）。只提交 options[].action。
  * - 人工确认（manual-confirmations）：流程走到人工确认节点时开出的确认单，有指派名单
  *   时只能以名单中的用户身份确认；有截止时间，到期由调度器收敛为超时。
@@ -199,7 +199,7 @@ onUnmounted(() => {
   <div>
     <PageHeader
       title="异常审批"
-      subtitle="动作失败后由微后端挂起等待处理；超时按 Host 声明的默认策略处置。只能选择 Host 给出的选项。"
+      subtitle="动作失败后由后端挂起等待处理；超时按 Host 声明的默认策略处置。只能选择 Host 给出的选项。"
     >
       <template #actions>
         <NButton size="small" @click="decisions.refresh()">刷新</NButton>

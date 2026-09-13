@@ -43,7 +43,7 @@ const KIND_BY_PLACEHOLDER: Record<string, PlaceholderKind> = {
   // 指派人来源 GET /manual-confirm/users（旁支端点；404 降级纯自由输入）。
   unilabos_manual_confirm: "confirm",
   // 物料出库：选 registry 资源类 + 实例名 → POST /materials/instantiate
-  // 在微后端实例化并权威登记，产物 {id, uuid} 写回参数（ResourceSlot 引用）。
+  // 在后端实例化并权威登记，产物 {id, uuid} 写回参数（ResourceSlot 引用）。
   unilabos_deduct_resource: "deduct",
   // 加试剂目标（set_substance）：值就是「要加入 substance 的物料」引用，
   // 与普通物料选择器同数据源。

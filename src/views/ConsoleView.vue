@@ -59,7 +59,7 @@ const lights = computed<Light[]>(() => {
   const online = conn.online;
   const hostlink = devices.hostlink;
   return [
-    { key: "api", label: "微后端", state: online ? "on" : "off", hint: conn.baseUrl },
+    { key: "api", label: "后端", state: online ? "on" : "off", hint: conn.baseUrl },
     {
       key: "scheduler",
       label: "调度权威",
@@ -307,7 +307,7 @@ function openScan() {
     <div v-if="!conn.online" class="offline-note">
       <NIcon size="18"><TerminalOutline /></NIcon>
       <div>
-        <strong>尚未连接微后端。</strong>
+        <strong>尚未连接后端。</strong>
         在右上角连接设置中填写 Uni-Lab-OS 管理端地址（默认 <code>http://127.0.0.1:8002</code>），
         连接后总览会自动刷新。
         <span v-if="conn.lastError" class="mono err">{{ conn.lastError }}</span>

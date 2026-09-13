@@ -1,16 +1,16 @@
-export const PUBLIC_DEMO_EDGE_URL = "https://edge.whalent.com";
-export const LOCAL_DEMO_EDGE_URL = "http://127.0.0.1:6005";
+export const DEFAULT_LOCAL_EDGE_URL = "http://127.0.0.1:8002";
 
-const LEGACY_DEMO_ENDPOINTS = new Map<string, string>([
-  ["http://140.143.251.219:28005", PUBLIC_DEMO_EDGE_URL],
-  ["http://140.143.251.219:38005", PUBLIC_DEMO_EDGE_URL],
-  ["http://bj.wznln.com:28005", PUBLIC_DEMO_EDGE_URL],
-  ["http://bj.wznln.com:38005", PUBLIC_DEMO_EDGE_URL],
-  ["http://127.0.0.1:28005", LOCAL_DEMO_EDGE_URL],
-  ["http://localhost:28005", LOCAL_DEMO_EDGE_URL],
+const LEGACY_DEMO_ENDPOINTS = new Set([
+  "https://edge.whalent.com",
+  "http://140.143.251.219:28005",
+  "http://140.143.251.219:38005",
+  "http://bj.wznln.com:28005",
+  "http://bj.wznln.com:38005",
 ]);
 
-export function migrateDemoEdgeUrl(value: string): string {
-  const normalized = value.trim().replace(/\/+$/, "");
-  return LEGACY_DEMO_ENDPOINTS.get(normalized) ?? normalized;
+/** 只迁移一次旧公共演示地址；之后用户主动选择的远程地址仍然保留。 */
+export function initialBackendUrl(stored: string | null, fallback: string, migrated: boolean): string {
+  const normalized = (stored ?? "").trim().replace(/\/+$/, "");
+  if (!migrated && LEGACY_DEMO_ENDPOINTS.has(normalized)) return fallback;
+  return normalized || fallback;
 }

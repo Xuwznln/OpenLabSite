@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 数据库浏览：微后端四库（runtime / materials / telemetry / history）的只读行浏览。
+ * 数据库浏览：后端四库（runtime / materials / telemetry / history）的只读行浏览。
  *
  * 数据源是 `/api/v1/debug/databases`：表清单来自实时 sqlite_master，行按 rowid
  * 倒序分页；没有 SQL 入口、没有写路径。这是排障与核对权威数据的窗口，
@@ -192,7 +192,7 @@ function fmtBytes(size?: number): string {
   <div class="page app-fill">
     <PageHeader
       title="数据库浏览"
-      :subtitle="root ? `只读浏览微后端四库 · ${root}` : '只读浏览微后端 runtime / materials / telemetry / history 四库'"
+      :subtitle="root ? `只读浏览后端四库 · ${root}` : '只读浏览后端 runtime / materials / telemetry / history 四库'"
     >
       <template #actions>
         <NButton size="small" :loading="loadingDatabases" @click="loadDatabases(); loadTable()">
@@ -203,12 +203,12 @@ function fmtBytes(size?: number): string {
     </PageHeader>
 
     <div v-if="!conn.online" class="degraded">
-      <span class="degraded-title">尚未连接微后端</span>
+      <span class="degraded-title">尚未连接后端</span>
       连接后可浏览四库的表清单与行数据。
     </div>
     <div v-else-if="unsupported" class="degraded">
       <span class="degraded-title">该进程没有挂载调试路由</span>
-      <code>/api/v1/debug/databases</code> 返回 404/503。请确认微后端版本，或连接带四库的进程。
+      <code>/api/v1/debug/databases</code> 返回 404/503。请确认后端版本，或连接带四库的进程。
     </div>
 
     <template v-else>

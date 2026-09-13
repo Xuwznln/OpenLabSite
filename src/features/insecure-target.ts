@@ -1,5 +1,5 @@
 /**
- * HTTPS 页面（GitHub Pages 等）直连 `http://` 微后端会被浏览器当作混合内容拦截，
+ * HTTPS 页面（GitHub Pages 等）直连 `http://` 后端会被浏览器当作混合内容拦截，
  * 请求根本发不出去，只会得到一个笼统的 "Network Error"。
  *
  * 浏览器把环回地址（127.0.0.1 / localhost / ::1）视为可信来源：Chrome、Edge、Firefox

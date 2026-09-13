@@ -3,7 +3,7 @@
  *
  * 设备位置是物料权威的事实（materials.v1 position），布局只是叠在其上的
  * 人工标注：把地图按固定边长切成格子，格子归属某个区域或标记为围墙。
- * 权威存放在微后端 runtime.db（lab-v1 域 `GET/PUT /api/v1/lab/layout`，一个 Host 一份，
+ * 权威存放在后端 runtime.db（lab-v1 域 `GET/PUT /api/v1/lab/layout`，一个 Host 一份，
  * revision 乐观锁）。JSON 导出 / 导入保留用于跨 Host 搬运，不在浏览器建立第二份权威。
  *
  * 坐标系与地图一致（物料权威的 position 单位）；格子键为 `"col,row"`，

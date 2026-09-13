@@ -375,7 +375,7 @@ watch([() => conn.baseUrl, subjectId], () => {
       </NSpace>
     </NCard>
 
-    <div v-if="!conn.online" class="degraded">尚未连接微后端，装配状态将在连接恢复后重新校准。</div>
+    <div v-if="!conn.online" class="degraded">尚未连接后端，装配状态将在连接恢复后重新校准。</div>
     <NSpin v-else-if="loading" style="margin: 64px auto; display: block" />
     <NEmpty v-else-if="error" :description="error" style="margin: 64px 0" />
 

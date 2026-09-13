@@ -5,7 +5,7 @@
  *   （unilabos_* 标记 + legacy Resource msg 结构识别，见 action-placeholders.ts）；
  * - 动态可填项：物料 / 在线设备 / 资源模板 / 人工确认指派人，表单激活时实时
  *   拉取，seq 守卫丢弃过期响应，设备/动作变化 400ms 防抖重识别；
- * - 人工确认指派（unilabos_manual_confirm）：微后端没有用户目录，渲染为 tags
+ * - 人工确认指派（unilabos_manual_confirm）：后端没有用户目录，渲染为 tags
  *   自由输入（可从本机最近使用的指派人补全）；
  * - 置顶聚焦：可选 isFocused 回调（编辑器接变量表）；不传则默认全量展示；
  * - 参数写回统一走 paramJson（提交 payload 形状不变）。
@@ -310,7 +310,7 @@ export function useActionParamForm(options: ActionParamFormOptions) {
 
   const RECENT_ASSIGNEES_KEY = "openlab:manual-confirm-assignees";
 
-  /** 指派人：微后端无用户目录，用本机最近使用的指派人作为补全，允许自由输入。 */
+  /** 指派人：后端无用户目录，用本机最近使用的指派人作为补全，允许自由输入。 */
   function loadConfirmUsers(seq: number): void {
     if (seq !== loadSeq) return;
     let recent: string[] = [];

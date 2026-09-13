@@ -6,7 +6,7 @@
 规则：
 
 - 只调用 `useConnectionStore().api.domains.*` 现有方法和现有 stores。
-- 不修改 `packages/protocol`、`docs/protocol` 或微后端协议。
+- 不修改 `packages/protocol`、`docs/protocol` 或后端协议。
 - 领域计算器可写在页面中；设备、物料、执行状态必须来自标准接口。
 - 案例必须能通过 `pnpm run build`，并对四种状态（在线 / 离线 / 空数据 / 角色不支持）给出降级态。
 

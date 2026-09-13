@@ -4,7 +4,7 @@
 declare const __OPENLAB_DEV_PROXY_TARGET__: string;
 
 interface ImportMetaEnv {
-  /** 首次连接的默认微后端地址。 */
+  /** 首次连接的默认后端地址。 */
   readonly VITE_DEFAULT_EDGE_URL?: string;
   /** 驱动包索引地址（缺省 awesome-lab-devices 的 main/index.json）。 */
   readonly VITE_OPENLAB_DEVICE_INDEX_URL?: string;

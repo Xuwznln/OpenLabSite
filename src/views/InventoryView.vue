@@ -467,7 +467,7 @@ async function submitMove() {
   moving.value = true;
   try {
     if (sourceDevice && targetDevice && sourceDevice.material.material_uuid !== targetDevice.material.material_uuid) {
-      // 跨设备：走 transfer，由微后端提交位置并同步两端设备。
+      // 跨设备：走 transfer，由后端提交位置并同步两端设备。
       await conn.api.domains.materialsV1.transfer({
         source_device_id: sourceDevice.material.resource_id,
         target_device_id: targetDevice.material.resource_id,
@@ -1008,7 +1008,7 @@ const selectedDevice = computed(() => rootDeviceOf(selected.value));
       </template>
     </PageHeader>
 
-    <NAlert v-if="!conn.online" type="info">尚未连接微后端，物料权威不可读。</NAlert>
+    <NAlert v-if="!conn.online" type="info">尚未连接后端，物料权威不可读。</NAlert>
     <NAlert v-else-if="lastError" type="warning">物料读取失败：{{ lastError }}</NAlert>
 
     <div class="workbench">
@@ -1178,7 +1178,7 @@ const selectedDevice = computed(() => rootDeviceOf(selected.value));
           <NSelect v-model:value="moveSiteUuid" filterable :options="vacantSiteOptions" placeholder="选择设备 · 位点" />
         </NFormItem>
       </NForm>
-      <p class="dim small">同一设备内换位走 move；跨设备自动走 transfer，由微后端驱动两端设备同步后返回。</p>
+      <p class="dim small">同一设备内换位走 move；跨设备自动走 transfer，由后端驱动两端设备同步后返回。</p>
       <NSpace justify="end">
         <NButton @click="moveOpen = false">取消</NButton>
         <NButton type="primary" :loading="moving" :disabled="!moveSiteUuid" @click="submitMove">确认</NButton>

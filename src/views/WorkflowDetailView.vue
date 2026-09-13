@@ -294,7 +294,7 @@ watch(
     </NAlert>
 
     <div v-if="!graph && !conn.online" class="degraded">
-      <span class="degraded-title">等待微后端连接</span>
+      <span class="degraded-title">等待后端连接</span>
       连接恢复后会自动载入该流程的定义与运行记录。
     </div>
 

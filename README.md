@@ -1,25 +1,32 @@
 # OpenLab
 
+在线使用：[OpenLabSite](https://xuwznln.github.io/OpenLabSite/) · [本地启动教程](docs/LOCAL_START.md)
+
+项目署名：上海交通大学rethinklab · 北京中关村学院 · DeepModellings
+
+默认连接本机后端 `http://127.0.0.1:8002`，不默认连接公共演示服务。
+旧版保存的公共演示地址会一次性迁移为默认地址；随后仍可手动设置远程后端。
+
 > OpenLabSite 当前仅发布通用版；下文遗留的领域工具及主题说明仅适用于旧仓库
 > `archive/domain-editions-20260913`。本版不支持学科切换或 `?theme=`，详见
 > [通用版边界](docs/GENERAL_EDITION.md)。物料管理、装配和实验室地图保持可用。
 
-OpenLab is the local-first operations console for the Uni-Lab-OS microbackend. It gives a
+OpenLab is the local-first operations console for the Uni-Lab-OS backend. It gives a
 laboratory one static web application for device operation, material tracking, workflow
 authoring and execution, live telemetry, audit history and runtime diagnostics.
 
 The browser connects directly to a Uni-Lab-OS management endpoint (default
-`http://127.0.0.1:8002`). The microbackend stays the system of record: OpenLab never reads
+`http://127.0.0.1:8002`). The backend stays the system of record: OpenLab never reads
 databases or requires a cloud control plane.
 
 ## Project Status
 
-OpenLab tracks the Uni-Lab-OS microbackend HTTP API (`unilabos/server/api/`). The wire
+OpenLab tracks the Uni-Lab-OS backend HTTP API (`unilabos/server/api/`). The wire
 protocol (v1, `/api/v1`) is specified in [`docs/protocol/`](./docs/protocol/README.md) —
 [`conventions.md`](./docs/protocol/conventions.md) is the normative text — and implemented by
 [`@openlab/protocol`](./packages/protocol/README.md), a standalone package published
 separately from the web application, validated on its own and smoke-tested against a live
-microbackend.
+backend.
 
 ## Pages
 
@@ -49,7 +56,7 @@ OpenLab Web (Vue 3 · Pinia · Naive UI)
 @openlab/protocol  (12 domains · 118 operations · catalog + tests + live smoke · published separately)
         │
         ▼
-Uni-Lab-OS microbackend :8002
+Uni-Lab-OS backend :8002
   ├─ runtime.db    runtime.v1, Workflow Authority, Registry Authority
   ├─ materials.db  materials.v1, device graphs
   ├─ telemetry.db  latest device state, telemetry events
@@ -76,7 +83,7 @@ See [Architecture](./docs/ARCHITECTURE.md) and the [protocol overview](./docs/pr
 
 - Node.js 22 or later
 - pnpm 10.30.3 (declared in `packageManager`)
-- a reachable Uni-Lab-OS microbackend (`unilab -g graph.json` or `unilab --role backend`)
+- a reachable Uni-Lab-OS backend (`unilab -g graph.json` or `unilab --role backend`)
 
 ## Development
 
@@ -98,7 +105,7 @@ pnpm --filter @openlab/protocol smoke -- http://127.0.0.1:8002 --write   # live 
 
 ## Connecting
 
-The "microbackend address" is simply the management port of a `unilab` process
+The "backend address" is simply the management port of a `unilab` process
 (`unilab --port 8002`, default `8002`). It is editable in the top-right connection popover and
 stored in browser local storage. You only need to touch it to reach a *different* process:
 
@@ -111,14 +118,14 @@ Where the address comes from by default:
 
 | How the page is served | Default address | Why |
 | --- | --- | --- |
-| `pnpm run dev` (`localhost:5180`) | `http://127.0.0.1:8002` | direct connection; the microbackend allows CORS |
-| `pnpm run dev` with `OPENLAB_EDGE_PROXY_TARGET` set | the page itself | opt-in: Vite proxies `/api` to a microbackend the browser cannot reach directly (remote tunnel, HTTPS mixed content) |
+| `pnpm run dev` (`localhost:5180`) | `http://127.0.0.1:8002` | direct connection; the backend allows CORS |
+| `pnpm run dev` with `OPENLAB_EDGE_PROXY_TARGET` set | the page itself | opt-in: Vite proxies `/api` to a backend the browser cannot reach directly (remote tunnel, HTTPS mixed content) |
 | GitHub Pages / any static host | `http://127.0.0.1:8002` | the UI is remote, the process is local |
 | Behind a reverse proxy that serves both the site and `/api` | the page itself | detected on first visit via `GET /api/v1/health` on the page origin |
 
 Set a different build-time default with `VITE_DEFAULT_EDGE_URL` (see `.env.example`).
 
-### HTTPS page, `http://` microbackend
+### HTTPS page, `http://` backend
 
 The hosted site is served over HTTPS while `unilab` speaks plain HTTP. Browsers apply their
 mixed-content rules:
@@ -130,7 +137,7 @@ mixed-content rules:
   settings (one-time), forward the remote port to `127.0.0.1` with `netsh interface portproxy`
   on Windows, open the site over `http://`, or reverse-proxy `/api` on the same origin.
 
-The microbackend answers Chrome's Private Network Access preflight
+The backend answers Chrome's Private Network Access preflight
 (`Access-Control-Allow-Private-Network: true`), so once the browser lets the request through,
 nothing else needs to be configured.
 
@@ -138,7 +145,7 @@ nothing else needs to be configured.
 
 The "驱动包" page lists installable device driver packages from
 [awesome-lab-devices](https://github.com/Xuwznln/awesome-lab-devices) (`index.json`, read directly
-by the browser) and sends the chosen `spec` (a GitHub repository URL) to the connected microbackend,
+by the browser) and sends the chosen `spec` (a GitHub repository URL) to the connected backend,
 which downloads the source tree into `unilabos_data/driver_packages/`, mounts it like `--devices`, and
 pre-installs its `pyproject` dependencies with `uv` (no `pip install` of the package itself). Override
 the index with `VITE_OPENLAB_DEVICE_INDEX_URL` at build time or
@@ -151,18 +158,18 @@ The "站点" catalog next to the domain switcher lists front-end sites from
 [awesome-lab-sites](https://github.com/Xuwznln/awesome-lab-sites) (`index.json`, read directly by
 the browser): the general OpenLab site, per-domain entry points (`?theme=organic|biology|materials`
 on the same deployment, applied at startup), and community forks. Override the index with
-`VITE_OPENLAB_SITE_INDEX_URL` at build time. The `unilab` microbackend landing page reads the same
+`VITE_OPENLAB_SITE_INDEX_URL` at build time. The `unilab` backend landing page reads the same
 index for its "推荐前端" cards.
 
 ## Deployment
 
-Static Vite build with hash routing and relative base path. The microbackend does not host
+Static Vite build with hash routing and relative base path. The backend does not host
 the UI. GitHub Actions checks the protocol and application, builds `dist/` (not committed),
 and deploys an artifact directly to this repository's GitHub Pages:
 [OpenLabSite](https://xuwznln.github.io/OpenLabSite/).
 Set Settings → Pages → Source to **GitHub Actions**. No deploy key or cross-repository push
 is used. Pull requests only validate; deployment runs on `main`.
-Operators connect to their own microbackend (default `http://127.0.0.1:8002`).
+Operators connect to their own backend (default `http://127.0.0.1:8002`).
 
 ## AI-assisted Domain Adaptation
 
@@ -176,7 +183,7 @@ undocumented endpoint.
 
 - OpenLab does not proxy traffic through a project-operated cloud service.
 - Do not commit credentials, laboratory data, or database files.
-- Production deployments should restrict microbackend CORS origins and bind the management API
+- Production deployments should restrict backend CORS origins and bind the management API
   to trusted interfaces.
 - Material writes use the materials.v1 idempotency envelope; workflow graph writes use
   revision optimistic locking.
@@ -184,7 +191,7 @@ undocumented endpoint.
 ## Contributing
 
 Protocol changes require synchronized updates to `packages/protocol/` (types, catalog,
-tests), `docs/protocol/`, the microbackend implementation, and affected views — the checklist
+tests), `docs/protocol/`, the backend implementation, and affected views — the checklist
 is [`conventions.md §11`](./docs/protocol/conventions.md#11-契约治理新增或修改一个端点). Run
 `pnpm run build` before submitting changes.
 

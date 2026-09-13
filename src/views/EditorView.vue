@@ -4170,7 +4170,7 @@ async function performSubmit(options: { saveOnly?: boolean; runMode?: WorkflowEx
     return;
   }
   if (!conn.online) {
-    message.error("尚未连接微后端，无法提交");
+    message.error("尚未连接后端，无法提交");
     return;
   }
   if (!validateVariableGroups()) return;
@@ -4669,7 +4669,7 @@ onUnmounted(() => {
           <NModal v-model:show="submissionOpen" preset="card" title="提交工作流运行" style="width: 480px">
             <p>{{ workflowName || '当前画布' }} · {{ nodeCount }} 个节点</p>
             <NSelect v-model:value="runMode" :options="WORKFLOW_RUN_OPTIONS" :disabled="submitting" aria-label="运行方式" />
-            <p>{{ runMode === 'step' ? '提交后先等待。在运行详情页点击「执行下一步」，每次只放行一个动作，也可切换自动执行。' : '提交后由微后端按依赖和资源情况自动执行到结束。' }}</p>
+            <p>{{ runMode === 'step' ? '提交后先等待。在运行详情页点击「执行下一步」，每次只放行一个动作，也可切换自动执行。' : '提交后由后端按依赖和资源情况自动执行到结束。' }}</p>
             <template #footer>
               <NSpace justify="end">
                 <NButton :disabled="submitting" @click="submissionOpen = false">取消</NButton>

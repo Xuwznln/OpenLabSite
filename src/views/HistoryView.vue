@@ -309,7 +309,7 @@ onMounted(() => {
     </PageHeader>
 
     <div v-if="!conn.online" class="degraded">
-      <span class="degraded-title">尚未连接微后端</span>
+      <span class="degraded-title">尚未连接后端</span>
       连接后可查看执行历史。
     </div>
 

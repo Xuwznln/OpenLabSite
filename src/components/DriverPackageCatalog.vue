@@ -3,7 +3,7 @@
  * 可安装的驱动包目录。
  *
  * 主来源是 awesome-lab-devices 索引（浏览器直接读 index.json，与 Edge 是否出网无关），
- * 补充来源是微后端 GET /driver-packages/catalog（Edge 侧内网镜像 + 本地 catalog 文件）。
+ * 补充来源是后端 GET /driver-packages/catalog（Edge 侧内网镜像 + 本地 catalog 文件）。
  * 点「安装」把 spec + name 交给父组件走安装流程（POST /driver-packages/install）。
  */
 import { computed, onMounted, ref, shallowRef, watch } from "vue";
@@ -26,7 +26,7 @@ import { describeError } from "../features/errors";
 import { useConnectionStore } from "../stores/connection";
 
 const props = defineProps<{
-  /** 微后端台账里的包名，用来标「已登记」。 */
+  /** 后端台账里的包名，用来标「已登记」。 */
   installedNames: string[];
   /** 父组件正在启动的包名（台账名），对应行的「启动」按钮转圈。 */
   launching?: string | null;
@@ -71,7 +71,7 @@ async function loadEdgeCatalog() {
     edgeCatalog.value = await conn.api.domains.driverPackages.catalog();
     edgeError.value = "";
   } catch (error) {
-    // 老版本微后端没有这个接口：目录只剩索引，不算故障
+    // 老版本后端没有这个接口：目录只剩索引，不算故障
     edgeCatalog.value = null;
     edgeError.value = describeError(error);
   }
@@ -235,7 +235,7 @@ defineExpose({ refresh });
             :type="row.installed ? 'default' : 'primary'"
             :secondary="row.installed"
             :disabled="!conn.online"
-            :title="conn.online ? '' : '先连接微后端'"
+            :title="conn.online ? '' : '先连接后端'"
             @click="install(row)"
           >
             {{ row.installed ? "重装 / 升级" : "安装到 Edge" }}
