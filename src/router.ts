@@ -4,6 +4,7 @@ import { createRouter, createWebHashHistory } from "vue-router";
 export const router = createRouter({
   history: createWebHashHistory(),
   routes: [
+    { path: "/materials", name: "materials-workbench", component: () => import("./views/MaterialsWorkbenchView.vue"), meta: { title: "材料实验工作台", overline: "Evidence to experiment" } },
     {
       path: "/",
       name: "console",
@@ -26,7 +27,6 @@ export const router = createRouter({
       component: () => import("./views/InventoryView.vue"),
       meta: { title: "物料", overline: "Materials" },
     },
-    { path: "/materials", redirect: "/inventory" },
     {
       path: "/lab",
       name: "lab",

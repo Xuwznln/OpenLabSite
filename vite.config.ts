@@ -21,7 +21,11 @@ export default defineConfig(({ mode, command }) => {
       port: 5180,
       // 本地联调会经端口转发/临时域名访问；仅影响 dev server。
       allowedHosts: true,
-      proxy: edgeProxyTarget
+      proxy: {
+        "/edge": { target: edgeProxyTarget || "http://127.0.0.1:8002", changeOrigin: true, ws: true, rewrite: (path: string) => path.replace(/^\/edge/, "") },
+        "/execution": { target: "http://127.0.0.1:8093" },
+        "/sim": { target: "http://127.0.0.1:8093", ws: true },
+        ...(edgeProxyTarget
         ? {
             // REST 与 SSE 都在 /api/v1 下；同源代理避免 CORS 与 HTTPS 混合内容。
             "/api": {
@@ -30,7 +34,8 @@ export default defineConfig(({ mode, command }) => {
               ws: true,
             },
           }
-        : undefined,
+        : {}),
+      },
     },
   };
 });

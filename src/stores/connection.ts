@@ -19,7 +19,7 @@ import { describeError, isOfflineError } from "../features/errors";
 import { classifyTarget } from "../features/insecure-target";
 import { DEFAULT_LOCAL_EDGE_URL, initialBackendUrl } from "../config/edge-endpoints";
 
-const STORAGE_KEY = "openlab:base-url";
+const STORAGE_KEY = "openlab:materials-base-url";
 const RECENT_KEY = "openlab:recent-base-urls";
 
 export { DEFAULT_LOCAL_EDGE_URL };
@@ -111,14 +111,14 @@ export const DEV_PROXY_TARGET: string =
 /** 默认直连后端；只有显式配置了代理目标（远程 / HTTPS 场景）才走页面同源。 */
 const DEV_PROXY_ACTIVE = import.meta.env.DEV && DEV_PROXY_TARGET !== "" && !CONFIGURED_BASE_URL;
 const DEFAULT_BASE_URL =
-  CONFIGURED_BASE_URL || (DEV_PROXY_ACTIVE ? PAGE_ORIGIN : DEFAULT_LOCAL_EDGE_URL);
+  CONFIGURED_BASE_URL || PAGE_ORIGIN + "/edge";
 
 /**
  * 首次访问且页面不是由 Vite dev 提供时，探测「页面同源是否就是后端」
  * （前端与 /api 被同一反向代理托管的部署）。命中则无需用户填任何地址。
  */
 async function detectSameOriginBackend(): Promise<boolean> {
-  if (import.meta.env.DEV || !/^https?:/.test(PAGE_ORIGIN)) return false;
+  if (DEFAULT_BASE_URL === PAGE_ORIGIN + '/edge' || import.meta.env.DEV || !/^https?:/.test(PAGE_ORIGIN)) return false;
   try {
     // 同源探测也必须经过协议包：路由、错误归一化和响应类型都由
     // @openlab/protocol 的 system 域维护，页面层不再自行拼接 /api/v1 路径。

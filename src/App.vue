@@ -70,7 +70,7 @@ interface NavGroup {
 const NAV_GROUPS_BASE = [
   {
     key: "overview",
-    items: [{ key: "console", to: "/", icon: TerminalOutline }],
+    items: [{ key: "materials-workbench", to: "/materials", icon: FlaskOutline }, { key: "console", to: "/", icon: TerminalOutline }],
   },
   {
     key: "workspace",
@@ -120,12 +120,13 @@ const navGroups = computed<NavGroup[]>(() =>
       title: "title" in group ? group.title : undefined,
       items: group.items.map((item) => ({
         ...item,
-        label: domain.config.nav[item.key as keyof typeof domain.config.nav],
+        label: item.key === "materials-workbench" ? "材料实验" : domain.config.nav[item.key as keyof typeof domain.config.nav],
       })),
     })),
 );
 
 const ROUTE_KEYS: Array<[prefix: string, key: string]> = [
+  ["/materials", "materials-workbench"],
   ["/lab", "lab"],
   ["/workflow-tasks", "workflows"],
   ["/workflows", "workflows"],
