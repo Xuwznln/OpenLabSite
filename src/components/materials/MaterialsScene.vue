@@ -4,21 +4,29 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { loadScene } from '../../features/materials/scene-glb.js';
 import { materialApi } from '../../features/materials/api';
+import { replayTimeline, replayPosition, type RecordedAction, type ReplayEntry } from '../../features/materials/replay';
 
-const emit = defineEmits<{ ready: [value: boolean]; state: [value: any]; metric: [value: any] }>();
+defineProps<{ focused?: boolean }>();
+const emit = defineEmits<{ ready: [value: boolean]; state: [value: any]; metric: [value: any]; playback: [value: any]; status: [value: any]; 'toggle-focus': [] }>();
 const host = ref<HTMLDivElement>();
 const loading = ref(true), error = ref(''), loadingText = ref('正在加载实验室…');
 const role = ref('observer'), connected = ref(false), cameraName = ref('overview');
 const followWorkflow = ref(true);
+const displayMode = ref<'live'|'preview'|'replay'>('preview');
+const motionDemo = ref(false);
+const transport = ref('连接中');
+let replayEntries: ReplayEntry[] = [], replaySeconds = 0, replaySpeed = 1, replayPaused = false, replayIndex = -1, lastReplayEmit = 0;
+let statePollPending = false;
 const fps = ref(0), cacheLabel = ref('读取模型'), selected = shallowRef<any>(null);
 const clientId = crypto.randomUUID();
 const objects = new Map<string, THREE.Group>(), parts = new Map<string, Map<string, THREE.Group>>();
 const pickables: THREE.Object3D[] = [];
 let renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.PerspectiveCamera, controls: OrbitControls;
-let ws: WebSocket | null = null, raf = 0, reconnectTimer = 0, heartbeatTimer = 0, observer: ResizeObserver;
+let ws: WebSocket | null = null, raf = 0, reconnectTimer = 0, heartbeatTimer = 0, fallbackTimer = 0, observer: ResizeObserver;
 let disposed = false, manifest: any, snapshot: any, command: any, lease = 0, commandFrames = 0;
 let lastFrameTime = 0, lastMetricAt = 0, frames = 0, receivedAt = 0, fetchingCommand = '';
 let acknowledged = '', ackPending = false, runSeen: string | null = null, frameState: any = null;
+let leaseSeen=0;
 let highlight: THREE.BoxHelper | null = null;
 const latencies: number[] = [];
 const metrics: any = { fps:0, renderedFrames:0, acknowledgedCommands:0, trajectoryLatencyMs:[], maxPositionErrorM:0, maxAngleErrorDeg:0 };
@@ -53,12 +61,12 @@ function mixPose(a:number[],b:number[],s:number) {
   const qa=new THREE.Quaternion(a[4],a[5],a[6],a[3]);const qb=new THREE.Quaternion(b[4],b[5],b[6],b[3]);qa.slerp(qb,s);
   return [a[0]!+(b[0]!-a[0]!)*s,a[1]!+(b[1]!-a[1]!)*s,a[2]!+(b[2]!-a[2]!)*s,qa.w,qa.x,qa.y,qa.z];
 }
-function sampleTrajectory(t:number) {
-  const trajectory=command.trajectory;const keyframes=trajectory.frames;
+function sampleTrajectory(t:number, trajectory=command.trajectory) {
+  const keyframes=trajectory.frames;
   if(t>=1) return trajectory.end_state;
   let hi=keyframes.findIndex((f:any)=>f.at>=t);if(hi<=0)hi=1;
   const a=keyframes[hi-1],b=keyframes[hi];const f=Math.max(0,Math.min(1,(t-a.at)/Math.max(.00001,b.at-a.at)));
-  const current:any={objects:{},temperature_C:a.temperature_C ?? snapshot.scene_state.temperature_C};
+  const current:any={objects:{},temperature_C:a.temperature_C ?? manifest.initial_state.temperature_C};
   for(const uid of trajectory.affected_objects){
     const left=a.objects[uid],right=b.objects[uid];
     current.objects[uid]={...left,pose:mixPose(left.pose,right.pose,f),bodies:{}};
@@ -80,7 +88,7 @@ function actualEndState() {
   return result;
 }
 async function acknowledge() {
-  if(ackPending||acknowledged===command.id||role.value!=='executor')return;
+  if(displayMode.value!=='live'||ackPending||!command||acknowledged===command.id||role.value!=='executor')return;
   ackPending=true;
   const cid=command.id;
   try {
@@ -96,8 +104,12 @@ async function acknowledge() {
   finally { ackPending=false; }
 }
 async function acceptState(value:any) {
+  if(snapshot && value.server_time < snapshot.server_time)return;
   snapshot=value;receivedAt=performance.now();connected.value=true;
+  if(displayMode.value==='preview'&&value.run_id&&!['succeeded','failed','cancelled','aborted'].includes(value.run_state))displayMode.value='live';
+  reportReady();
   const lag=Math.max(0,Date.now()-value.server_time*1000);latencies.push(lag);if(latencies.length>300)latencies.shift();
+  if(displayMode.value!=='live'){emit('state',value);return;}
   if(value.run_id!==runSeen){runSeen=value.run_id;command=null;applyState(value.scene_state);}
   if(!value.command){
     command=null;applyState(value.scene_state);
@@ -105,7 +117,7 @@ async function acceptState(value:any) {
     const cid=value.command.id;fetchingCommand=cid;
     try{
       const payload=await materialApi('/execution/commands/'+cid);
-      if(snapshot?.command?.id!==cid)return;
+      if(snapshot?.command?.id!==cid||displayMode.value!=='live')return;
       applyState(value.scene_state);command=payload;commandFrames=0;acknowledged='';error.value='';
       const targetId=command.trajectory.affected_objects.find((id:string)=>!id.startsWith('ur')&&!id.startsWith('fr3'));
       if(targetId) selectObject(targetId);
@@ -118,18 +130,46 @@ function connect() {
   if(disposed)return;
   const url=new URL('/sim/ws',location.href);url.protocol=location.protocol==='https:'?'wss:':'ws:';
   ws=new WebSocket(url);
-  ws.onmessage=(event)=>{try{void acceptState(JSON.parse(event.data));}catch(e){error.value=String(e);}};
-  ws.onclose=()=>{connected.value=false;if(!disposed)reconnectTimer=window.setTimeout(connect,1500);};
-  ws.onerror=()=>{connected.value=false;};
+  ws.onmessage=(event)=>{try{transport.value='实时连接';void acceptState(JSON.parse(event.data)).catch(e=>{error.value=String(e);});}catch(e){error.value=String(e);}};
+  ws.onclose=()=>{connected.value=performance.now()-receivedAt<3500;transport.value='状态同步';reportReady();if(!disposed)reconnectTimer=window.setTimeout(connect,1500);};
+  ws.onerror=()=>{connected.value=performance.now()-receivedAt<3500;};
 }
 async function claim() {
-  if(!manifest||loading.value||disposed||document.visibilityState!=='visible')return;
+  if(!manifest||loading.value||disposed||displayMode.value==='replay'||document.visibilityState!=='visible')return;
   try{
     const answer=await materialApi('/sim/claim',{client_id:clientId,scene_hash:manifest.kinematics.sha256,renderer_ready:true});
-    role.value=answer.role;lease=answer.lease_epoch;
-    emit('ready',role.value==='executor');
+    role.value=answer.role;lease=answer.lease_epoch;leaseSeen=role.value==='executor'?performance.now():0;
+    reportReady();
   }catch(e){error.value=(e as Error).message;emit('ready',false);}
 }
+function reportReady() {
+  const online=connected.value&&performance.now()-receivedAt<3500;
+  emit('ready',!loading.value&&online&&role.value==='executor'&&performance.now()-leaseSeen<2500&&displayMode.value!=='replay');
+  emit('status',{loaded:!loading.value,connected:online,role:role.value,transport:transport.value,error:error.value});
+}
+async function pollState() {
+  if(statePollPending||disposed)return;
+  statePollPending=true;
+  try { const value=await materialApi('/sim/state');if(disposed)return;transport.value='状态同步';if(error.value==='实验状态暂时不可达，正在重新连接。')error.value='';await acceptState(value); }
+  catch(e){connected.value=false;error.value='实验状态暂时不可达，正在重新连接。';reportReady();}
+  finally{statePollPending=false;}
+}
+function showInitial() { displayMode.value='preview';replayEntries=[];command=null;runSeen=null;if(manifest)applyState(manifest.initial_state);reportReady(); }
+function showRecordedState(value:any) { displayMode.value='preview';replayEntries=[];command=null;if(manifest)applyState(value);reportReady(); }
+function resumeLive() { displayMode.value='live';replayEntries=[];command=null;runSeen=null;if(snapshot)void acceptState(snapshot);reportReady(); }
+function enterReplay() { displayMode.value='replay';replayEntries=[];command=null;role.value='observer';leaseSeen=0;emit('ready',false); }
+function playbackUpdate() {
+  const position=replayPosition(replayEntries,replaySeconds);
+  const value={seconds:position.elapsed,total:position.total,index:position.index,count:replayEntries.length,nodeId:position.entry?.node_id,paused:replayPaused,completed:position.completed,mode:motionDemo.value?'motion':'full'};
+  metrics.playback=value;emit('playback',value);
+}
+function startReplay(actions:RecordedAction[], speed=1, includedNodes?:string[]) {
+  enterReplay();motionDemo.value=!!includedNodes;replayEntries=replayTimeline(manifest.initial_state,actions,includedNodes?new Set(includedNodes):undefined);replaySeconds=0;replayIndex=-1;replayPaused=false;replaySpeed=speed;
+  followWorkflow.value=true;lastFrameTime=performance.now();applyState(replayEntries[0]?.before||manifest.initial_state);playbackUpdate();
+}
+function seekReplay(seconds:number) { replaySeconds=replayPosition(replayEntries,seconds).elapsed;replayIndex=-1;playbackUpdate(); }
+function pauseReplay(paused:boolean) { replayPaused=paused;lastFrameTime=performance.now();playbackUpdate(); }
+function setReplaySpeed(value:number) { replaySpeed=value; }
 function cameraView(key:string, automatic=false) {
   if(automatic&&!followWorkflow.value)return;
   if(!automatic)followWorkflow.value=false;
@@ -155,8 +195,17 @@ function click(event:PointerEvent) {
 }
 function draw(now:number) {
   if(disposed)return;raf=requestAnimationFrame(draw);
-  if(now-lastFrameTime<15)return;lastFrameTime=now;
-  if(command&&snapshot?.command?.id===command.id){
+  if(now-lastFrameTime<15)return;const delta=Math.min(.25,Math.max(0,(now-lastFrameTime)/1000));lastFrameTime=now;
+  if(displayMode.value==='replay'&&replayEntries.length){
+    if(!replayPaused)replaySeconds+=delta*replaySpeed;
+    const position=replayPosition(replayEntries,replaySeconds);replaySeconds=position.elapsed;
+    if(position.entry){
+      if(replayIndex!==position.index){applyState(position.entry.before);replayIndex=position.index;}
+      applyState(sampleTrajectory(position.fraction,position.entry.trajectory));
+    }
+    if(position.completed)replayPaused=true;
+    if(now-lastReplayEmit>100){playbackUpdate();lastReplayEmit=now;}
+  }else if(displayMode.value==='live'&&command&&snapshot?.command?.id===command.id){
     const current=snapshot.command;
     // Server clock is authoritative. Extrapolate only until the next expected state,
     // freeze on disconnect/hidden tabs; do not multiply the stored time again.
@@ -173,7 +222,7 @@ function draw(now:number) {
   if(now-lastMetricAt>=1000){
     fps.value=Math.round(frames*1000/(now-lastMetricAt));metrics.fps=fps.value;frames=0;lastMetricAt=now;
     metrics.latencyP95Ms=[...latencies].sort((a,b)=>a-b)[Math.floor(latencies.length*.95)]||0;
-    metrics.cache=(window as any).labAssetCache;metrics.rendererRole=role.value;
+    metrics.cache=(window as any).labAssetCache;metrics.rendererRole=role.value;metrics.transport=transport.value;
     (window as any).materialsMetrics=metrics;emit('metric',{...metrics});
     if(selected.value){const object=objects.get(selected.value.id);if(object)selected.value={id:selected.value.id,pose:readPose(object),state:frameState?.objects?.[selected.value.id]};}
   }
@@ -202,47 +251,54 @@ onMounted(async()=>{
     renderer.domElement.addEventListener('pointerup',click);
     observer=new ResizeObserver(()=>{if(!host.value)return;const w=host.value.clientWidth,h=host.value.clientHeight;renderer.setSize(w,h);camera.aspect=w/h;camera.updateProjectionMatrix();});observer.observe(host.value!);
     loading.value=false;loadingText.value='';lastMetricAt=performance.now();raf=requestAnimationFrame(draw);
-    await claim();connect();
+    await pollState();await claim();connect();
+    fallbackTimer=window.setInterval(()=>{
+      if(document.visibilityState==='visible'&&(ws?.readyState!==WebSocket.OPEN||performance.now()-receivedAt>900))void pollState();
+    },250);
     heartbeatTimer=window.setInterval(async()=>{
       if(document.visibilityState!=='visible'){emit('ready',false);return;}
+      if(performance.now()-receivedAt>900)void pollState();
+      if(displayMode.value==='replay')return;
       if(role.value!=='executor'){await claim();return;}
-      try{await materialApi('/sim/heartbeat',{client_id:clientId,lease_epoch:lease});emit('ready',true);}
+      try{await materialApi('/sim/heartbeat',{client_id:clientId,lease_epoch:lease});leaseSeen=performance.now();reportReady();}
       catch{role.value='observer';await claim();}
     },1000);
   }catch(e){error.value=(e as Error).message;loading.value=false;emit('ready',false);}
 });
 onBeforeUnmount(()=>{
-  disposed=true;cancelAnimationFrame(raf);clearInterval(heartbeatTimer);clearTimeout(reconnectTimer);ws?.close();observer?.disconnect();
+  disposed=true;cancelAnimationFrame(raf);clearInterval(heartbeatTimer);clearInterval(fallbackTimer);clearTimeout(reconnectTimer);ws?.close();observer?.disconnect();
   window.removeEventListener('lab-asset-cache-progress',progress);controls?.dispose();
   scene?.traverse(o=>{if(o instanceof THREE.Mesh){o.geometry.dispose();for(const m of Array.isArray(o.material)?o.material:[o.material])m.dispose();}});
   renderer?.dispose();emit('ready',false);
 });
-defineExpose({cameraView,selectObject,metrics});
+defineExpose({cameraView,selectObject,metrics,showInitial,showRecordedState,resumeLive,enterReplay,startReplay,seekReplay,pauseReplay,setReplaySpeed});
 </script>
 
 <template>
   <section class="materials-scene">
-    <div class="scene-toolbar"><div class="scene-mode"><i :class="{online:connected}"/>网页轨迹仿真 <span>USD 原始模型</span></div>
-      <div class="camera-switch"><button v-for="[key,label] in [['overview','全景'],['A','A · 制备'],['B','B · 热处理'],['C','C · 表征']]" :key="key" :class="{active:cameraName===key}" @click="cameraView(key!)">{{label}}</button><button :class="{active:followWorkflow}" @click="followWorkflow=!followWorkflow">跟随流程</button></div>
+    <div class="scene-toolbar"><div class="scene-mode"><i :class="{online:connected}"/>{{displayMode==='replay'?(motionDemo?'主要动作演示':'历史轨迹回放'):'网页轨迹仿真'}} <span>USD 原始模型</span></div>
+      <button class="scene-focus" :aria-pressed="!!focused" @click="emit('toggle-focus')">{{focused?'退出专注':'专注场景'}} <span aria-hidden="true">{{focused?'↙':'↗'}}</span></button>
     </div>
     <div ref="host" class="three-viewport">
+      <div class="camera-switch" aria-label="场景视角"><button v-for="[key,label] in [['overview','全景'],['A','A 制备'],['B','B 热处理'],['C','C 表征']]" :key="key" :class="{active:cameraName===key}" :aria-pressed="cameraName===key" @click="cameraView(key!)">{{label}}</button><button :class="{active:followWorkflow}" :aria-pressed="followWorkflow" @click="followWorkflow=!followWorkflow">跟随流程</button></div>
       <div v-if="loading||error" class="scene-message" :class="{problem:!!error}"><strong>{{error?'场景提示':'加载实验室'}}</strong><span>{{error||loadingText}}</span><button v-if="error&&!loading" @click="error=''">收起</button></div>
       <div v-if="selected&&!loading" class="object-coordinate"><strong>{{selected.id}}</strong><span>{{selected.pose.slice(0,3).map((v:number)=>v.toFixed(3)).join(' · ')}} m</span><small v-if="selected.state?.capped!==undefined && /^(vial|precursor)_/.test(selected.id)">{{selected.state.capped?'已封盖':'未封盖'}}</small></div>
       <div class="scene-hint">拖动旋转 · 滚轮缩放 · 点击设备查看坐标</div>
     </div>
-    <div class="scene-footer"><span><i :class="{online:connected}"/>{{connected?'状态桥已连接':'状态桥连接中'}}</span><span>{{role==='executor'?'此页面执行':'观察模式'}}</span><span>{{fps}} FPS</span><span>{{cacheLabel}}</span><span>m · Z↑</span></div>
+    <div class="scene-footer"><span><i :class="{online:connected}"/>{{connected?transport:'状态连接中'}}</span><span>{{displayMode==='replay'?'只读回放':role==='executor'?'此页面执行':'观察模式'}}</span><span>{{fps}} FPS</span><span>{{cacheLabel}}</span></div>
   </section>
 </template>
 
 <style scoped>
-.materials-scene{height:100%;min-height:450px;display:flex;flex-direction:column;background:var(--panel,#fbfaf7);border:1px solid var(--hairline,#d8dad6);border-radius:14px;overflow:hidden}
-.scene-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:46px;padding:8px 14px;border-bottom:1px solid var(--hairline,#d8dad6);font-size:12px}
+.materials-scene{height:100%;min-height:0;min-width:0;container-type:inline-size;display:flex;flex-direction:column;background:var(--panel,#fbfaf7);border:1px solid var(--hairline,#d8dad6);border-radius:12px;overflow:hidden}
+.scene-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:39px;box-sizing:border-box;flex:none;padding:7px 12px;border-bottom:1px solid var(--hairline,#d8dad6);font-size:12px}
 .scene-mode{display:flex;align-items:center;gap:7px;font-weight:600}.scene-mode span{color:var(--slate,#66737b);font-weight:400}
 i{display:inline-block;width:6px;height:6px;border-radius:50%;background:#b98032;margin-right:5px}i.online{background:var(--domain-accent,#2d7468)}
-.camera-switch{display:flex;background:var(--paper,#f5f3ed);border-radius:7px;padding:2px}.camera-switch button{background:transparent;border:0;padding:4px 10px;border-radius:5px;color:inherit;cursor:pointer;font:inherit}.camera-switch button.active{background:var(--panel,#fff);box-shadow:0 1px 3px #0001}
-.three-viewport{position:relative;flex:1;min-height:380px;overflow:hidden}.three-viewport :deep(canvas){width:100%;height:100%;display:block;touch-action:none}
-.scene-message{position:absolute;z-index:3;left:50%;top:45%;transform:translate(-50%,-50%);background:var(--panel,#fbfaf7);padding:22px 28px;min-width:320px;max-width:80%;border:1px solid var(--hairline,#d8dad6);border-radius:12px;box-shadow:0 10px 60px #172b3a18;display:flex;flex-direction:column;gap:8px}.scene-message span{font-size:12px;overflow-wrap:anywhere}.problem{border-color:#c18d67}.scene-message button{align-self:flex-end;background:none;border:0;cursor:pointer;color:var(--domain-accent,#2d7468)}
+.scene-focus{border:1px solid var(--hairline,#d8dad6);border-radius:5px;background:var(--panel,#fbfaf7);color:var(--slate,#66737b);padding:3px 8px;font:inherit;font-size:10px;cursor:pointer;white-space:nowrap}.scene-focus span{margin-left:4px}.scene-focus:hover{color:var(--domain-accent,#2d7468)}
+.camera-switch{position:absolute;top:10px;right:10px;z-index:2;max-width:calc(100% - 20px);overflow-x:auto;display:flex;background:var(--panel,#fbfaf7);border:1px solid var(--hairline,#d8dad6);border-radius:6px;padding:2px;font-size:10px;scrollbar-width:thin}.camera-switch button{background:transparent;border:0;padding:4px 8px;border-radius:4px;flex:none;white-space:nowrap;color:inherit;cursor:pointer;font:inherit}.camera-switch button.active{background:var(--paper,#f5f3ed);color:var(--domain-accent,#2d7468)}
+.three-viewport{position:relative;flex:1;min-height:0;overflow:hidden}.three-viewport :deep(canvas){width:100%;height:100%;display:block;touch-action:none}
+.scene-message{position:absolute;z-index:3;left:50%;top:45%;transform:translate(-50%,-50%);background:var(--panel,#fbfaf7);padding:16px 20px;min-width:0;width:max-content;max-width:80%;box-sizing:border-box;border:1px solid var(--hairline,#d8dad6);border-radius:12px;box-shadow:0 10px 60px #172b3a18;display:flex;flex-direction:column;gap:8px}.scene-message span{font-size:12px;overflow-wrap:anywhere}.problem{border-color:#c18d67}.scene-message button{align-self:flex-end;background:none;border:0;cursor:pointer;color:var(--domain-accent,#2d7468)}
 .object-coordinate{position:absolute;left:14px;bottom:38px;display:flex;flex-direction:column;padding:9px 12px;border-radius:8px;background:#fbfaf7ed;border:1px solid #d8dad6;font-size:11px;gap:2px}.object-coordinate span{font-variant-numeric:tabular-nums;color:#526269}.scene-hint{position:absolute;bottom:12px;left:14px;color:#56645a;font-size:10px;background:#ffffffb5;padding:3px 7px;border-radius:4px;pointer-events:none}
-.scene-footer{display:flex;gap:18px;align-items:center;min-height:32px;padding:0 14px;border-top:1px solid var(--hairline,#d8dad6);font-size:10px;color:#66737b}.scene-footer span:first-child{margin-right:auto}
-@media(max-width:1000px){.scene-toolbar{flex-wrap:wrap}.three-viewport{min-height:350px}.scene-footer{gap:9px}}
+.scene-footer{display:flex;gap:12px;align-items:center;min-height:28px;flex:none;padding:0 12px;border-top:1px solid var(--hairline,#d8dad6);font-size:10px;color:#66737b}.scene-footer span:first-child{margin-right:auto}
+@container(max-width:520px){.scene-mode{font-size:11px}.scene-mode span{display:none}.scene-footer{gap:7px;font-size:9px;padding:0 9px}.scene-hint{font-size:9px;left:10px}.object-coordinate{left:10px;font-size:10px}}
 </style>

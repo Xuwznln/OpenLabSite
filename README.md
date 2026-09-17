@@ -34,6 +34,8 @@ Shanghai Jiao Tong University **ReThinkLab** &nbsp; · &nbsp; **Beijing Zhonggua
 OpenLab is a local-first operations interface for [Uni-Lab-OS](https://github.com/deepmodeling/Uni-Lab-OS).
 It brings device actions, materials, workflow execution, exception handling, and execution records into one workspace.
 
+This materials-workbench branch also provides a shared materials experiment page with browser trajectory playback and an embeddable header. See [Materials workbench setup and scope](docs/MATERIALS_WORKBENCH.md).
+
 **The frontend is deployed independently; the backend owns the data.** By default, the browser connects to
 `http://127.0.0.1:8002` on your computer. It does not connect to a public demo server by default or access databases directly.
 
