@@ -1029,8 +1029,10 @@
                   "type": "null"
                 }
               ],
+              "description": "不填时只接收新通知；填 0 回放保留的历史，其他序号从其之后续传。",
               "title": "Last-Event-Id"
-            }
+            },
+            "description": "不填时只接收新通知；填 0 回放保留的历史，其他序号从其之后续传。"
           }
         ],
         "responses": {

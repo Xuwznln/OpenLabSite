@@ -5038,6 +5038,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
+                /** @description 不填时只接收新通知；填 0 回放保留的历史，其他序号从其之后续传。 */
                 "Last-Event-ID"?: string | null;
             };
             path?: never;

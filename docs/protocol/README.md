@@ -85,7 +85,8 @@ Uni-Lab-OS 微后端 :8002（unilab --port）
 
 | 流 | 事件 | 语义 |
 | --- | --- | --- |
-| `GET /api/v1/events` | `workflow.task.changed` `workflow.node_job.changed` `workflow.authoring.changed` | Workflow Authority 变更；`Last-Event-ID` 续传 |
+| `GET /api/v1/events` | `workflow.task.changed` `workflow.node_job.changed` `workflow.authoring.changed` | Workflow Authority 变更；首连不重放（先收到只含 `id` 的水位帧），`Last-Event-ID` 续传，显式 `0` 回放 |
+| 同一 `GET /api/v1/events` | `stream.reset` | 游标过期或超前；`id` 为新水位（可能回退），客户端重读 HTTP |
 | 同一 `GET /api/v1/events` | `runtime.logs.changed` | 日志来源索引；不写 SSE id，重连按 HTTP 日志游标补读 |
 | `GET /api/v1/materials/events` | `materials.changed` | 物料账本推进；首连不重放，重连按游标补齐 |
 

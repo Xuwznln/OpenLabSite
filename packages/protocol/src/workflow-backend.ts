@@ -731,7 +731,8 @@ export function createWorkflowBackendApi(http: HttpTransport) {
         body,
       }),
     /**
-     * SSE GET /api/v1/events —— `frontend_event` 游标流（Last-Event-ID 续传）。
+     * SSE GET /api/v1/events —— `frontend_event` 游标流（Last-Event-ID 续传；首连从当前水位开始，
+     * 游标失效时收到 `stream.reset`）。
      * 事件行不作为实体浏览；EventSource 场景用本 URL。
      */
     eventsUrl: () => http.url("/api/v1/events"),
