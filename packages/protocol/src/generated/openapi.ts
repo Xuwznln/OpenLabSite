@@ -4235,7 +4235,9 @@ export type components = {
         };
         /**
          * WorkflowTaskCommandRequest
-         * @description step 放行一个动作；resume 切回自动。版本与幂等键防止跨页面重复放行。
+         * @description step 放行一个动作；resume 切回自动；pause 转单步并停止派发新动作（已下发的照常跑完）。
+         *
+         *     版本与幂等键防止跨页面重复放行。
          */
         WorkflowTaskCommandRequest: {
             /** Expected Revision */
@@ -4246,7 +4248,7 @@ export type components = {
              * Type
              * @enum {string}
              */
-            type: "step" | "resume";
+            type: "step" | "resume" | "pause";
         };
         /**
          * WorkflowTaskCreateRequest
@@ -4254,7 +4256,9 @@ export type components = {
          *
          *     execution_kind=workflow（默认）：workflow_uuid 必填，走整图编排。
          *     execution_kind=ad_hoc_device_action：device_id + action_name + param 必填，
-         *     生成单 job 任务（微前端设备页/画布单点动作），幂等键可选。
+         *     生成单 job 任务（微前端设备页/画布单点动作）。
+         *
+         *     idempotency_key 两种任务都可选：同键同语义的重复提交返回既有任务，同键不同语义按冲突拒绝。
          */
         WorkflowTaskCreateRequest: {
             /**

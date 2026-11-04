@@ -465,8 +465,11 @@ export interface BackendGraphWriteInput {
 
 /** execution_kind=workflow（默认）：按 Workflow 定义整图运行。 */
 export interface BackendWorkflowTaskCommandInput {
-  /** step：仅放行一个动作 attempt；resume：转为自动执行。 */
-  type: "step" | "resume";
+  /**
+   * step：仅放行一个动作 attempt；resume：转为自动执行；
+   * pause：自动运行中的任务转为逐步，已下发的动作照常跑完，不再派发新动作。
+   */
+  type: "step" | "resume" | "pause";
   expected_revision: number;
   idempotency_key: string;
 }
@@ -478,6 +481,11 @@ export interface BackendWorkflowTaskCreateInput {
   target_node_uuid?: string | null;
   description?: string | null;
   meta_data?: JsonObject;
+  /**
+   * 可选幂等键（1..200 字符）：同一次提交重试时复用，同键同语义只建一个任务；
+   * 同键但 workflow / run_mode / target 不同按冲突拒绝。不带键时每次提交都是新任务。
+   */
+  idempotency_key?: string;
 }
 
 /**
@@ -624,7 +632,7 @@ export function createWorkflowBackendApi(http: HttpTransport) {
         method: "GET",
         path: `/api/v1/workflow-tasks/${encodeURIComponent(taskUuid)}`,
       }),
-    /** POST /api/v1/workflow-tasks/{task_uuid}/commands —— 单点放行 / 切回自动 */
+    /** POST /api/v1/workflow-tasks/{task_uuid}/commands —— 单点放行 / 切回自动 / 暂停 */
     commandTask: (taskUuid: string, body: BackendWorkflowTaskCommandInput) =>
       backendRequest<BackendWorkflowTask>(http, {
         method: "POST",
