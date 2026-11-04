@@ -481,6 +481,11 @@ export interface BackendWorkflowTaskCreateInput {
   target_node_uuid?: string | null;
   description?: string | null;
   meta_data?: JsonObject;
+  /**
+   * 可选幂等键（1..200 字符）：同一次提交重试时复用，同键同语义只建一个任务；
+   * 同键但 workflow / run_mode / target 不同按冲突拒绝。不带键时每次提交都是新任务。
+   */
+  idempotency_key?: string;
 }
 
 /**
