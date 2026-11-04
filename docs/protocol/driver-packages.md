@@ -154,7 +154,6 @@ python -m unilabos --backend hostlink --is_slave --skip_env_check --disable_brow
 | POST | `` | 创建 → 201；正文见下 |
 | GET / PUT / DELETE | `/{process_id}` | 读 / 改（运行中的改完要手动重启才生效）/ 删（先停进程）→ 204 |
 | POST | `/{process_id}/start` `/stop` `/restart` | 409 = 已在运行 |
-| GET | `/{process_id}/logs?tail=200` | `{path, lines[]}`，尾部最多 300 行，已剥 ANSI 着色 |
 
 创建 / 更新正文（`DeviceProcessWriteInput`）：
 
@@ -196,7 +195,7 @@ python -m unilabos --backend hostlink --is_slave --skip_env_check --disable_brow
    只想让它跑在子进程里可以跳过这步；
 3. `deviceProcesses.deviceClasses()` 里出现该包的设备类（`source=package`）；
 4. `deviceProcesses.create({...})` → `start(id)`；几秒后 `runtime.endpoints` 与
-   `hostlink.peers` 里出现新设备，`logs(id)` 能看到 `HostLink connected`；
+   `hostlink.peers` 里出现新设备，统一 `system.logs("managed:" + id)` 能看到 `HostLink connected`（见 [logs.md](./logs.md)）；
 5. 改驱动 / 改配置：`update` 后 `restart(id)`，只重启这个子进程。
 
 ## 4. 验证

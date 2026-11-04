@@ -418,6 +418,8 @@ export async function buildAuthorityGraph(input: BuildAuthorityGraphInput): Prom
     if (dependsOn.length) policy.depends_on = dependsOn;
     if (action?.alwaysFree) policy.always_free = true;
     const metaData: JsonObject = { target_device_id: deviceId, editor_node_id: node.id };
+    if (node.data.siteBindings) metaData.site_bindings = node.data.siteBindings as JsonObject;
+    if (node.data.siteBindingOwners) metaData.site_binding_owners = node.data.siteBindingOwners as JsonObject;
     if (requirements.length) metaData.inventory_requirements = requirements;
     if (groupMeta) metaData.editor_group = groupMeta;
     nodes.push({
@@ -510,7 +512,7 @@ export async function submitWorkflow(api: SubmitWorkflowApi, input: SubmitWorkfl
   let revision = workflow.revision;
   for (let attempt = 0; ; attempt++) {
     try {
-      const graph = await api.saveGraph(workflow.uuid, { revision, nodes: input.nodes, edges: [] });
+      const graph = await api.saveGraph(workflow.uuid, { revision, nodes: input.nodes, edges: [], site_binding_mode: "preserve" });
       workflow = graph.workflow;
       break;
     } catch (error) {

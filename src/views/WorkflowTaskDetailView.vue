@@ -12,7 +12,7 @@
  * （return_info / error_info / error_resolution）；`results` 是 Backend ↔ Edge 的结果信封，
  * 本机调度不产生，只在接入云端 Backend 时作为附加信息展示（每 job 至多一条，取 rows[0]）。
  *
- * 降级：旧基座无这些路由（HTTP 404）→ 显示「后端版本不支持」；
+ * 端点缺失（HTTP 404）明确报错，不退回旧协议或推导权威状态；
  * code=3002 → task 不存在或已删；code=1000 → 非法 uuid。
  */
 import { computed, onMounted, onUnmounted, ref, shallowReactive, shallowRef, watch } from "vue";

@@ -131,7 +131,7 @@ const blocks = computed<MapBlock[]>(() => {
 // ── 布局（区域 / 围墙）编辑 ────────────────────────────────────
 //
 // 权威在后端 runtime.db（lab-v1），一个 Host 一份、所有浏览器共享；这里保存的是
-// 当前读到的 revision，写回带上它做乐观锁。老后端没有该接口时退回 localStorage。
+// 当前读到的 revision，写回带上它做乐观锁；读取成功前不能编辑。
 
 const layoutScope = computed(() => conn.baseUrl);
 const layout = ref<LabLayout>(emptyLayout());

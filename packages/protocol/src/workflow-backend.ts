@@ -456,6 +456,8 @@ export interface BackendWorkflowEdgeWrite {
 }
 
 export interface BackendGraphWriteInput {
+  /** 程序化导入默认 resolve；浏览器草稿必须 preserve，等待显式 Site 确认。 */
+  site_binding_mode?: "resolve" | "preserve";
   revision: number;
   nodes: BackendWorkflowNodeWrite[];
   edges: BackendWorkflowEdgeWrite[];
@@ -526,6 +528,7 @@ export interface BackendAuthoringApplyInput {
 
 /** 注册表工作流模板 → 工作流：角色绑定缺省时类角色单实例自动填、设备角色即其设备 id。 */
 export interface BackendWorkflowFromTemplateInput {
+  site_binding_mode?: "resolve" | "preserve";
   template_uuid: string;
   bindings?: Record<string, string>;
   name?: string;

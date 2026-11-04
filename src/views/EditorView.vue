@@ -140,6 +140,7 @@ import {
 } from "../features/runtime-actions";
 import {
   MISSING_PARAM_COUNTS_KEY,
+  PARAM_VALIDATION_PENDING_KEY,
   missingParamEntries,
 } from "../features/param-completeness";
 import {
@@ -170,6 +171,9 @@ import {
   submitWorkflow,
 } from "../features/workflow-submit";
 import { useConnectionStore } from "../stores/connection";
+import { useSiteBindingsStore } from "../stores/site-bindings";
+import { useWorkflowValidationStore } from "../stores/workflow-validation";
+import type { SiteBindings } from "../features/site-bindings";
 import { useDevicesStore } from "../stores/devices";
 import { useDomainThemeStore } from "../stores/domain-theme";
 
@@ -184,6 +188,8 @@ const router = useRouter();
 const message = useMessage();
 const dialog = useDialog();
 const conn = useConnectionStore();
+const siteDirectory = useSiteBindingsStore();
+const workflowValidation = useWorkflowValidationStore();
 const devicesStore = useDevicesStore();
 const domain = useDomainThemeStore();
 
@@ -565,6 +571,15 @@ const variableNodes = computed<VariableNode[]>(() =>
 //    features/action-param-form.ts，与 DevicesView 单点动作同源复用） ──
 
 const paramForm = useActionParamForm({
+  siteDirectory,
+  siteBindings: computed({
+    get: () => (liteNodes.value.find((node) => node.id === editingNodeId.value)?.data.siteBindings ?? {}) as SiteBindings,
+    set: (bindings) => {
+      const node = liteNodes.value.find((node) => node.id === editingNodeId.value);
+      if (node) node.data.siteBindings = bindings;
+    },
+  }),
+  siteOwners: () => (liteNodes.value.find((node) => node.id === editingNodeId.value)?.data.siteBindingOwners ?? {}) as Record<string, string>,
   api: () => conn.api,
   device: editDevice,
   action: editAction,
@@ -723,6 +738,9 @@ const missingParamCounts = computed<Map<string, number>>(() => {
       node.id,
       missingParamEntries({
         detail: actionSchemaCache.value.get(`${device}|${action}`) ?? null,
+        deviceId: device, actionName: action, sites: siteDirectory.index,
+        siteBindings: (node.data.siteBindings ?? {}) as SiteBindings,
+        siteOwners: (node.data.siteBindingOwners ?? {}) as Record<string, string>,
         paramJson: String(node.data.paramJson ?? "{}"),
         mappedPaths: mappedPathsByNode.value.get(node.id) ?? [],
       }).length,
@@ -731,6 +749,14 @@ const missingParamCounts = computed<Map<string, number>>(() => {
   return counts;
 });
 provide(MISSING_PARAM_COUNTS_KEY, missingParamCounts);
+provide(PARAM_VALIDATION_PENDING_KEY, computed(() => new Set(liteNodes.value.filter((node) => {
+  if ((node.type ?? "action") !== "action") return false;
+  const detail = actionSchemaCache.value.get(`${node.data.deviceId}|${node.data.actionName}`);
+  return !detail || missingParamEntries({ detail, paramJson: String(node.data.paramJson ?? "{}"),
+    mappedPaths: mappedPathsByNode.value.get(node.id) ?? [], sites: siteDirectory.index,
+    siteBindings: (node.data.siteBindings ?? {}) as SiteBindings,
+  }).some((entry) => entry.reason === "site-unavailable");
+}).map((node) => node.id))));
 
 function focusedVariable(path: string): WorkflowVariable | undefined {
   return workflowVariables.value.find(
@@ -3956,6 +3982,8 @@ async function cloneFrom(sourceId: string) {
                 actionName: n.action_name ?? "",
                 actionType: n.action_type ?? "goal",
                 paramJson: JSON.stringify(n.param ?? {}, null, 2),
+                siteBindings: meta.site_bindings ?? {},
+                siteBindingOwners: meta.site_binding_owners ?? {},
                 requirementsJson: requirementsOf(n),
                 workflowNodeTemplateUuid: n.workflow_node_template_uuid ?? "",
               },
@@ -3995,6 +4023,8 @@ function collectDryRunNodes(): DryRunNodeInput[] {
     actionName: String(node.data.actionName ?? ""),
     paramJson: String(node.data.paramJson ?? "{}"),
     requirementsJson: String(node.data.requirementsJson ?? "[]"),
+    siteBindings: (node.data.siteBindings ?? {}) as SiteBindings,
+    siteOwners: (node.data.siteBindingOwners ?? {}) as Record<string, string>,
   }));
 }
 
@@ -4041,6 +4071,7 @@ async function runDryRun(): Promise<void> {
       nodes: collectDryRunNodes(),
       edges: collectDryRunEdges(),
       schemas: actionSchemaCache.value,
+      sites: siteDirectory.index,
       lots,
     });
   } finally {
@@ -4129,6 +4160,7 @@ function submit(): void {
   syncVariablesToNodes();
   // 只用已有 schema 缓存做即时把关（不等网络）；物料粗检是 warning 级，不参与拦截。
   const gate = dryRunWorkflow({
+    sites: siteDirectory.index,
     nodes: collectDryRunNodes(),
     edges: collectDryRunEdges(),
     schemas: actionSchemaCache.value,
@@ -4183,6 +4215,26 @@ async function performSubmit(options: { saveOnly?: boolean; runMode?: WorkflowEx
   saveVariableProfile(workflowId.value);
   submitting.value = true;
   try {
+    if (!options.saveOnly) {
+      // 真实运行前重新读取权威；保存草稿不要求确认，也不自动改写默认值。
+      await workflowValidation.refresh();
+      for (const node of transformed.nodes) {
+        if ((node.type ?? "action") !== "action" || transformed.disabled.has(node.id)) continue;
+        const device = String(node.data.deviceId ?? "");
+        const action = String(node.data.actionName ?? "");
+        const detail = workflowValidation.schemas.get(`${device}|${action}`);
+        if (!detail) throw new Error(`节点 ${node.id} 动作定义不可用，参数待校验`);
+        const siteIssues = missingParamEntries({ detail, deviceId: device, actionName: action,
+          paramJson: String(node.data.paramJson ?? "{}"), mappedPaths: mappedPathsByNode.value.get(node.id) ?? [],
+          sites: siteDirectory.index, siteBindings: (node.data.siteBindings ?? {}) as SiteBindings,
+          siteOwners: (node.data.siteBindingOwners ?? {}) as Record<string, string>,
+        }).filter((entry) => entry.reason.startsWith("site-"));
+        if (siteIssues.length) {
+          openNodePanel(node.id);
+          throw new Error(`节点 ${node.id} 待补全 ${siteIssues.length} 项：${siteIssues[0].label}`);
+        }
+      }
+    }
     // 设备 → material_uuid / action_type 从设备目录解析（materials 根物料 + runtime 能力）
     if (!devicesStore.loaded) await devicesStore.refresh();
     const groupsById = new Map(
@@ -4287,6 +4339,7 @@ const draftHint = computed(() => {
 });
 
 onMounted(() => {
+  void siteDirectory.ensure();
   window.addEventListener("keydown", onEditorKeydown);
   loadUserTemplates();
   void loadRegistryTemplates();

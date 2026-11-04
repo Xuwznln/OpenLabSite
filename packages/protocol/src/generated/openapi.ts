@@ -3168,6 +3168,13 @@ export type components = {
             nodes?: components["schemas"]["WorkflowNodeWrite"][];
             /** Revision */
             revision: number;
+            /**
+             * Site Binding Mode
+             * @description SiteSlot 导入策略；浏览器保存草稿必须传 preserve，确认后参数中存放 site_uuid。
+             * @default resolve
+             * @enum {string}
+             */
+            site_binding_mode: "resolve" | "preserve";
         };
         /**
          * HistoryEventAppend
@@ -4155,6 +4162,13 @@ export type components = {
             };
             /** Name */
             name?: string | null;
+            /**
+             * Site Binding Mode
+             * @description resolve：程序化导入按目标物料解析 Site 标签；preserve：保留浏览器草稿，等待用户确认。
+             * @default resolve
+             * @enum {string}
+             */
+            site_binding_mode: "resolve" | "preserve";
             /** Template Uuid */
             template_uuid: string;
         };

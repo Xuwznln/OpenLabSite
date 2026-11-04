@@ -24,6 +24,7 @@ import {
 } from "naive-ui";
 import type {
   BackendWorkflow,
+  BackendWorkflowGraph,
   BackendWorkflowRunMode,
   BackendWorkflowTask,
   RegistryPendingImpact,
@@ -31,6 +32,7 @@ import type {
 import PageHeader from "../components/PageHeader.vue";
 import StatusPill from "../components/StatusPill.vue";
 import WorkflowInfoPopover from "../components/WorkflowInfoPopover.vue";
+import WorkflowBindingsDialog from "../components/WorkflowBindingsDialog.vue";
 import { describeError } from "../features/errors";
 import { describeTask } from "../features/task-jobs";
 import { computeWorkflowGraphStats, type WorkflowGraphStats } from "../features/workflow-graph-stats";
@@ -53,12 +55,23 @@ import { WORKFLOW_RUN_OPTIONS } from "../features/workflow-execution";
 import { useConnectionStore } from "../stores/connection";
 import { useDomainThemeStore } from "../stores/domain-theme";
 import { useSchedulerStore } from "../stores/scheduler";
+import { useWorkflowValidationStore } from "../stores/workflow-validation";
 
 const router = useRouter();
 const message = useMessage();
 const conn = useConnectionStore();
 const domain = useDomainThemeStore();
 const sched = useSchedulerStore();
+const validation = useWorkflowValidationStore();
+const graphs = shallowRef(new Map<string, BackendWorkflowGraph>());
+const bindingWorkflow = ref("");
+function bindingsSaved(graph: BackendWorkflowGraph) {
+  graphs.value = new Map(graphs.value).set(statsKey(graph.workflow), graph);
+  graphStats.value = new Map(graphStats.value).set(statsKey(graph.workflow), computeWorkflowGraphStats(graph.nodes, graph.edges));
+  void sched.refresh();
+}
+const readiness = computed(() => new Map([...graphs.value].map(([key, graph]) => [key, validation.inspect(graph)])));
+onMounted(() => void validation.refresh());
 
 /** 相对时间 / 进行中耗时的时钟；跟随调度轮询节奏即可。 */
 const nowMs = ref(Date.now());
@@ -120,6 +133,7 @@ async function ensureGraphStats(workflows: BackendWorkflow[]) {
     const workflow = wanted[index]!;
     graphStatsPending.delete(statsKey(workflow));
     if (result.status === "fulfilled") {
+      graphs.value = new Map(graphs.value).set(statsKey(workflow), result.value);
       next.set(statsKey(workflow), computeWorkflowGraphStats(result.value.nodes, result.value.edges));
     }
   });
@@ -422,7 +436,7 @@ onUnmounted(() => {
       <template #header>
         <NSpace align="center" :size="10">
           <span>流程定义</span>
-          <span class="dim">{{ readyDefinitions.length }} 个可运行</span>
+          <span class="dim">{{ readyDefinitions.length }} 个已编排</span>
         </NSpace>
       </template>
       <template #header-extra>
@@ -464,6 +478,11 @@ onUnmounted(() => {
                 {{ pendingNodeCounts.get(wf.uuid) }} 个节点待升级
               </NTag>
               <span v-for="tag in displayTags(wf.tags)" :key="tag" class="wf-tag">{{ tag }}</span>
+              <NTag v-if="!readiness.get(statsKey(wf)) || readiness.get(statsKey(wf))?.pending" size="small" :bordered="false">参数待校验</NTag>
+              <NButton v-if="readiness.get(statsKey(wf))?.missing" size="tiny" type="warning" secondary
+                @click="bindingWorkflow = wf.uuid">
+                待补全 {{ readiness.get(statsKey(wf))!.missing }} 项
+              </NButton>
             </div>
             <div class="wf-meta">
               <template v-if="statsOf(wf)">
@@ -590,6 +609,7 @@ onUnmounted(() => {
           placeholder="选择一个已编排节点的流程"
         />
       </NFormItem>
+      <NButton size="small" secondary :disabled="!selectedWorkflowUuid" style="margin-bottom: 12px" @click="bindingWorkflow = selectedWorkflowUuid || ''">检查 / 补全参数</NButton>
       <NFormItem label="运行方式">
         <NSelect
           v-model:value="runMode"
@@ -607,6 +627,7 @@ onUnmounted(() => {
         </NSpace>
       </template>
     </NModal>
+    <WorkflowBindingsDialog :workflow-uuid="bindingWorkflow" @close="bindingWorkflow = ''" @saved="bindingsSaved" />
   </div>
 </template>
 

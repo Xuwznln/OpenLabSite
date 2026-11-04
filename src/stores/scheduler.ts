@@ -11,6 +11,7 @@ import type {
 import { loadWorkflowHttpSnapshot } from "../features/workflow-invalidation";
 import { useConnectionStore } from "./connection";
 import { describeError } from "../features/errors";
+import { useWorkflowValidationStore } from "./workflow-validation";
 
 const ACTIVE_TASK_STATES = new Set<BackendWorkflowTask["status"]>([
   "pending",
@@ -70,6 +71,7 @@ export const useSchedulerStore = defineStore("scheduler", () => {
     runMode: BackendWorkflowRunMode = "normal",
     targetNodeUuid?: string,
   ) {
+    await useWorkflowValidationStore().check(workflowUuid);
     const result = await conn.api.domains.workflowBackend.createTask({
       workflow_uuid: workflowUuid,
       run_mode: runMode,

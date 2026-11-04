@@ -8,7 +8,7 @@ import { Handle, Position } from "@vue-flow/core";
 import { NIcon } from "naive-ui";
 import { HandRightOutline } from "@vicons/ionicons5";
 import type { BackendWorkflowNodeJobStatus } from "@openlab/protocol";
-import { MISSING_PARAM_COUNTS_KEY } from "../features/param-completeness";
+import { MISSING_PARAM_COUNTS_KEY, PARAM_VALIDATION_PENDING_KEY } from "../features/param-completeness";
 
 /** 画布节点运行态：Workflow Node Job 的 canonical 状态词汇。 */
 export type NodeState = BackendWorkflowNodeJobStatus;
@@ -90,6 +90,8 @@ const borderColor = computed(() => {
 // 点击徽标不拦截事件，自然冒泡到节点 click → 打开参数浮层（快捷入口）。
 const missingCounts = inject(MISSING_PARAM_COUNTS_KEY, undefined);
 const missingCount = computed(() => missingCounts?.value.get(props.id) ?? 0);
+const pendingParams = inject(PARAM_VALIDATION_PENDING_KEY, undefined);
+const validationPending = computed(() => pendingParams?.value.has(props.id) ?? false);
 </script>
 
 <template>
@@ -99,11 +101,12 @@ const missingCount = computed(() => missingCounts?.value.get(props.id) ?? 0);
     :style="{ borderColor: borderColor }"
   >
     <span
-      v-if="missingCount > 0"
+      v-if="missingCount > 0 || validationPending"
       class="node-missing-pill"
       title="点击补全参数（与参数表单同一统计口径）"
     >
-      还差 {{ missingCount }} 项
+      <template v-if="missingCount > 0">待补全 {{ missingCount }} 项</template>
+      <template v-if="validationPending">{{ missingCount > 0 ? ' · ' : '' }}待校验</template>
     </span>
     <span class="port-label port-in">IN</span>
     <Handle

@@ -37,6 +37,9 @@ import {
 import ActionParamFields from "../components/ActionParamFields.vue";
 import PageHeader from "../components/PageHeader.vue";
 import { useActionParamForm } from "../features/action-param-form";
+import { missingParamEntries } from "../features/param-completeness";
+import type { SiteBindings } from "../features/site-bindings";
+import { useSiteBindingsStore } from "../stores/site-bindings";
 import { runtimeActionParams } from "../features/runtime-actions";
 import { useConnectionStore } from "../stores/connection";
 import { useDevicesStore, type DeviceRecord } from "../stores/devices";
@@ -45,6 +48,8 @@ import { usePinnedMetricsStore } from "../stores/pinned-metrics";
 import { describeError } from "../features/errors";
 
 const conn = useConnectionStore();
+const siteDirectory = useSiteBindingsStore();
+const runSiteBindings = ref<SiteBindings>({});
 const domain = useDomainThemeStore();
 const message = useMessage();
 const pinned = usePinnedMetricsStore();
@@ -101,6 +106,8 @@ const submitting = ref(false);
 // schema 识别 + placeholder 动态可填项 + legacy Resource 结构识别；
 // 设备页没有置顶变量概念，默认全量展示字段。
 const runForm = useActionParamForm({
+  siteDirectory,
+  siteBindings: runSiteBindings,
   api: () => conn.api,
   device: runDeviceId,
   action: runActionName,
@@ -164,6 +171,7 @@ async function refresh() {
 const runAlwaysFree = ref(false);
 
 function openRun(deviceId: string, action: DeviceAction) {
+  runSiteBindings.value = {};
   runDeviceId.value = deviceId;
   runActionName.value = action.action_name;
   runActionType.value = String(action.action_type ?? action.descriptor.type ?? "");
@@ -184,6 +192,14 @@ async function submitRun() {
   }
   submitting.value = true;
   try {
+    await runForm.reload();
+    await siteDirectory.refresh();
+    if (!runForm.schemaDetail.value) throw new Error("动作定义不可用，参数待校验");
+    const issues = missingParamEntries({ detail: runForm.schemaDetail.value, paramJson: runParamJson.value,
+      mappedPaths: [], sites: siteDirectory.index, siteBindings: runSiteBindings.value,
+      deviceId: runDeviceId.value, actionName: runActionName.value,
+    }).filter((entry) => entry.reason.startsWith("site-"));
+    if (issues.length) throw new Error(issues.map((entry) => entry.label).join("；"));
     const param = JSON.parse(runParamJson.value) as JsonObject;
     const task = await conn.api.domains.workflowBackend.createTask({
       execution_kind: "ad_hoc_device_action",
@@ -191,6 +207,7 @@ async function submitRun() {
       action_name: runActionName.value,
       action_type: runActionType.value,
       param,
+      meta_data: { site_bindings: runSiteBindings.value as unknown as JsonObject },
       execution_policy: runAlwaysFree.value ? { always_free: true } : {},
       description: `设备页单点动作 ${runDeviceId.value}/${runActionName.value}`,
     });

@@ -14,6 +14,21 @@ import {
 import { DUMMY_ID, catalogOps, createMockHttp, normalizeRecordedPath } from "./helpers";
 
 describe("workflow 协议客户端（Backend 信封）", () => {
+  it("Site 导入模式原样传输：程序化默认解析，前端草稿显式 preserve", async () => {
+    const mock = createMockHttp();
+    const api = createWorkflowBackendApi(mock.http);
+    for (const body of [{ template_uuid: DUMMY_ID }, { template_uuid: DUMMY_ID, site_binding_mode: "preserve" as const }]) {
+      mock.nextResponse = { status: 201, data: { code: 0, data: {} } };
+      await api.createWorkflowFromTemplate(body);
+      expect(mock.calls.at(-1)?.data).toEqual(body);
+    }
+    const draft = { revision: 1, nodes: [], edges: [], site_binding_mode: "preserve" as const };
+    mock.nextResponse = { status: 200, data: { code: 0, data: {} } };
+    await api.saveGraph(DUMMY_ID, draft);
+    expect(mock.calls.at(-1)?.data).toEqual(draft);
+    mock.nextResponse = { status: 200, data: { code: 1000, error: { msg: "Site T1 匹配到 2 项" } } };
+    await expect(api.saveGraph(DUMMY_ID, { revision: 1, nodes: [], edges: [] })).rejects.toThrow("Site T1 匹配到 2 项");
+  });
   it("覆盖 workflow 域全部 HTTP 操作，且不多不少", async () => {
     const mock = createMockHttp();
     const api = createWorkflowBackendApi(mock.http);

@@ -28,8 +28,10 @@ import StatusPill from "../components/StatusPill.vue";
 import { describeError } from "../features/errors";
 import { beginWorkflowPrint } from "../features/workflow-print";
 import WorkflowRunButton from "../components/WorkflowRunButton.vue";
+import WorkflowBindingsDialog from "../components/WorkflowBindingsDialog.vue";
 import type { WorkflowExecutionMode } from "../features/workflow-execution";
 import { useConnectionStore } from "../stores/connection";
+import { useWorkflowValidationStore } from "../stores/workflow-validation";
 import { useDomainThemeStore } from "../stores/domain-theme";
 
 const NODE_TYPE_LABEL: Record<string, string> = {
@@ -186,6 +188,7 @@ function printDefinition() {
 }
 
 const runMode = ref<WorkflowExecutionMode>("normal");
+const bindingsOpen = ref(false);
 
 async function createTask(printAfterCreate = false) {
   if (running.value || !conn.schedulerLocal || !graph.value) return;
@@ -195,6 +198,7 @@ async function createTask(printAfterCreate = false) {
   }
   running.value = true;
   try {
+    await useWorkflowValidationStore().check(workflowUuid);
     const task = await conn.api.domains.workflowBackend.createTask({
       workflow_uuid: workflowUuid,
       run_mode: runMode.value,
@@ -251,6 +255,7 @@ watch(
           </NButton>
           <WorkflowRunButton v-model="runMode" :loading="running"
             :disabled="!conn.schedulerLocal || !graph || !conn.online" @submit="createTask(false)" />
+          <NButton size="small" :disabled="!graph || !conn.online" @click="bindingsOpen = true">检查 / 补全参数</NButton>
           <NButton size="small" type="primary" :loading="running" :disabled="!conn.schedulerLocal || !graph || !conn.online" @click="createTask(true)">
             创建并打印
           </NButton>
@@ -375,6 +380,7 @@ watch(
         </NTable>
       </NCard>
     </template>
+    <WorkflowBindingsDialog :workflow-uuid="bindingsOpen ? workflowUuid : ''" @close="bindingsOpen = false" @saved="graph = $event" />
   </div>
 </template>
 

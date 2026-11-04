@@ -3,11 +3,11 @@
   "info": {
     "title": "Uni-Lab-OS Microbackend API",
     "description": "Uni-Lab-OS 微后端 HTTP 契约全集（Host 与 --role backend 两种角色的路由并集）。每个 operation 的 x-openlab-role 标注它在哪种进程角色下可用。",
-    "version": "0.12.1",
+    "version": "0.12.3",
     "x-openlab-protocol": {
       "api_version": "v1",
       "api_prefix": "/api/v1",
-      "unilabos_version": "0.12.1",
+      "unilabos_version": "0.12.3",
       "roles": [
         "host",
         "backend",
@@ -9688,6 +9688,16 @@
             },
             "type": "array",
             "title": "Edges"
+          },
+          "site_binding_mode": {
+            "type": "string",
+            "enum": [
+              "resolve",
+              "preserve"
+            ],
+            "title": "Site Binding Mode",
+            "description": "SiteSlot 导入策略；浏览器保存草稿必须传 preserve，确认后参数中存放 site_uuid。",
+            "default": "resolve"
           }
         },
         "type": "object",
@@ -12210,6 +12220,16 @@
               }
             ],
             "title": "Name"
+          },
+          "site_binding_mode": {
+            "type": "string",
+            "enum": [
+              "resolve",
+              "preserve"
+            ],
+            "title": "Site Binding Mode",
+            "description": "resolve：程序化导入按目标物料解析 Site 标签；preserve：保留浏览器草稿，等待用户确认。",
+            "default": "resolve"
           }
         },
         "type": "object",
