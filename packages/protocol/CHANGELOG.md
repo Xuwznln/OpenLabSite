@@ -1,5 +1,12 @@
 # Changelog
 
+## 未发布：快照对齐 Uni-Lab-OS 0.12.3
+
+- `openapi/unilabos-openapi.json` 改为对应 unilabos 0.12.3 正式发行版。与 0.12.1 开发构建相比，
+  路由、operation 与 schema 均无变化；导出时 pydantic 2.14 把整数约束写成 `0.0` 形式，语义相同，未采用。
+- 0.12.3 是第一个同时包含 Site 导入策略、工作流逐步执行和统一日志接口的发行版，兼容矩阵的最低版本随之更新。
+- SDK 运行时代码与生成类型不变。
+
 ## 未发布：SDK 包规范化
 
 - 以 OpenLab TypeScript SDK 明确包定位，保留 `@openlab/protocol` 和全部公共 API。
@@ -41,7 +48,7 @@
 
 | @openlab/protocol | 线上协议 | 最低 unilabos | 说明 |
 | --- | --- | --- | --- |
-| 2.0.0 | `/api/v1` | 0.12.1（含 driver-packages / device-processes / node-runs 路由与 `openapi_export` 的构建） | 首个按微后端四库 + 权威模型重写的版本；快照 `openapi/unilabos-openapi.json` 对应 unilabos 0.12.1 |
+| 2.0.0 | `/api/v1` | 0.12.3（第一个包含 Site 导入策略、逐步执行与统一日志接口的发行版） | 首个按微后端四库 + 权威模型重写的版本；快照 `openapi/unilabos-openapi.json` 对应 unilabos 0.12.3 |
 
 ## 2.0.0
 
