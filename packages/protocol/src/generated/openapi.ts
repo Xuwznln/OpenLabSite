@@ -4235,7 +4235,9 @@ export type components = {
         };
         /**
          * WorkflowTaskCommandRequest
-         * @description step 放行一个动作；resume 切回自动。版本与幂等键防止跨页面重复放行。
+         * @description step 放行一个动作；resume 切回自动；pause 转单步并停止派发新动作（已下发的照常跑完）。
+         *
+         *     版本与幂等键防止跨页面重复放行。
          */
         WorkflowTaskCommandRequest: {
             /** Expected Revision */
@@ -4246,7 +4248,7 @@ export type components = {
              * Type
              * @enum {string}
              */
-            type: "step" | "resume";
+            type: "step" | "resume" | "pause";
         };
         /**
          * WorkflowTaskCreateRequest

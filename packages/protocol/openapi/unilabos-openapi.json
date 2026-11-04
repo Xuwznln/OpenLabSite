@@ -12412,7 +12412,8 @@
             "type": "string",
             "enum": [
               "step",
-              "resume"
+              "resume",
+              "pause"
             ],
             "title": "Type"
           },
@@ -12437,7 +12438,7 @@
           "idempotency_key"
         ],
         "title": "WorkflowTaskCommandRequest",
-        "description": "step 放行一个动作；resume 切回自动。版本与幂等键防止跨页面重复放行。"
+        "description": "step 放行一个动作；resume 切回自动；pause 转单步并停止派发新动作（已下发的照常跑完）。\n\n版本与幂等键防止跨页面重复放行。"
       },
       "WorkflowTaskCreateRequest": {
         "properties": {

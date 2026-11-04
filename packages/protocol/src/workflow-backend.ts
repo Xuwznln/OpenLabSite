@@ -465,8 +465,11 @@ export interface BackendGraphWriteInput {
 
 /** execution_kind=workflow（默认）：按 Workflow 定义整图运行。 */
 export interface BackendWorkflowTaskCommandInput {
-  /** step：仅放行一个动作 attempt；resume：转为自动执行。 */
-  type: "step" | "resume";
+  /**
+   * step：仅放行一个动作 attempt；resume：转为自动执行；
+   * pause：自动运行中的任务转为逐步，已下发的动作照常跑完，不再派发新动作。
+   */
+  type: "step" | "resume" | "pause";
   expected_revision: number;
   idempotency_key: string;
 }
@@ -624,7 +627,7 @@ export function createWorkflowBackendApi(http: HttpTransport) {
         method: "GET",
         path: `/api/v1/workflow-tasks/${encodeURIComponent(taskUuid)}`,
       }),
-    /** POST /api/v1/workflow-tasks/{task_uuid}/commands —— 单点放行 / 切回自动 */
+    /** POST /api/v1/workflow-tasks/{task_uuid}/commands —— 单点放行 / 切回自动 / 暂停 */
     commandTask: (taskUuid: string, body: BackendWorkflowTaskCommandInput) =>
       backendRequest<BackendWorkflowTask>(http, {
         method: "POST",

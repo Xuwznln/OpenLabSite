@@ -97,10 +97,11 @@ const controlErrorType = ref<"warning" | "error">("error");
 const controlBaseUrl = ref("");
 const stepControl = computed(() => stepExecutionControl(task.value, runs.value));
 
-async function commandTask(type: "step" | "resume") {
+async function commandTask(type: "step" | "resume" | "pause") {
   const current = task.value;
   if (!current || current.control_revision === undefined || controlBusy.value || loading.value || !conn.schedulerLocal || controlBaseUrl.value !== conn.baseUrl) return;
-  if (!(type === "step" ? stepControl.value.canStep : stepControl.value.canResume)) return;
+  const allowed = { step: stepControl.value.canStep, resume: stepControl.value.canResume, pause: stepControl.value.canPause };
+  if (!allowed[type]) return;
   controlBusy.value = true;
   controlError.value = "";
   try {
@@ -110,9 +111,9 @@ async function commandTask(type: "step" | "resume") {
   } catch (err) {
     const conflict = err instanceof BackendBusinessError && err.isConflict;
     controlErrorType.value = conflict ? "warning" : "error";
-    controlError.value = conflict
-      ? "任务状态已变化或已有单步在执行，已重新读取状态；本次没有额外放行动作。"
-      : describeError(err);
+    controlError.value = !conflict ? describeError(err)
+      : type === "pause" ? "任务状态已变化（可能已暂停或已结束），已重新读取状态。"
+      : "任务状态已变化或已有单步在执行，已重新读取状态；本次没有额外放行动作。";
   } finally {
     // 包括 revision 过期/另一页面已操作的情况都重拉，不在浏览器自行推进节点或修改控制态。
     await refresh();
@@ -493,6 +494,10 @@ watch(
         <NButton v-if="task" size="small" type="primary" secondary @click="printTask">
           打印实验单
         </NButton>
+        <NButton v-if="stepControl.canPause" size="small" type="warning" secondary :loading="controlBusy"
+          title="已下发的动作照常跑完，不再派发新动作；之后可逐步执行或切回自动"
+          :disabled="!conn.schedulerLocal || !conn.online || controlBaseUrl !== conn.baseUrl || loading || controlBusy"
+          @click="commandTask('pause')">暂停</NButton>
       </div>
       <NAlert v-if="stepControl.visible" type="info" title="逐步执行" style="margin-top: 12px">
         <p>{{ stepControl.hint }}</p>
