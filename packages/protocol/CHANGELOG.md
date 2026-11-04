@@ -1,5 +1,14 @@
 # Changelog
 
+## 未发布：工作流事件流订阅语义（v1.0 ADR 0006）
+
+- `/api/v1/events` 首连不再从序号 0 回放：服务端先发只含 `id` 的水位帧，此后只推新通知；
+  显式 `Last-Event-ID: 0` 才回放保留历史，其他游标照旧续传。
+- 游标大于最新序号时收到 `stream.reset`（`data.reason` 为 `cursor_ahead`，`id` 为新水位）。
+  前端把它加入工作流失效事件，与 `onopen` 一样只触发 HTTP 重读。
+- OpenAPI 快照同步 `Last-Event-ID` 头的新说明；路由、operation 与 schema 不变。
+- 需要包含该订阅语义的 Uni-Lab-OS 构建；旧构建首连仍会回放历史，前端行为保持正确，只是首屏多刷新几次。
+
 ## 未发布：快照对齐 Uni-Lab-OS 0.12.3
 
 - `openapi/unilabos-openapi.json` 改为对应 unilabos 0.12.3 正式发行版。与 0.12.1 开发构建相比，

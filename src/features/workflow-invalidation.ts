@@ -13,6 +13,8 @@ export const WORKFLOW_INVALIDATION_EVENT_TYPES = [
   "workflow.task.changed",
   "workflow.node_job.changed",
   "workflow.authoring.changed",
+  // 游标过期或超前时服务端发 stream.reset（id 为新水位，可能回退）：同样只触发 HTTP 重读。
+  "stream.reset",
 ] as const;
 
 export interface WorkflowInvalidationSource {

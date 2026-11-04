@@ -35,13 +35,14 @@ describe("Workflow 轻通知与 HTTP 正文边界", () => {
     const invalidate = vi.fn();
     const unbind = bindWorkflowInvalidations(source, invalidate);
 
+    expect(WORKFLOW_INVALIDATION_EVENT_TYPES).toContain("stream.reset");
     for (const type of WORKFLOW_INVALIDATION_EVENT_TYPES) source.emit(type);
     source.emit("control.v1");
-    expect(invalidate).toHaveBeenCalledTimes(3);
+    expect(invalidate).toHaveBeenCalledTimes(WORKFLOW_INVALIDATION_EVENT_TYPES.length);
 
     unbind();
     source.emit(WORKFLOW_INVALIDATION_EVENT_TYPES[0]);
-    expect(invalidate).toHaveBeenCalledTimes(3);
+    expect(invalidate).toHaveBeenCalledTimes(WORKFLOW_INVALIDATION_EVENT_TYPES.length);
   });
 
   it("一次 notice 只触发固定 typed HTTP GET 投影，不消费 payload 或任意 URL", async () => {

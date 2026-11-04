@@ -283,7 +283,8 @@ GET  /driver-packages/operations/{operation_id} ──轮询（1–2 s）──�
 
 | 流 | 事件 | 续传 |
 | --- | --- | --- |
-| `GET /api/v1/events` | `workflow.task.changed`、`workflow.node_job.changed`、`workflow.authoring.changed` | `Last-Event-ID` |
+| `GET /api/v1/events` | `workflow.task.changed`、`workflow.node_job.changed`、`workflow.authoring.changed` | `Last-Event-ID`；首连不重放，先发水位帧；显式 `0` 回放保留历史 |
+| 同一 `GET /api/v1/events` | `stream.reset`（`data.reason`：`cursor_ahead` 等） | 新水位写在 `id`；客户端必须重读 HTTP，不能当成业务变更 |
 | 同一 `GET /api/v1/events` | `runtime.logs.changed` | 瞬时通知，不写 SSE id；重连按 HTTP 日志游标补读 |
 | `GET /api/v1/materials/events` | `materials.changed`（携带 ledger sequence） | `Last-Event-ID`；首连不重放 |
 
