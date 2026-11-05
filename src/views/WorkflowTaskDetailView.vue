@@ -29,6 +29,7 @@ import {
   NSpin,
   NTag,
   NTooltip,
+  useDialog,
 } from "naive-ui";
 import { ArrowBackOutline } from "@vicons/ionicons5";
 import {
@@ -97,10 +98,26 @@ const controlErrorType = ref<"warning" | "error">("error");
 const controlBaseUrl = ref("");
 const stepControl = computed(() => stepExecutionControl(task.value, runs.value));
 
-async function commandTask(type: "step" | "resume" | "pause") {
+const dialog = useDialog();
+
+function confirmCancel() {
+  if (!stepControl.value.canCancel) return;
+  dialog.warning({
+    title: "取消运行",
+    content: "不再派发新动作；正在执行的动作会收到取消请求，设备真实返回前仍占用设备。确定取消？",
+    positiveText: "取消运行",
+    negativeText: "返回",
+    onPositiveClick: () => commandTask("cancel"),
+  });
+}
+
+async function commandTask(type: "step" | "resume" | "pause" | "cancel") {
   const current = task.value;
   if (!current || current.control_revision === undefined || controlBusy.value || loading.value || !conn.schedulerLocal || controlBaseUrl.value !== conn.baseUrl) return;
-  const allowed = { step: stepControl.value.canStep, resume: stepControl.value.canResume, pause: stepControl.value.canPause };
+  const allowed = {
+    step: stepControl.value.canStep, resume: stepControl.value.canResume,
+    pause: stepControl.value.canPause, cancel: stepControl.value.canCancel,
+  };
   if (!allowed[type]) return;
   controlBusy.value = true;
   controlError.value = "";
@@ -113,6 +130,7 @@ async function commandTask(type: "step" | "resume" | "pause") {
     controlErrorType.value = conflict ? "warning" : "error";
     controlError.value = !conflict ? describeError(err)
       : type === "pause" ? "任务状态已变化（可能已暂停或已结束），已重新读取状态。"
+      : type === "cancel" ? "任务状态已变化（可能已在取消或已结束），已重新读取状态。"
       : "任务状态已变化或已有单步在执行，已重新读取状态；本次没有额外放行动作。";
   } finally {
     // 包括 revision 过期/另一页面已操作的情况都重拉，不在浏览器自行推进节点或修改控制态。
@@ -498,7 +516,12 @@ watch(
           title="已下发的动作照常跑完，不再派发新动作；之后可逐步执行或切回自动"
           :disabled="!conn.schedulerLocal || !conn.online || controlBaseUrl !== conn.baseUrl || loading || controlBusy"
           @click="commandTask('pause')">暂停</NButton>
+        <NButton v-if="stepControl.canCancel" size="small" type="error" secondary :loading="controlBusy"
+          title="不再派发新动作，正在执行的动作收到取消请求"
+          :disabled="!conn.schedulerLocal || !conn.online || controlBaseUrl !== conn.baseUrl || loading || controlBusy"
+          @click="confirmCancel">取消运行</NButton>
       </div>
+      <NAlert v-if="stepControl.canceling" type="warning" style="margin-top: 12px">{{ stepControl.cancelHint }}</NAlert>
       <NAlert v-if="stepControl.visible" type="info" title="逐步执行" style="margin-top: 12px">
         <p>{{ stepControl.hint }}</p>
         <div class="head-row">

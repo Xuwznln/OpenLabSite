@@ -25,11 +25,19 @@ export function stepExecutionControl(task: BackendWorkflowTask | null, runs: Bac
     && (task?.execution_kind ?? "workflow") === "workflow"
     && !(task?.run_mode === "step" && task?.control_status === "paused")
     && (task?.control_status === "active" || task?.control_status === "waiting_reconciliation");
+  // 取消对整图与单点动作都适用，暂停中也可以；取消中（canceling）不能再取消
+  const canCancel = controlReady && active;
+  const canceling = task?.status === "canceling";
   return {
     visible, controlReady,
     canStep: controllable && task?.control_status === "paused",
     canResume: controllable,
     canPause,
+    canCancel,
+    canceling,
+    cancelHint: canceling
+      ? "正在取消：不再派发新动作；正在执行的动作已收到取消请求，设备返回后任务结束。"
+      : "",
     hint: !controlReady ? "任务控制状态不完整，无法安全放行；请重新读取并检查接口响应。"
       : !active ? "本次运行已结束。"
       : blocked || !controllable ? "请先处理当前异常或执行状态核对，再继续运行。"

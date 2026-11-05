@@ -4235,7 +4235,9 @@ export type components = {
         };
         /**
          * WorkflowTaskCommandRequest
-         * @description step 放行一个动作；resume 切回自动；pause 转单步并停止派发新动作（已下发的照常跑完）。
+         * @description step 放行一个动作；resume 切回自动；pause 转单步并停止派发新动作（已下发的照常跑完）；
+         *     cancel 取消任务：不再派发，正在执行的动作收到取消请求，设备真实返回后任务落 canceled
+         *     （期间任务为 canceling，设备锁保持）。
          *
          *     版本与幂等键防止跨页面重复放行。
          */
@@ -4248,7 +4250,7 @@ export type components = {
              * Type
              * @enum {string}
              */
-            type: "step" | "resume" | "pause";
+            type: "step" | "resume" | "pause" | "cancel";
         };
         /**
          * WorkflowTaskCreateRequest
