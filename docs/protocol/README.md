@@ -69,7 +69,7 @@ Uni-Lab-OS 微后端 :8002（unilab --port）
 | `registry` | `/api/v1/registry/*` | runtime.db | Backend | `createRegistryApi` | any |
 | `materials-v1` | `/api/v1/materials/*` | materials.db | 直出 + 写信封 | `createMaterialsV1Api` | any |
 | `graphs-v1` | `/api/v1/graphs*` | materials.db | Backend | `createGraphsV1Api` | any |
-| `chemicals-v1` | `/api/v1/chemicals*` | materials.db | Backend（参数错误码 2） | `createChemicalsV1Api` | any |
+| `chemicals-v1` | `/api/v1/chemicals*` | materials.db | Backend | `createChemicalsV1Api` | any |
 | `telemetry-v1` | `/api/v1/telemetry/*` | telemetry.db | 直出 | `createTelemetryV1Api` | any |
 | `history-v1` | `/api/v1/history/*` | history.db | 直出 | `createHistoryV1Api` | any |
 | `decisions` | `/api/v1/status-incidents*` `/error-decisions*` | 内存 | 直出 | `createDecisionsApi` | host |

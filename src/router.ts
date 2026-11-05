@@ -28,6 +28,12 @@ export const router = createRouter({
     },
     { path: "/materials", redirect: "/inventory" },
     {
+      path: "/chemicals/:id?",
+      name: "chemicals",
+      component: () => import("./views/ChemicalsView.vue"),
+      meta: { title: "化学品库", overline: "Chemicals" },
+    },
+    {
       path: "/lab",
       name: "lab",
       component: () => import("./views/LabMapView.vue"),

@@ -77,8 +77,9 @@ async function apply(url = draft.value) {
   <div class="conn-bar">
     <StatusPill
       v-if="conn.online"
-      status="online"
-      :label="conn.roleLabel"
+      :status="conn.readinessState.pillStatus"
+      :label="conn.readinessState.badge ? `${conn.roleLabel} · ${conn.readinessState.badge}` : conn.roleLabel"
+      :title="[conn.readinessState.detail, ...conn.readinessState.reasons].join('\n')"
     />
     <NPopover v-model:show="show" trigger="click" placement="bottom-end" :width="380">
       <template #trigger>
@@ -92,9 +93,15 @@ async function apply(url = draft.value) {
       <div class="pop">
         <div class="pop-head">
           <span class="pop-title">后端地址</span>
-          <span v-if="conn.online" class="pop-role">
-            <span class="dot" />{{ conn.roleLabel }}
+          <span v-if="conn.online" class="pop-role" :class="{ waiting: conn.readinessState.badge }">
+            <span class="dot" />{{ conn.roleLabel }}<template v-if="conn.readinessState.badge"> · {{ conn.readinessState.badge }}</template>
           </span>
+        </div>
+        <div v-if="conn.online" class="pop-readiness" :class="conn.readinessState.tone">
+          <span>{{ conn.readinessState.detail }}</span>
+          <ul v-if="conn.readinessState.reasons.length">
+            <li v-for="reason in conn.readinessState.reasons" :key="reason">{{ reason }}</li>
+          </ul>
         </div>
 
         <div class="pop-row">
@@ -186,6 +193,39 @@ async function apply(url = draft.value) {
 .pop-title {
   font-size: 13px;
   font-weight: 700;
+}
+
+.pop-readiness {
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #f1f7f4;
+  color: #285c46;
+  font-size: 12px;
+}
+
+.pop-readiness.starting,
+.pop-readiness.restarting,
+.pop-readiness.not_ready {
+  background: #fcf1e1;
+  color: #8a4b0b;
+}
+
+.pop-readiness.unknown {
+  background: #f2f2ef;
+  color: #6e7580;
+}
+
+.pop-readiness ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.pop-role.waiting {
+  color: #b45309;
+}
+
+.pop-role.waiting .dot {
+  background: #b45309;
 }
 
 .pop-role {

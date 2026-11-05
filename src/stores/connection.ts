@@ -8,11 +8,23 @@
  *   disabled = 纯调度权威进程（`unilab --role backend`）。
  *
  * Registry Authority 只在 backend 角色进程挂载，用一次 GET 探测并缓存结果。
+ *
+ * health 在线后再读 `/api/v1/readiness`（能否接收并执行任务：设备初始化 / Host 重启期间
+ * not_ready）；旧后端 404 时记为不支持，之后不再探测（换地址时重置）。
  */
 
 import { defineStore } from "pinia";
 import { computed, onScopeDispose, ref, watch } from "vue";
-import { ApiError, createEdgeApi, RUNTIME_LOG_NOTICE_EVENT, type RuntimeLogNotice, type EdgeApi, type HealthResponse } from "@openlab/protocol";
+import {
+  ApiError,
+  createEdgeApi,
+  RUNTIME_LOG_NOTICE_EVENT,
+  type EdgeApi,
+  type HealthResponse,
+  type ReadinessResponse,
+  type RuntimeLogNotice,
+} from "@openlab/protocol";
+import { readinessView, type ReadinessSupport } from "../features/readiness";
 import { bindWorkflowInvalidations, WORKFLOW_INVALIDATION_EVENT_TYPES } from "../features/workflow-invalidation";
 import { openNoticeSource, type NoticeSource } from "../features/shared-notice";
 import { describeError, isOfflineError } from "../features/errors";
@@ -160,6 +172,10 @@ export const useConnectionStore = defineStore("connection", () => {
   const checking = ref(false);
   const lastCheckedAt = ref(0);
   const registrySupport = ref<CapabilityState>("unknown");
+  const readiness = ref<ReadinessResponse | null>(null);
+  const readinessSupport = ref<ReadinessSupport>("unknown");
+  /** 连接状态里的就绪口径（胶囊文案 / 颜色 / 原因）。 */
+  const readinessState = computed(() => readinessView(readiness.value, readinessSupport.value, online.value));
 
   const api = computed<EdgeApi>(() => createEdgeApi(baseUrl.value));
 
@@ -240,6 +256,22 @@ export const useConnectionStore = defineStore("connection", () => {
     }
   }
 
+  async function checkReadiness() {
+    if (readinessSupport.value === "unsupported") return;
+    const url = baseUrl.value;
+    try {
+      const result = await api.value.domains.system.readiness();
+      if (url !== baseUrl.value) return;
+      readiness.value = result;
+      readinessSupport.value = "available";
+    } catch (error) {
+      if (url !== baseUrl.value) return;
+      readiness.value = null;
+      // 旧后端没有该路由：退回只看 health，不再每轮探测
+      if (error instanceof ApiError && error.status === 404) readinessSupport.value = "unsupported";
+    }
+  }
+
   async function checkHealth(): Promise<boolean> {
     checking.value = true;
     try {
@@ -250,11 +282,15 @@ export const useConnectionStore = defineStore("connection", () => {
       if (online.value) {
         rememberRecent(baseUrl.value);
         void probeRegistry();
+        await checkReadiness();
+      } else {
+        readiness.value = null;
       }
       return online.value;
     } catch (err) {
       online.value = false;
       health.value = null;
+      readiness.value = null;
       lastError.value =
         isOfflineError(err) && classifyTarget(baseUrl.value) === "blocked"
           ? "浏览器拦截了 HTTPS 页面对 http:// 局域网地址的请求（混合内容），见下方处理方式"
@@ -312,6 +348,8 @@ export const useConnectionStore = defineStore("connection", () => {
     health.value = null;
     online.value = false;
     registrySupport.value = "unknown";
+    readiness.value = null;
+    readinessSupport.value = "unknown";
     if (pollTimer === null) return;
     for (const channel of noticeChannels) {
       channel.stop();
@@ -332,6 +370,9 @@ export const useConnectionStore = defineStore("connection", () => {
     schedulerLocal,
     executionReady,
     registrySupport,
+    readiness,
+    readinessSupport,
+    readinessState,
     roleLabel,
     lastError,
     checking,

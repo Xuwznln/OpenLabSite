@@ -10,6 +10,7 @@
  * 位置修改、移动、跨设备转运、删除、拓扑边维护、批次入库；调度器专用的预留
  * 状态机与快照对齐不进前端。
  */
+import type { ChemicalSummary } from "./chemicals-v1.js";
 import type { HttpTransport, JsonObject, JsonValue } from "./common.js";
 
 export interface MaterialsV1TemplateHandle {
@@ -84,6 +85,17 @@ export interface MaterialsV1Position {
 
 export type MaterialsV1PositionWrite = Partial<MaterialsV1Position>;
 
+/**
+ * 一份内容物。`chemical_uuid` 引用化学品定义（chemicals-v1），读写语义不对称：
+ *
+ * - **读取**：有引用时才出现 `chemical_uuid` 与只读摘要 `chemical`（化学品已删除时 `chemical` 为
+ *   null、uuid 保留）；未关联的内容物两个键都不出现。
+ * - **写入**：省略 `chemical_uuid` = 沿用同一物料同名内容物已有的引用，没有就按名称 / 英文名 /
+ *   别名 / CAS 唯一匹配自动关联；显式 `null` = 解除引用（本次不自动匹配）；uuid = 关联
+ *   （必须是未删除的化学品，否则 422）。`chemical` 写入时被忽略。
+ *   「省略」与「显式 null」是两个不同的请求（幂等哈希不同）。页面写入所见即所得：每份内容物都显式带
+ *   这个键（当前显示的关联，未关联即 null），自动匹配只留给省略它的设备上报与旧客户端。
+ */
 export interface MaterialsV1Substance {
   substance_uuid?: string | null;
   name: string;
@@ -92,6 +104,8 @@ export interface MaterialsV1Substance {
   physical_state: "liquid" | "solid" | "gas" | "unknown";
   composition: JsonValue[];
   meta_data: JsonObject;
+  chemical_uuid?: string | null;
+  chemical?: ChemicalSummary | null;
 }
 
 export interface MaterialsV1DataWrite {
@@ -624,13 +638,13 @@ export function createMaterialsV1Api(http: HttpTransport) {
       http.request<MaterialsV1MutationResult<MaterialsV1Aggregate>>({
         method: "PUT",
         path: `${base}/instances/${encodeURIComponent(materialUuid)}/data`,
-        body: materialsMutation("put_material_data", value, options),
+        body: materialsMutation("put_data", value, options),
       }),
     putPosition: (materialUuid: string, value: MaterialsV1PositionWrite, options?: MaterialsV1MutationOptions) =>
       http.request<MaterialsV1MutationResult<MaterialsV1Aggregate>>({
         method: "PUT",
         path: `${base}/instances/${encodeURIComponent(materialUuid)}/position`,
-        body: materialsMutation("put_material_position", value, options),
+        body: materialsMutation("put_position", value, options),
       }),
     remove: (materialUuid: string, recursive = true, options?: MaterialsV1MutationOptions) =>
       http.request<MaterialsV1MutationResult<MaterialsV1DeleteResult>>({

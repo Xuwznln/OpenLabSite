@@ -7,6 +7,7 @@
  *   sx = (rx - ry) * ISO_X, sy = (rx + ry) * ISO_Y - z，(rx,ry) = yaw 旋转后的世界坐标
  * 盒体 = 顶面 + 按法线剔除的可见侧面；画家算法先按场景层级、同层按深度排序。
  */
+import SubstanceChemical from "../components/SubstanceChemical.vue";
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
@@ -460,6 +461,7 @@ watch([() => conn.baseUrl, subjectId], () => {
             </NDescriptionsItem>
             <NDescriptionsItem v-if="selected.content?.substance" label="内容物">
               {{ selected.content.substance }}
+              <SubstanceChemical v-if="selected.content.record" :substance="selected.content.record" class="assembly-chemical" />
             </NDescriptionsItem>
             <NDescriptionsItem
               v-if="typeof selected.content?.volume_ml === 'number'"
@@ -485,6 +487,10 @@ watch([() => conn.baseUrl, subjectId], () => {
 </template>
 
 <style scoped>
+.assembly-chemical {
+  margin-top: 4px;
+}
+
 .asm-title {
   font-size: 16px;
   font-weight: 700;

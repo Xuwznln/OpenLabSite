@@ -78,6 +78,7 @@ const NAV_GROUPS_BASE = [
     items: [
       { key: "devices", to: "/devices", icon: HardwareChipOutline },
       { key: "inventory", to: "/inventory", icon: CubeOutline },
+      { key: "chemicals", to: "/chemicals", icon: FlaskOutline },
       { key: "lab", to: "/lab", icon: MapOutline },
       { key: "monitor", to: "/monitor", icon: EyeOutline },
     ],
@@ -133,6 +134,7 @@ const ROUTE_KEYS: Array<[prefix: string, key: string]> = [
   ["/monitor", "monitor"],
   ["/editor", "editor"],
   ["/inventory", "inventory"],
+  ["/chemicals", "chemicals"],
   ["/devices", "devices"],
   ["/data", "entities"],
   ["/history", "history"],

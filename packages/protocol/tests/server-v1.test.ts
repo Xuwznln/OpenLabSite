@@ -75,6 +75,28 @@ describe("UniLabOS 四库 v1 浏览器接口", () => {
     expect(called).toEqual(catalogOps("materials-v1"));
   });
 
+  it("内容物数据写入用后端认的 operation，chemical_uuid 的省略 / null / uuid 原样传输", async () => {
+    const mock = createMockHttp();
+    const api = createMaterialsV1Api(mock.http);
+    await api.putData(DUMMY_ID, {
+      substances: [
+        { name: "水", quantity: 1, quantity_unit: "mL", physical_state: "liquid", composition: [], meta_data: {}, chemical_uuid: "c1" },
+        { name: "乙醇", quantity: 2, quantity_unit: "mL", physical_state: "liquid", composition: [], meta_data: {}, chemical_uuid: null },
+        { name: "未动", quantity: 3, quantity_unit: "mL", physical_state: "liquid", composition: [], meta_data: {} },
+      ],
+    });
+    await api.putPosition(DUMMY_ID, { position_x: 1 });
+    const [data, position] = mock.calls.map((call) => call.data as { operation: string; effect_key: string; payload: { substances?: Record<string, unknown>[] } });
+    // 微后端 put_data 只接受 put_data / update_data / update_substances，put_position 只接受 put_position / update_position
+    expect(data.operation).toBe("put_data");
+    expect(data.effect_key.startsWith("put_data:")).toBe(true);
+    expect(position.operation).toBe("put_position");
+    const substances = data.payload.substances!;
+    expect(substances[0].chemical_uuid).toBe("c1");
+    expect(substances[1]).toHaveProperty("chemical_uuid", null);
+    expect(substances[2]).not.toHaveProperty("chemical_uuid");
+  });
+
   it("materials 写请求使用 materials.v1 幂等信封", async () => {
     const mock = createMockHttp();
     const api = createMaterialsV1Api(mock.http);

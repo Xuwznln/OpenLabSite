@@ -1,5 +1,14 @@
 # Changelog
 
+## 未发布：内容物关联化学品定义；修正物料数据 / 位置写入的 operation
+
+- 快照同步 Uni-Lab-OS `feat/substance-chemical-link`（dev + PR #353）：路由不变，`MaterialSubstance`
+  新增可选 `chemical_uuid` 与只读 `chemical`（新 schema `ChemicalSummary`）。
+- `MaterialsV1Substance` 增加 `chemical_uuid?: string | null` / `chemical?: ChemicalSummary | null`；
+  chemicals-v1 导出 `ChemicalSummary`。省略 / null / uuid 三种写法语义见 docs/protocol/materials.md。
+- 修正：`materialsV1.putData` 的 operation 由 `put_material_data` 改为微后端接受的 `put_data`，
+  `putPosition` 由 `put_material_position` 改为 `put_position`（旧值会被微后端以 422 拒绝）。
+
 ## 未发布：工作流入口参数、发布与组合调用；就绪探针与化学品定义
 
 - 快照同步 Uni-Lab-OS `feat/workflow-entry-params`（dev + PR #346）：新增 12 条浏览器操作，无删除。
@@ -11,7 +20,7 @@
   `declaredWorkflowIo` 三个纯函数。
 - system 域：`readiness()`（GET /readiness）；503 是「尚未就绪」的正常回答，返回同形状正文而不抛错。
 - 新域 `chemicals-v1`（`createChemicalsV1Api` / `api.domains.chemicalsV1`）：化学品定义 CRUD，
-  `expected_version` 乐观锁；参数错误业务码是 2（`CHEMICAL_BUSINESS_CODES`）。
+  `expected_version` 乐观锁；业务码与 workflow 共用一张表（参数错误 1000，`CHEMICAL_BUSINESS_CODES`）。
 - 需要包含上述路由的 Uni-Lab-OS 构建；旧构建上这些方法返回 404，页面按「不支持」降级。
 
 ## 未发布：工作流事件流订阅语义（v1.0 ADR 0006）

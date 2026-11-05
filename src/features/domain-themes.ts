@@ -16,6 +16,7 @@ export type ThemeNavKey =
   | "monitor"
   | "editor"
   | "inventory"
+  | "chemicals"
   | "devices"
   | "toolkit"
   | "entities"
@@ -78,6 +79,7 @@ export const LAB_THEMES: Record<LabThemeId, LabThemeConfig> = {
       monitor: "运行监控",
       editor: "流程编排",
       inventory: "物料仓储",
+      chemicals: "化学品库",
       devices: "设备管理",
       toolkit: "实用工具",
       ...systemNav,

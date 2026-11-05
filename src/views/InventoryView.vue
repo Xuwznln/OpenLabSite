@@ -48,6 +48,7 @@ import {
 } from "@vicons/ionicons5";
 import {
   ApiError,
+  type Chemical,
   type MaterialsV1Aggregate,
   type MaterialsV1Change,
   type MaterialsV1InventoryLot,
@@ -60,6 +61,9 @@ import {
 import EntityRef from "../components/EntityRef.vue";
 import PageHeader from "../components/PageHeader.vue";
 import StatusPill from "../components/StatusPill.vue";
+import SubstanceChemical from "../components/SubstanceChemical.vue";
+import ChemicalPickerDialog from "../components/ChemicalPickerDialog.vue";
+import { aggregatePrecondition, dataWriteWithLink, describeLinkError } from "../features/substance-chemicals";
 import { actorTypeLabel } from "../features/actor-type";
 import { describeError } from "../features/errors";
 import { createRefreshQueue } from "../features/refresh-queue";
@@ -535,6 +539,60 @@ async function submitEdit() {
   } finally {
     editing.value = false;
   }
+}
+
+// ── 内容物 ↔ 化学品关联 ─────────────────────────────────────────
+// PUT data 是整份替换，所见即所得：每份内容物都显式带 chemical_uuid——改动的那一份是新值（uuid 关联 / null 解除），
+// 其余是当前显示的关联（未关联即 null，不让服务端按名称重新自动关联）；以读到的聚合 state_hash 为前提，
+// 期间被设备上报或别的页面改过就拒绝而不是覆盖。
+
+const linkTarget = ref<{ materialUuid: string; index: number; name: string } | null>(null);
+const linkPickerOpen = ref(false);
+const linkBusy = ref(false);
+const linkError = ref("");
+
+function openLinkPicker(index: number) {
+  const aggregate = selected.value;
+  const substance = aggregate?.data.substances[index];
+  if (!aggregate || !substance) return;
+  linkTarget.value = { materialUuid: aggregate.material.material_uuid, index, name: substance.name };
+  linkError.value = "";
+  linkPickerOpen.value = true;
+}
+
+async function writeSubstanceLink(index: number, chemicalUuid: string | null, chemicalName = "") {
+  const aggregate = selected.value;
+  const substance = aggregate?.data.substances[index];
+  if (!aggregate || !substance || linkBusy.value) return false;
+  linkBusy.value = true;
+  linkError.value = "";
+  try {
+    await conn.api.domains.materialsV1.putData(
+      aggregate.material.material_uuid,
+      dataWriteWithLink(aggregate.data, index, chemicalUuid),
+      { preconditions: [aggregatePrecondition(aggregate)] },
+    );
+    message.success(chemicalUuid ? `内容物「${substance.name}」已关联到「${chemicalName}」` : `已解除内容物「${substance.name}」的化学品关联`);
+    await refresh();
+    return true;
+  } catch (error) {
+    const info = describeLinkError(error);
+    linkError.value = info?.message ?? `关联失败：${describeError(error)}`;
+    if (!linkPickerOpen.value) message.warning(linkError.value);
+    if (info?.refresh) await refresh();
+    return false;
+  } finally {
+    linkBusy.value = false;
+  }
+}
+
+async function pickChemicalForSubstance(chemical: Chemical) {
+  const target = linkTarget.value;
+  if (!target || target.materialUuid !== selected.value?.material.material_uuid) {
+    linkPickerOpen.value = false;
+    return;
+  }
+  if (await writeSubstanceLink(target.index, chemical.chemical_uuid, chemical.name)) linkPickerOpen.value = false;
 }
 
 // ── 删除 ───────────────────────────────────────────────────────
@@ -1100,10 +1158,19 @@ const selectedDevice = computed(() => rootDeviceOf(selected.value));
 
           <div class="section-title">内容物（{{ selected.data.substances.length }}）</div>
           <div v-if="selected.data.substances.length" class="substances">
-            <div v-for="substance in selected.data.substances" :key="substance.substance_uuid ?? substance.name" class="substance">
-              <span class="substance-name">{{ substance.name }}</span>
-              <span class="substance-qty mono">{{ substance.quantity }} {{ substance.quantity_unit }}</span>
-              <NTag size="tiny" :bordered="false">{{ substance.physical_state }}</NTag>
+            <div v-for="(substance, index) in selected.data.substances" :key="substance.substance_uuid ?? substance.name" class="substance">
+              <div class="substance-line">
+                <span class="substance-name">{{ substance.name }}</span>
+                <span class="substance-qty mono">{{ substance.quantity }} {{ substance.quantity_unit }}</span>
+                <NTag size="tiny" :bordered="false">{{ substance.physical_state }}</NTag>
+              </div>
+              <SubstanceChemical
+                :substance="substance"
+                :editable="conn.online"
+                :busy="linkBusy"
+                @link="openLinkPicker(index)"
+                @unlink="writeSubstanceLink(index, null)"
+              />
             </div>
           </div>
           <p v-else class="dim small">无内容物记录。</p>
@@ -1314,6 +1381,13 @@ const selectedDevice = computed(() => rootDeviceOf(selected.value));
         </template>
       </template>
     </NModal>
+    <ChemicalPickerDialog
+      v-model:show="linkPickerOpen"
+      :substance-name="linkTarget?.name ?? ''"
+      :busy="linkBusy"
+      :error="linkError"
+      @pick="pickChemicalForSubstance"
+    />
   </div>
 </template>
 
@@ -1423,12 +1497,18 @@ const selectedDevice = computed(() => rootDeviceOf(selected.value));
 
 .substance {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  gap: 4px;
   padding: 6px 10px;
   border: 1px solid var(--hairline);
   border-radius: 8px;
   font-size: 12.5px;
+}
+
+.substance-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .substance-name {
