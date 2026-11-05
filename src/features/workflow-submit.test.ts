@@ -502,6 +502,34 @@ describe("submitWorkflow", () => {
     expect(api.calls).toEqual(["create", "save@1", "task"]);
   });
 
+  it("保存后的定义声明了入口参数：经 prompter 收集 input；取消则只保存不运行；边原样回传", async () => {
+    const contract = { input_contract: { version: 1, parameters: [{ name: "volume", schema: { type: "number" }, required: true }] } };
+    const declared = (revision: number) =>
+      ({ ...graphOf(revision), workflow: { ...workflow(revision), meta_data: { unilab: contract } } }) as unknown as BackendWorkflowGraph;
+    const edge = { uuid: "e1", source_node_uuid: "a", target_node_uuid: "b", source_handle_uuid: "h1", target_handle_uuid: "h2" };
+    const api = fakeApi({ saveGraph: vi.fn(async (_uuid, body) => declared(body.revision + 1)) });
+    const prompter = { ask: vi.fn(async () => ({ volume: 2 })), close: vi.fn() };
+    const result = await submitWorkflow(api, { workflowUuid: "wf-1", name: "流程", nodes: [], edges: [edge], prompter });
+    expect(vi.mocked(api.saveGraph).mock.calls[0][1].edges).toEqual([edge]);
+    expect(prompter.ask).toHaveBeenCalledWith(contract.input_contract.parameters, expect.objectContaining({ title: "运行「流程」" }));
+    expect(api.createTask).toHaveBeenCalledWith(expect.objectContaining({ input: { volume: 2 } }));
+    expect(result.task?.uuid).toBe("task-1");
+
+    const canceling = { ask: vi.fn(async () => null), close: vi.fn() };
+    const canceled = await submitWorkflow(
+      fakeApi({ saveGraph: vi.fn(async (_uuid, body) => declared(body.revision + 1)) }),
+      { workflowUuid: "wf-1", name: "流程", nodes: [], prompter: canceling },
+    );
+    expect(canceled).toMatchObject({ task: null, canceled: true });
+
+    // 没声明合同的定义不弹框、不带 input
+    const plain = fakeApi();
+    const silent = { ask: vi.fn(), close: vi.fn() };
+    await submitWorkflow(plain, { name: "流程", nodes: [], prompter: silent });
+    expect(silent.ask).not.toHaveBeenCalled();
+    expect(vi.mocked(plain.createTask).mock.calls[0][0]).not.toHaveProperty("input");
+  });
+
   it("旧进程以 HTTP 404 表示绑定定义不存在时退回新建", async () => {
     const api = fakeApi({
       updateWorkflow: vi.fn(async () => {

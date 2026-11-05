@@ -9,6 +9,7 @@
  *     registry.ts         ↔ server/api/runtime/registry.py
  *     materials-v1.ts     ↔ server/api/materials/core.py
  *     graphs-v1.ts        ↔ server/api/materials/graph.py
+ *     chemicals-v1.ts     ↔ server/api/materials/chemicals.py
  *     telemetry-v1.ts     ↔ server/api/telemetry.py
  *     history-v1.ts       ↔ server/api/history.py
  *     status.ts           ↔ server/api/runtime/diagnostics.py（decisions 域）
@@ -24,6 +25,7 @@ import {
   type HttpTransport,
   type HttpTransportOptions,
 } from "./common.js";
+import { createChemicalsV1Api } from "./chemicals-v1.js";
 import { createDebugApi } from "./debug.js";
 import { createDeviceProcessesApi } from "./device-processes.js";
 import { createDriverPackagesApi } from "./driver-packages.js";
@@ -50,6 +52,8 @@ export interface EdgeApiDomains {
   registry: ReturnType<typeof createRegistryApi>;
   materialsV1: ReturnType<typeof createMaterialsV1Api>;
   graphsV1: ReturnType<typeof createGraphsV1Api>;
+  /** 化学品定义（CAS / InChIKey 可空唯一键，materials.db）。 */
+  chemicalsV1: ReturnType<typeof createChemicalsV1Api>;
   telemetryV1: ReturnType<typeof createTelemetryV1Api>;
   historyV1: ReturnType<typeof createHistoryV1Api>;
   /** 人工决策：status-incidents / error-decisions（仅带执行面的 Host）。 */
@@ -72,6 +76,7 @@ export function createEdgeApi(baseUrl: string, options: EdgeApiOptions = {}) {
     registry: createRegistryApi(http),
     materialsV1: createMaterialsV1Api(http),
     graphsV1: createGraphsV1Api(http),
+    chemicalsV1: createChemicalsV1Api(http),
     telemetryV1: createTelemetryV1Api(http),
     historyV1: createHistoryV1Api(http),
     decisions: createDecisionsApi(http),

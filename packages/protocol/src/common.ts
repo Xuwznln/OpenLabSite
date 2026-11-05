@@ -27,12 +27,13 @@ export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 /**
  * 微后端协议域。每个域对应 Uni-Lab-OS `unilabos/server/api/` 下的一组路由：
  *
- * - `system`         health / hostlink peers / scheduler resources / restart（诊断路由）
+ * - `system`         health / readiness / hostlink peers / scheduler resources / restart（诊断路由）
  * - `runtime-v1`     runtime.db：Backend 会话、执行 endpoint、命令、执行 job、outbox
  * - `workflow`       runtime.db：Workflow 定义 / Graph / Task / Node Job / Authoring / SSE
  * - `registry`       runtime.db：Registry Authority（默认本机调度 Host 与 `--role backend` 均提供；远端受控 Edge 不挂载）
  * - `materials-v1`   materials.db：模板 / 物料聚合 / 位点 / 批次 / 预留 / 拓扑边 / 变更账本
  * - `graphs-v1`      materials.db：设备图（node-link）快照与实时拓扑
+ * - `chemicals-v1`   materials.db：化学品定义（CAS / InChIKey 可空唯一键）
  * - `telemetry-v1`   telemetry.db：设备最新状态与追加事件
  * - `history-v1`     history.db：payload 与统一历史事件流
  * - `decisions`      执行端人工决策：status-incidents / error-decisions
@@ -48,6 +49,7 @@ export type ProtocolDomain =
   | "registry"
   | "materials-v1"
   | "graphs-v1"
+  | "chemicals-v1"
   | "telemetry-v1"
   | "history-v1"
   | "decisions"
@@ -294,6 +296,19 @@ export interface HealthResponse {
   execution: "ready" | "restarting" | "disabled" | (string & {});
 }
 
+/**
+ * GET /api/v1/readiness：就绪探针。能接收并执行任务时 HTTP 200，否则 503；两种情况正文
+ * 形状相同（`status` 为 ready / not_ready）。`/health` 只说明进程存活。
+ */
+export interface ReadinessResponse {
+  status: "ready" | "not_ready" | (string & {});
+  scheduler: "local" | "remote" | (string & {});
+  /** `starting` = 执行适配器尚未注册（设备初始化中）；`restarting` = Host 未接入控制面；`disabled` = 纯调度权威。 */
+  execution: "ready" | "starting" | "restarting" | "disabled" | (string & {});
+  /** not_ready 的原因（人话）；ready 时为空数组。 */
+  reasons: string[];
+}
+
 export interface HealthRequestOptions {
   /** 能力探测可使用更短的超时；未指定时采用 system 域默认值 4 秒。 */
   timeoutMs?: number;
@@ -469,6 +484,30 @@ export function createSystemApi(http: HttpTransport) {
         path: "/api/v1/health",
         timeoutMs: options.timeoutMs ?? 4_000,
       }),
+    /**
+     * GET /api/v1/readiness —— 503 是「尚未就绪」的正常回答，返回同形状正文而不是抛错；
+     * 其他非 2xx（含不认识的 503 正文）仍抛 ApiError。
+     */
+    readiness: async (options: HealthRequestOptions = {}): Promise<ReadinessResponse> => {
+      try {
+        return await http.request<ReadinessResponse>({
+          method: "GET",
+          path: "/api/v1/readiness",
+          timeoutMs: options.timeoutMs ?? 4_000,
+        });
+      } catch (error) {
+        const body = error instanceof ApiError ? (error.body as Partial<ReadinessResponse> | undefined) : undefined;
+        if (error instanceof ApiError && error.status === 503 && typeof body?.status === "string") {
+          return {
+            status: body.status,
+            scheduler: String(body.scheduler ?? ""),
+            execution: String(body.execution ?? ""),
+            reasons: Array.isArray(body.reasons) ? body.reasons.map(String) : [],
+          };
+        }
+        throw error;
+      }
+    },
     /** GET /api/v1/ping —— 浏览器 ↔ 微后端往返时延；host_node 的 test_latency 用同一端点测 Edge ↔ Backend */
     ping: (clientTimestamp: number = Date.now() / 1000) =>
       http.request<PingResponse>({

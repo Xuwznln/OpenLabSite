@@ -9,7 +9,8 @@
  *   叶子全部视为待填（模板留空即待填语义）；
  * - 被上游 @@@ 映射覆盖的参数路径不算未填（提交前调度器会写回）：映射
  *   targetKey 的最后一段是 sjson 写入路径，与参数路径按前缀双向匹配；
- * - 参数 JSON 不合法时整体计一项（invalid-json）。
+ * - 参数 JSON 不合法时整体计一项（invalid-json）；
+ * - 顶层值是工作流入口参数引用（`{"kind": "workflow_input", ...}`）的参数由任务 input 给值，不计未填。
  *
  * 本模块保持纯函数（无网络/无组件依赖），供单测与画布/试运行共用。
  */
@@ -23,6 +24,7 @@ import {
 } from "./action-placeholders";
 import { flattenParameterFields, parseNodeParam } from "./workflow-variables";
 import { siteBindingStatus, siteParamValue, type SiteIndex, type SiteBindings } from "./site-bindings";
+import { entryReferencesOf } from "./workflow-io";
 
 export interface MissingParamEntry {
   /** 参数 dot 路径（placeholder 为顶层参数名；invalid-json 为 "$"）。 */
@@ -117,7 +119,8 @@ export function missingParamEntries(input: MissingParamInput): MissingParamEntry
   }
 
   const entries: MissingParamEntry[] = [];
-  const placeholders = detectPlaceholderFields(input.detail, param);
+  const entryBound = new Set(entryReferencesOf(param).keys());
+  const placeholders = detectPlaceholderFields(input.detail, param).filter((field) => !entryBound.has(field.param));
   // unsupported placeholder 回退原始字段编辑（与共享表单 placeholderUsable 一致），
   // 其空值走下方叶子统计；其余 placeholder 由选择器接管，不再计叶子。
   const handledParams = new Set(
@@ -153,7 +156,7 @@ export function missingParamEntries(input: MissingParamInput): MissingParamEntry
     });
   }
   const leaves = flattenParameterFields(param).filter(
-    (leaf) => !handledParams.has(leaf.path.split(".")[0]),
+    (leaf) => !handledParams.has(leaf.path.split(".")[0]) && !entryBound.has(leaf.path.split(".")[0]),
   );
   for (const leaf of leaves) {
     if (!isEmptyValue(leaf.value)) continue;

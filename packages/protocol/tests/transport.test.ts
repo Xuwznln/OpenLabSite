@@ -32,6 +32,7 @@ const DOMAINS: ProtocolDomain[] = [
   "registry",
   "materials-v1",
   "graphs-v1",
+  "chemicals-v1",
   "telemetry-v1",
   "history-v1",
   "decisions",
@@ -76,6 +77,7 @@ describe("system 协议与传输层", () => {
     const api = createSystemApi(mock.http);
     const called = await collectCalls(mock, {
       health: () => api.health(),
+      readiness: () => api.readiness(),
       ping: () => api.ping(1.5),
       hostlinkPeers: () => api.hostlinkPeers(),
       logSources: () => api.logSources(),
@@ -180,6 +182,7 @@ describe("system 协议与传输层", () => {
       "registry",
       "materialsV1",
       "graphsV1",
+      "chemicalsV1",
       "telemetryV1",
       "historyV1",
       "decisions",

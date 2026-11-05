@@ -7,6 +7,7 @@ import type {
   BackendWorkflowNodeJob,
   BackendWorkflowRunMode,
   BackendWorkflowTask,
+  JsonObject,
 } from "@openlab/protocol";
 import { loadWorkflowHttpSnapshot } from "../features/workflow-invalidation";
 import { useConnectionStore } from "./connection";
@@ -69,13 +70,15 @@ export const useSchedulerStore = defineStore("scheduler", () => {
   async function createTask(
     workflowUuid: string,
     runMode: BackendWorkflowRunMode = "normal",
-    targetNodeUuid?: string,
+    options: { targetNodeUuid?: string; input?: JsonObject } = {},
   ) {
     await useWorkflowValidationStore().check(workflowUuid);
     const result = await conn.api.domains.workflowBackend.createTask({
       workflow_uuid: workflowUuid,
       run_mode: runMode,
-      target_node_uuid: targetNodeUuid,
+      target_node_uuid: options.targetNodeUuid,
+      // 入口参数只给声明了 input_contract 的流程；其余流程不带 input
+      ...(options.input ? { input: options.input } : {}),
     });
     await refresh();
     return result;

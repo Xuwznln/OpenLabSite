@@ -8,7 +8,8 @@
  * - 节点 uuid 在绑定权威定义后是稳定身份：首次提交时分配，随草稿保存，再提交复用；
  *   未绑定定义的导入草稿不复用外部 UUID，避免跨 Workflow 的软删除身份冲突；
  * - 流程：POST /workflows（或复用已绑定的定义）→ PUT /workflows/{uuid}/graph（revision 乐观锁）
- *   → POST /workflow-tasks。
+ *   → POST /workflow-tasks。保存后的定义声明了入口参数（meta_data.unilab.input_contract）时，
+ *   经调用方给的 prompter 收集本次运行的 `input`（见 entry-params-prompt.ts）。
  */
 import type {
   BackendGraphWriteInput,
@@ -20,7 +21,8 @@ import type {
   BackendWorkflowWriteInput,
   JsonObject,
 } from "@openlab/protocol";
-import { ApiError, BackendBusinessError } from "@openlab/protocol";
+import { ApiError, BackendBusinessError, declaredWorkflowIo } from "@openlab/protocol";
+import { submitWithEntryInput, type EntryInputPrompter } from "./entry-params-prompt";
 import { LOOP_NODE_TYPE, loopSpecFromNodeData, type LoopNodeData } from "./workflow-loops";
 
 export interface SubmitNodeInput {
@@ -466,15 +468,21 @@ export interface SubmitWorkflowInput {
   description?: string;
   metaData?: JsonObject;
   nodes: BackendWorkflowNodeWrite[];
+  /** 画布本身没有边；只有原样保留的组合调用展开边需要回传（缺省空数组）。 */
+  edges?: BackendGraphWriteInput["edges"];
   /** 只保存定义与图，不创建运行。 */
   saveOnly?: boolean;
   runMode?: "normal" | "step";
+  /** 定义声明了入口参数时用来收集本次运行的 input；不给则不带 input 提交。 */
+  prompter?: EntryInputPrompter;
 }
 
 export interface SubmitWorkflowResult {
   workflow: BackendWorkflow;
   task: BackendWorkflowTask | null;
   created: boolean;
+  /** 用户在填写入口参数时取消：定义与图已保存，没有创建运行。 */
+  canceled?: boolean;
 }
 
 /**
@@ -512,7 +520,9 @@ export async function submitWorkflow(api: SubmitWorkflowApi, input: SubmitWorkfl
   let revision = workflow.revision;
   for (let attempt = 0; ; attempt++) {
     try {
-      const graph = await api.saveGraph(workflow.uuid, { revision, nodes: input.nodes, edges: [], site_binding_mode: "preserve" });
+      const graph = await api.saveGraph(workflow.uuid, {
+        revision, nodes: input.nodes, edges: input.edges ?? [], site_binding_mode: "preserve",
+      });
       workflow = graph.workflow;
       break;
     } catch (error) {
@@ -524,13 +534,20 @@ export async function submitWorkflow(api: SubmitWorkflowApi, input: SubmitWorkfl
     }
   }
 
-  const task = input.saveOnly
-    ? null
-    : await api.createTask({
-        execution_kind: "workflow",
-        workflow_uuid: workflow.uuid,
-        run_mode: input.runMode ?? "normal",
-        description: `编排画布提交 · ${input.name}`,
-      });
-  return { workflow, task, created };
+  if (input.saveOnly) return { workflow, task: null, created };
+  const saved = workflow;
+  const runMode = input.runMode ?? "normal";
+  const task = await submitWithEntryInput(
+    input.prompter,
+    declaredWorkflowIo(saved).input_contract.parameters,
+    (entry) => api.createTask({
+      execution_kind: "workflow",
+      workflow_uuid: saved.uuid,
+      run_mode: runMode,
+      description: `编排画布提交 · ${input.name}`,
+      ...(entry ? { input: entry } : {}),
+    }),
+    { title: `运行「${input.name}」`, confirmText: runMode === "step" ? "提交逐步运行" : "提交运行" },
+  );
+  return task ? { workflow, task, created } : { workflow, task: null, created, canceled: true };
 }

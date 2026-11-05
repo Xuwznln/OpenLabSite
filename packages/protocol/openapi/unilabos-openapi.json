@@ -20,6 +20,279 @@
     }
   },
   "paths": {
+    "/api/v1/chemicals": {
+      "get": {
+        "tags": [
+          "chemicals-v1"
+        ],
+        "summary": "List Chemicals",
+        "description": "按名称 / 别名 / CAS / 分子式模糊搜索，或按 CAS、InChIKey 精确查找。",
+        "operationId": "list_chemicals_api_v1_chemicals_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Q"
+            }
+          },
+          {
+            "name": "cas",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Cas"
+            }
+          },
+          {
+            "name": "inchi_key",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Inchi Key"
+            }
+          },
+          {
+            "name": "physical_state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Physical State"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 50,
+              "title": "Page Size"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-openlab-role": "any"
+      },
+      "post": {
+        "tags": [
+          "chemicals-v1"
+        ],
+        "summary": "Create Chemical",
+        "operationId": "create_chemical_api_v1_chemicals_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChemicalWrite"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-openlab-role": "any"
+      }
+    },
+    "/api/v1/chemicals/{chemical_uuid}": {
+      "get": {
+        "tags": [
+          "chemicals-v1"
+        ],
+        "summary": "Get Chemical",
+        "operationId": "get_chemical_api_v1_chemicals__chemical_uuid__get",
+        "parameters": [
+          {
+            "name": "chemical_uuid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Chemical Uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-openlab-role": "any"
+      },
+      "patch": {
+        "tags": [
+          "chemicals-v1"
+        ],
+        "summary": "Update Chemical",
+        "operationId": "update_chemical_api_v1_chemicals__chemical_uuid__patch",
+        "parameters": [
+          {
+            "name": "chemical_uuid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Chemical Uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChemicalPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-openlab-role": "any"
+      },
+      "delete": {
+        "tags": [
+          "chemicals-v1"
+        ],
+        "summary": "Delete Chemical",
+        "operationId": "delete_chemical_api_v1_chemicals__chemical_uuid__delete",
+        "parameters": [
+          {
+            "name": "chemical_uuid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Chemical Uuid"
+            }
+          },
+          {
+            "name": "expected_version",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "title": "Expected Version"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-openlab-role": "any"
+      }
+    },
     "/api/v1/debug/databases": {
       "get": {
         "tags": [
@@ -3837,6 +4110,27 @@
         "x-openlab-role": "any"
       }
     },
+    "/api/v1/readiness": {
+      "get": {
+        "tags": [
+          "backend"
+        ],
+        "summary": "Readiness",
+        "description": "就绪探针：能接收并执行任务时 HTTP 200，否则 503（Kubernetes readiness 合同）。\n\n与 ``/health``（进程存活，恒 200）不同：Host 子进程启动 / 安静点重启期间、执行适配器\n尚未注册时返回 503；全量重置期间维护闸门同样返回 503。响应只含状态摘要。",
+        "operationId": "readiness_api_v1_readiness_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "x-openlab-role": "any"
+      }
+    },
     "/api/v1/registry/digest": {
       "get": {
         "tags": [
@@ -6879,6 +7173,27 @@
         "x-openlab-role": "any"
       }
     },
+    "/api/v1/workflow-publications": {
+      "get": {
+        "tags": [
+          "workflow"
+        ],
+        "summary": "List Published Workflows",
+        "description": "每个工作流的最新发布：输入输出、合同摘要与投影出的节点模板。",
+        "operationId": "list_published_workflows_api_v1_workflow_publications_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "x-openlab-role": "any"
+      }
+    },
     "/api/v1/workflow-tasks": {
       "post": {
         "tags": [
@@ -7070,6 +7385,58 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/WorkflowTaskCommandRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-openlab-role": "any"
+      }
+    },
+    "/api/v1/workflow-tasks/{task_uuid}/input": {
+      "patch": {
+        "tags": [
+          "workflow"
+        ],
+        "summary": "Edit Workflow Task Input",
+        "description": "暂停时修改入口参数；已被已下发节点用过的参数冻结（3003）。",
+        "operationId": "edit_workflow_task_input_api_v1_workflow_tasks__task_uuid__input_patch",
+        "parameters": [
+          {
+            "name": "task_uuid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowTaskInputEditRequest"
               }
             }
           }
@@ -7793,6 +8160,58 @@
         "x-openlab-role": "any"
       }
     },
+    "/api/v1/workflows/{workflow_uuid}/composite-invocations": {
+      "post": {
+        "tags": [
+          "workflow"
+        ],
+        "summary": "Insert Composite Invocation",
+        "description": "插入组合调用：子工作流按冻结发布内联展开，父图 revision +1。",
+        "operationId": "insert_composite_invocation_api_v1_workflows__workflow_uuid__composite_invocations_post",
+        "parameters": [
+          {
+            "name": "workflow_uuid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Workflow Uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompositeInvocationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-openlab-role": "any"
+      }
+    },
     "/api/v1/workflows/{workflow_uuid}/graph": {
       "get": {
         "tags": [
@@ -7860,6 +8279,149 @@
             }
           }
         },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-openlab-role": "any"
+      }
+    },
+    "/api/v1/workflows/{workflow_uuid}/io": {
+      "put": {
+        "tags": [
+          "workflow"
+        ],
+        "summary": "Declare Workflow Io",
+        "description": "声明输入输出合同与节点输入绑定；返回更新后的整图。",
+        "operationId": "declare_workflow_io_api_v1_workflows__workflow_uuid__io_put",
+        "parameters": [
+          {
+            "name": "workflow_uuid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Workflow Uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowIODeclareRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-openlab-role": "any"
+      }
+    },
+    "/api/v1/workflows/{workflow_uuid}/publications": {
+      "post": {
+        "tags": [
+          "workflow"
+        ],
+        "summary": "Publish Workflow",
+        "description": "把当前修订冻结为不可变发布。",
+        "operationId": "publish_workflow_api_v1_workflows__workflow_uuid__publications_post",
+        "parameters": [
+          {
+            "name": "workflow_uuid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Workflow Uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowPublishRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-openlab-role": "any"
+      },
+      "get": {
+        "tags": [
+          "workflow"
+        ],
+        "summary": "List Workflow Publications",
+        "operationId": "list_workflow_publications_api_v1_workflows__workflow_uuid__publications_get",
+        "parameters": [
+          {
+            "name": "workflow_uuid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Workflow Uuid"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -8381,6 +8943,299 @@
         ],
         "title": "BackendSessionUpsert"
       },
+      "ChemicalPatch": {
+        "properties": {
+          "expected_version": {
+            "type": "integer",
+            "minimum": 1,
+            "title": "Expected Version"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "name_en": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name En"
+          },
+          "aliases": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aliases"
+          },
+          "cas": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cas"
+          },
+          "inchi_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inchi Key"
+          },
+          "molecular_formula": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Molecular Formula"
+          },
+          "smiles": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Smiles"
+          },
+          "molecular_weight": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Molecular Weight"
+          },
+          "density_g_per_ml": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Density G Per Ml"
+          },
+          "physical_state": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "liquid",
+                  "solid",
+                  "gas",
+                  "unknown"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Physical State"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "meta_data": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meta Data"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_version"
+        ],
+        "title": "ChemicalPatch"
+      },
+      "ChemicalWrite": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "name_en": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name En"
+          },
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Aliases"
+          },
+          "cas": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cas",
+            "description": "CAS 登记号，校验格式与校验位；可空，未删除的行之间唯一"
+          },
+          "inchi_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inchi Key",
+            "description": "27 位标准 InChIKey；可空，未删除的行之间唯一"
+          },
+          "molecular_formula": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Molecular Formula"
+          },
+          "smiles": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Smiles"
+          },
+          "molecular_weight": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Molecular Weight"
+          },
+          "density_g_per_ml": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Density G Per Ml"
+          },
+          "physical_state": {
+            "type": "string",
+            "enum": [
+              "liquid",
+              "solid",
+              "gas",
+              "unknown"
+            ],
+            "title": "Physical State",
+            "default": "unknown"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "default": ""
+          },
+          "meta_data": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Meta Data"
+          },
+          "chemical_uuid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chemical Uuid"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "ChemicalWrite"
+      },
       "CommandEnvelope": {
         "properties": {
           "command_uuid": {
@@ -8473,6 +9328,62 @@
           "payload_sha256"
         ],
         "title": "CommandEnvelope"
+      },
+      "CompositeInvocationRequest": {
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "maximum": 9223372036854776000,
+            "minimum": 1,
+            "title": "Revision"
+          },
+          "child_workflow_uuid": {
+            "type": "string",
+            "title": "Child Workflow Uuid"
+          },
+          "child_revision": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 9223372036854776000,
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Child Revision"
+          },
+          "invocation_uuid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invocation Uuid"
+          },
+          "pose": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Pose"
+          },
+          "arguments": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Arguments"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "revision",
+          "child_workflow_uuid"
+        ],
+        "title": "CompositeInvocationRequest",
+        "description": "把已发布子工作流作为组合调用插入父图（父图 revision 乐观锁）。\n\n``child_revision`` 缺省取子工作流最新发布；``arguments`` 为子工作流输入的实参：\n静态 JSON 值，或 ``{\"kind\": \"workflow_input\", \"parameter\": 父工作流输入名}``。"
       },
       "DeviceActionCapability": {
         "properties": {
@@ -12241,6 +13152,68 @@
         "title": "WorkflowFromTemplateRequest",
         "description": "把注册表里的工作流模板（设备包 ``@workflow``）按角色绑定实例化成可运行的工作流。\n\n``bindings`` 是 ``{角色 id: device_id}``：设备角色缺省即其设备 id，类角色在物料\n权威里恰有一个该类设备时自动填充，否则必须显式给出。同一模板 + 同一组绑定\n反复调用幂等覆盖同一个工作流（脚本 / e2e 的\"运行模板\"入口）。"
       },
+      "WorkflowIODeclareRequest": {
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "maximum": 9223372036854776000,
+            "minimum": 1,
+            "title": "Revision"
+          },
+          "input_contract": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Contract"
+          },
+          "output_contract": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Contract"
+          },
+          "output_bindings": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Output Bindings"
+          },
+          "node_input_bindings": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "object",
+            "title": "Node Input Bindings"
+          },
+          "node_params": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "object",
+            "title": "Node Params"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "revision"
+        ],
+        "title": "WorkflowIODeclareRequest",
+        "description": "声明工作流公共输入输出（写入服务端保留的 ``meta_data.unilab``）。\n\n``node_input_bindings`` 形如 ``{node_uuid: {handle_uuid: {\"parameter\": 输入名}}}``，\n是完整替换：未列出的节点清空 input_bindings；被绑定输入在节点 param 中的静态值移除。\n``node_params``（可选）按节点合并进 param，用于解绑必填输入时给回静态值。"
+      },
       "WorkflowNodeWrite": {
         "properties": {
           "uuid": {
@@ -12406,6 +13379,23 @@
         "title": "WorkflowNodeWrite",
         "description": "Complete WorkflowNode payload used by full-graph reconciliation."
       },
+      "WorkflowPublishRequest": {
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "maximum": 9223372036854776000,
+            "minimum": 1,
+            "title": "Revision"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "revision"
+        ],
+        "title": "WorkflowPublishRequest",
+        "description": "发布当前修订；revision 必须等于工作流当前 revision（重复发布同一修订幂等）。"
+      },
       "WorkflowTaskCommandRequest": {
         "properties": {
           "type": {
@@ -12525,11 +13515,52 @@
               }
             ],
             "title": "Idempotency Key"
+          },
+          "input": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Input"
           }
         },
         "type": "object",
         "title": "WorkflowTaskCreateRequest",
         "description": "整图运行与单点设备动作共用的提交体。\n\nexecution_kind=workflow（默认）：workflow_uuid 必填，走整图编排。\nexecution_kind=ad_hoc_device_action：device_id + action_name + param 必填，\n生成单 job 任务（微前端设备页/画布单点动作）。\n\nidempotency_key 两种任务都可选：同键同语义的重复提交返回既有任务，同键不同语义按冲突拒绝。"
+      },
+      "WorkflowTaskInputEditRequest": {
+        "properties": {
+          "expected_revision": {
+            "type": "integer",
+            "maximum": 9223372036854776000,
+            "minimum": 0,
+            "title": "Expected Revision"
+          },
+          "input": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Input"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_revision",
+          "input"
+        ],
+        "title": "WorkflowTaskInputEditRequest",
+        "description": "暂停时修改入口参数：``input`` 为部分更新，``expected_revision`` 是任务 control_revision。"
       },
       "WorkflowUpdateRequest": {
         "properties": {

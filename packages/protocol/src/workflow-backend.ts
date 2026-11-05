@@ -12,6 +12,9 @@
  *   生成单 job 任务并复用整图的调度 / 历史 / 异常链路。
  * - 编排画布的节点模板（node_templates / handle_templates）随 graph hydration
  *   返回；新建节点时的动作定义来自 runtime.v1 endpoint 能力。
+ * - 工作流即节点：PUT /io 声明入口参数与输出，POST /publications 冻结一次发布，
+ *   POST /composite-invocations 把已发布子工作流内联展开进父图；任务可带 `input`，
+ *   暂停时经 PATCH /workflow-tasks/{uuid}/input 修改未被消费的入口参数。
  */
 import {
   backendRequest,
@@ -139,9 +142,11 @@ export type BackendWorkflowTaskCleanupStatus =
 export type BackendWorkflowRunMode = "normal" | "step" | "single_node";
 
 /**
- * `workflow_task` 表 DTO。SQLite 兼容列 `input/output`（Backend migration
- * 000037/000040 已删）被服务端从公共 DTO 剥除；ad-hoc 设备动作任务的
- * `workflow_uuid` 为空。
+ * `workflow_task` 表 DTO；ad-hoc 设备动作任务的 `workflow_uuid` 为空。
+ *
+ * `input` 是本次运行的有效入口参数（按 input_contract 校验并补默认值）；`output` 只在
+ * 单任务详情里返回：声明了 output_contract 的工作流是 `{输出名: 值}`（取不到的输出省略），
+ * 未声明时是逐节点结果映射。列表投影不含 `output`。
  */
 export interface BackendWorkflowTask extends BackendWorkflowBase {
   workflow_uuid: string | null;
@@ -155,8 +160,10 @@ export interface BackendWorkflowTask extends BackendWorkflowBase {
   control_revision?: number;
   cleanup_status: BackendWorkflowTaskCleanupStatus;
   trace_context: JsonObject;
-  // 注意：行上的 input / output 是调度器内部字段，公开 API（_public_data）会剥掉；
-  // 每个 attempt 的返回值读 job.return_info。
+  /** 有效入口参数；没有 input_contract 的工作流是 `{}`。 */
+  input?: JsonObject;
+  /** 仅单任务详情返回（见类型注释）；每个 attempt 的原始返回值仍读 job.return_info。 */
+  output?: JsonObject;
   error_info: JsonValue[];
   target_node_uuid?: string;
   timeout_at?: string;
@@ -470,6 +477,7 @@ export interface BackendWorkflowTaskCommandInput {
    * pause：自动运行中的任务转为逐步，已下发的动作照常跑完，不再派发新动作；
    * cancel：任务进入 canceling，不再派发；正在执行的动作收到取消请求，设备锁保持到
    * 它真实返回，全部返回后任务落 canceled。
+   * 暂停时修改入口参数不走本命令，见 {@link BackendWorkflowTaskInputEditInput}（同样推进 control_revision）。
    */
   type: "step" | "resume" | "pause" | "cancel";
   expected_revision: number;
@@ -486,8 +494,200 @@ export interface BackendWorkflowTaskCreateInput {
   /**
    * 可选幂等键（1..200 字符）：同一次提交重试时复用，同键同语义只建一个任务；
    * 同键但 workflow / run_mode / target 不同按冲突拒绝。不带键时每次提交都是新任务。
+   * 指纹包含非空 `input`：同键不同入口参数也按冲突拒绝。
    */
   idempotency_key?: string;
+  /**
+   * 入口参数：按工作流的 input_contract 校验（未知键 / 缺必填 / 类型不符均 code=1000，
+   * 消息含 `workflow_input_unknown` / `workflow_input_required` / `workflow_value_invalid` 与路径），
+   * 补默认值后成为任务的有效 `input`。未声明合同的工作流只接受 `{}`（或省略）。
+   */
+  input?: JsonObject;
+}
+
+/**
+ * PATCH /workflow-tasks/{uuid}/input：暂停时修改入口参数（部分更新）。
+ *
+ * 只在 `control_status="paused"` 且任务未结束时允许；`expected_revision` 取任务的
+ * control_revision。已被任何已下发 attempt 用过的参数冻结（3003），同值提交是空操作；
+ * 未知参数 / 值不符合 Schema 为 1000。成功后 control_revision +1，返回更新后的任务。
+ */
+export interface BackendWorkflowTaskInputEditInput {
+  expected_revision: number;
+  input: JsonObject;
+  /** 1..200 字符；同一次点击的重试复用同一键。 */
+  idempotency_key?: string;
+}
+
+// ---------------------------------------------------------------------------
+// 工作流即节点：入口参数合同、输出、发布与组合调用
+//
+// 合同写在服务端保留的 `workflow.meta_data.unilab`（只能经 PUT /io 写入；普通 PUT
+// workflow / PUT graph 既不能写也不会清掉）。画布节点在 param **顶层**用
+// `{"kind": "workflow_input", "parameter": 名}` 引用入口参数。
+// ---------------------------------------------------------------------------
+
+/** 值 Schema：JSON Schema 子集（type / enum / items / properties / required / anyOf / `$slot`）。 */
+export type BackendWorkflowValueSchema = JsonObject;
+
+export interface BackendWorkflowInputParameter {
+  /** 合法标识符；节点 param 引用的就是它。 */
+  name: string;
+  schema: BackendWorkflowValueSchema;
+  required?: boolean;
+  default?: JsonValue;
+  title?: string;
+  description?: string;
+}
+
+export interface BackendWorkflowInputContract {
+  version: 1;
+  parameters: BackendWorkflowInputParameter[];
+}
+
+export interface BackendWorkflowOutputDescriptor {
+  name: string;
+  schema: BackendWorkflowValueSchema;
+  implicit?: boolean;
+  title?: string;
+  description?: string;
+}
+
+export interface BackendWorkflowOutputContract {
+  version: 1;
+  outputs: BackendWorkflowOutputDescriptor[];
+}
+
+/** 节点 param 顶层的入口参数引用。 */
+export interface BackendWorkflowInputReference {
+  kind: "workflow_input";
+  parameter: string;
+}
+
+/**
+ * 输出绑定：画布节点按返回值路径（`data_key`，空串 = 整个返回值）；模板节点 / 组合调用
+ * 用输出 Handle（`source_handle_uuid`）；也可以直接透传一个入口参数。
+ */
+export type BackendWorkflowOutputBinding =
+  | { kind: "node_output"; workflow_node_uuid: string; data_key: string }
+  | { kind: "node_output"; workflow_node_uuid: string; source_handle_uuid: string }
+  | BackendWorkflowInputReference;
+
+/** `workflow.meta_data.unilab` 里与 I/O 相关的服务端保留字段（只读视图）。 */
+export interface BackendWorkflowDeclaredIo {
+  input_contract: BackendWorkflowInputContract;
+  output_contract: BackendWorkflowOutputContract;
+  output_bindings: Record<string, BackendWorkflowOutputBinding>;
+}
+
+/** PUT /workflows/{uuid}/io（拒绝未知字段；null 合同视为空合同）。 */
+export interface BackendWorkflowIODeclareInput {
+  /** 当前 revision；不符 code=3003，成功后 revision +1。 */
+  revision: number;
+  input_contract?: BackendWorkflowInputContract | null;
+  output_contract?: BackendWorkflowOutputContract | null;
+  output_bindings?: Record<string, BackendWorkflowOutputBinding>;
+  /** 模板节点的 Handle → 入口参数绑定，**完整替换**；画布节点不需要。 */
+  node_input_bindings?: Record<string, Record<string, { parameter: string }>>;
+  /** 按节点合并进 param（可写入 `workflow_input` 引用，或解绑时给回静态值）。 */
+  node_params?: Record<string, JsonObject>;
+}
+
+export interface BackendWorkflowPublishInput {
+  /** 必须等于工作流当前 revision；同一修订重复发布幂等。 */
+  revision: number;
+}
+
+/**
+ * 一次发布：冻结 `(workflow_uuid, revision)` 的不可变快照（正文不随 DTO 返回）。
+ * `node_template.schema` 与 `/graph` 一样是 JSON 文本。
+ */
+export interface BackendWorkflowPublication {
+  uuid: string;
+  workflow_uuid: string;
+  revision: number;
+  name: string;
+  /** 语义图规范 JSON 的 `sha256:` 摘要。 */
+  source_hash: string;
+  /** 对外合同（输入 / 输出）摘要；没有单独的 contract_uuid。 */
+  contract_digest: string;
+  create_time: string;
+  inputs: BackendWorkflowInputParameter[];
+  outputs: BackendWorkflowOutputDescriptor[];
+  node_template: BackendWorkflowNodeTemplate;
+  handle_templates: BackendWorkflowHandleTemplate[];
+}
+
+/** 组合调用实参：静态 JSON 值，或引用父工作流自己的入口参数。 */
+export type BackendCompositeArgument = JsonValue | BackendWorkflowInputReference;
+
+/** POST /workflows/{parent}/composite-invocations（拒绝未知字段）。 */
+export interface BackendCompositeInvocationInput {
+  /** 父图当前 revision；成功后 +1。 */
+  revision: number;
+  child_workflow_uuid: string;
+  /** 缺省 = 子工作流最新发布。 */
+  child_revision?: number | null;
+  /** 缺省由服务端生成；展开节点的 uuid 由它派生。 */
+  invocation_uuid?: string | null;
+  pose?: JsonObject;
+  arguments?: Record<string, BackendCompositeArgument>;
+}
+
+/** 组合调用固定的子工作流发布（写在调用节点 `meta_data.unilab.composite`）。 */
+export interface BackendCompositeContractPin {
+  child_workflow_uuid: string;
+  child_workflow_revision: number;
+  child_applied_source_hash: string;
+  contract_digest: string;
+  composition_allow_transparent: boolean;
+}
+
+export interface BackendCompositeInvocationResult {
+  invocation_uuid: string;
+  contract_pin: BackendCompositeContractPin;
+  /** 插入后的父图：多一个 `type="workflow"` 的调用节点和它内联展开的节点（parent_uuid 链指向调用节点）。 */
+  graph: BackendWorkflowGraph;
+}
+
+function asObject(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+/** `{"kind": "workflow_input", "parameter": 名}` 构造器。 */
+export function workflowInputReference(parameter: string): BackendWorkflowInputReference {
+  return { kind: "workflow_input", parameter };
+}
+
+/** 是否为入口参数引用（与服务端 `entry_reference` 同一判定：kind 精确匹配、parameter 为字符串）。 */
+export function isWorkflowInputReference(value: unknown): value is BackendWorkflowInputReference {
+  const record = asObject(value);
+  return Boolean(record && record.kind === "workflow_input" && typeof record.parameter === "string");
+}
+
+/**
+ * 读出工作流声明的 I/O（`meta_data.unilab`）。未声明的部分给空合同；形状不认识的
+ * 条目跳过，不在客户端补全或改写。
+ */
+export function declaredWorkflowIo(workflow: { meta_data?: unknown } | null | undefined): BackendWorkflowDeclaredIo {
+  const unilab = asObject(asObject(workflow?.meta_data)?.unilab);
+  const inputs = asObject(unilab?.input_contract)?.parameters;
+  const outputs = asObject(unilab?.output_contract)?.outputs;
+  const bindings = asObject(unilab?.output_bindings) ?? {};
+  const named = <T>(items: unknown): T[] =>
+    (Array.isArray(items) ? items : []).filter((item): item is T => {
+      const record = asObject(item);
+      return Boolean(record && typeof record.name === "string" && record.name && asObject(record.schema));
+    });
+  return {
+    input_contract: { version: 1, parameters: named<BackendWorkflowInputParameter>(inputs) },
+    output_contract: { version: 1, outputs: named<BackendWorkflowOutputDescriptor>(outputs) },
+    output_bindings: Object.fromEntries(
+      Object.entries(bindings).filter(([, binding]) => asObject(binding)),
+    ) as Record<string, BackendWorkflowOutputBinding>,
+  };
 }
 
 /**
@@ -606,6 +806,45 @@ export function createWorkflowBackendApi(http: HttpTransport) {
         path: `/api/v1/workflows/${encodeURIComponent(workflowUuid)}/graph`,
         body,
       }),
+    /**
+     * PUT /api/v1/workflows/{workflow_uuid}/io —— 声明入口参数合同 / 输出 / 绑定（revision 乐观锁）。
+     * 校验失败 code=1000（消息含 `workflow_io_invalid（路径）`），revision 不符 code=3003；返回整图。
+     */
+    declareIo: (workflowUuid: string, body: BackendWorkflowIODeclareInput) =>
+      backendRequest<BackendWorkflowGraph>(http, {
+        method: "PUT",
+        path: `/api/v1/workflows/${encodeURIComponent(workflowUuid)}/io`,
+        body,
+      }),
+    /** POST /api/v1/workflows/{workflow_uuid}/publications —— 发布当前修订（201；同修订幂等，旧修订 3003） */
+    publishWorkflow: (workflowUuid: string, body: BackendWorkflowPublishInput) =>
+      backendRequest<BackendWorkflowPublication>(http, {
+        method: "POST",
+        path: `/api/v1/workflows/${encodeURIComponent(workflowUuid)}/publications`,
+        body,
+      }),
+    /** GET /api/v1/workflows/{workflow_uuid}/publications —— 该工作流全部发布（revision 倒序） */
+    workflowPublications: (workflowUuid: string) =>
+      backendRequest<BackendWorkflowPublication[]>(http, {
+        method: "GET",
+        path: `/api/v1/workflows/${encodeURIComponent(workflowUuid)}/publications`,
+      }),
+    /** GET /api/v1/workflow-publications —— 每个未删除工作流的最新发布（插入子工作流的调色板） */
+    latestPublications: () =>
+      backendRequest<BackendWorkflowPublication[]>(http, {
+        method: "GET",
+        path: "/api/v1/workflow-publications",
+      }),
+    /**
+     * POST /api/v1/workflows/{workflow_uuid}/composite-invocations —— 把已发布子工作流插入父图并内联展开（201）。
+     * 子工作流未发布 3002；递归 / 缺必填实参 / 实参类型不符 1000（消息含诊断码与路径）；父图 revision 不符 3003。
+     */
+    insertCompositeInvocation: (workflowUuid: string, body: BackendCompositeInvocationInput) =>
+      backendRequest<BackendCompositeInvocationResult>(http, {
+        method: "POST",
+        path: `/api/v1/workflows/${encodeURIComponent(workflowUuid)}/composite-invocations`,
+        body,
+      }),
     /** POST /api/v1/workflow-tasks —— 提交运行（整图 / 单点设备动作） */
     createTask: (body: BackendWorkflowTaskSubmitInput) =>
       backendRequest<BackendWorkflowTask>(http, {
@@ -639,6 +878,13 @@ export function createWorkflowBackendApi(http: HttpTransport) {
       backendRequest<BackendWorkflowTask>(http, {
         method: "POST",
         path: `/api/v1/workflow-tasks/${encodeURIComponent(taskUuid)}/commands`,
+        body,
+      }),
+    /** PATCH /api/v1/workflow-tasks/{task_uuid}/input —— 暂停时修改尚未被消费的入口参数（记为 edit_input 命令） */
+    editTaskInput: (taskUuid: string, body: BackendWorkflowTaskInputEditInput) =>
+      backendRequest<BackendWorkflowTask>(http, {
+        method: "PATCH",
+        path: `/api/v1/workflow-tasks/${encodeURIComponent(taskUuid)}/input`,
         body,
       }),
     /** GET /api/v1/workflow-tasks/{task_uuid}/jobs */

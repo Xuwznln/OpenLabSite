@@ -160,6 +160,8 @@ import type {
   RuntimeActionCapability,
 } from "@openlab/protocol";
 import ActionParamFields from "../components/ActionParamFields.vue";
+import EntryParamsDialog from "../components/EntryParamsDialog.vue";
+import { createEntryParamsPrompt } from "../features/entry-params-prompt";
 import { beginWorkflowPrint } from "../features/workflow-print";
 import {
   buildAuthorityGraph,
@@ -4129,6 +4131,8 @@ async function locateIssue(issue: DryRunIssue): Promise<void> {
 
 // ── 提交 ──
 const submissionOpen = ref(false);
+/** 保存后的定义声明了入口参数时，运行前收集本次的 input。 */
+const entryPrompt = createEntryParamsPrompt();
 const runMode = ref<WorkflowExecutionMode>("normal");
 
 function validateVariableGroups(): boolean {
@@ -4311,11 +4315,14 @@ async function performSubmit(options: { saveOnly?: boolean; runMode?: WorkflowEx
       },
       nodes: build.nodes,
       saveOnly: options.saveOnly,
+      prompter: entryPrompt,
     });
     authorityWorkflowUuid.value = result.workflow.uuid;
     if (!workflowName.value.trim()) workflowName.value = name;
     flushDraftNow();
-    if (result.task) {
+    if (result.canceled) {
+      message.info(`已保存定义 ${name}（revision ${result.workflow.revision}），未提交运行`);
+    } else if (result.task) {
       submissionOpen.value = false;
       message.success(result.task.run_mode === "step" ? `已提交逐步运行：${name}，请在详情页执行下一步` : `已提交运行：${name}（${build.nodes.length} 个节点）`);
       void router.push(`/workflow-tasks/${result.task.uuid}`);
@@ -5559,6 +5566,7 @@ onUnmounted(() => {
       </NDrawerContent>
     </NDrawer>
 
+    <EntryParamsDialog :prompt="entryPrompt" />
     <WorkflowVariablesDrawer
       :show="variablesDrawerOpen"
       :variables="workflowVariables"

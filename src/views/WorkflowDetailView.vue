@@ -17,11 +17,15 @@ import {
   useMessage,
 } from "naive-ui";
 import { ArrowBackOutline } from "@vicons/ionicons5";
-import type {
-  BackendWorkflowGraph,
-  BackendWorkflowNode,
-  BackendWorkflowTask,
-  RegistryPendingImpact,
+import {
+  ApiError,
+  BackendBusinessError,
+  declaredWorkflowIo,
+  type BackendWorkflowGraph,
+  type BackendWorkflowNode,
+  type BackendWorkflowPublication,
+  type BackendWorkflowTask,
+  type RegistryPendingImpact,
 } from "@openlab/protocol";
 import EntityRef from "../components/EntityRef.vue";
 import StatusPill from "../components/StatusPill.vue";
@@ -29,6 +33,9 @@ import { describeError } from "../features/errors";
 import { beginWorkflowPrint } from "../features/workflow-print";
 import WorkflowRunButton from "../components/WorkflowRunButton.vue";
 import WorkflowBindingsDialog from "../components/WorkflowBindingsDialog.vue";
+import EntryParamsDialog from "../components/EntryParamsDialog.vue";
+import { createEntryParamsPrompt, submitWithEntryInput } from "../features/entry-params-prompt";
+import { describeEntryParameter, describeOutput } from "../features/workflow-io";
 import type { WorkflowExecutionMode } from "../features/workflow-execution";
 import { useConnectionStore } from "../stores/connection";
 import { useWorkflowValidationStore } from "../stores/workflow-validation";
@@ -79,6 +86,48 @@ const running = ref(false);
 const lastError = ref("");
 const pendingImpacts = shallowRef<RegistryPendingImpact[]>([]);
 const registryActing = ref("");
+
+/** 该定义声明的入口参数与输出（服务端保留的 meta_data.unilab）。 */
+const declaredIo = computed(() => declaredWorkflowIo(graph.value?.workflow));
+const entryPrompt = createEntryParamsPrompt();
+
+// ── 发布：把当前修订冻结为不可变发布，供其他流程作为子工作流插入 ──
+const publications = shallowRef<BackendWorkflowPublication[]>([]);
+/** ""=正常；unsupported=后端没有发布接口；其他为读取失败文案 */
+const publicationsState = ref("");
+const publishing = ref(false);
+const currentPublished = computed(() =>
+  Boolean(graph.value && publications.value.some((item) => item.revision === graph.value!.workflow.revision)),
+);
+
+async function loadPublications() {
+  try {
+    publications.value = await conn.api.domains.workflowBackend.workflowPublications(workflowUuid);
+    publicationsState.value = "";
+  } catch (err) {
+    publications.value = [];
+    publicationsState.value = err instanceof ApiError && err.status === 404 ? "unsupported" : describeError(err);
+  }
+}
+
+async function publishCurrent() {
+  if (!graph.value || publishing.value) return;
+  const revision = graph.value.workflow.revision;
+  publishing.value = true;
+  try {
+    const publication = await conn.api.domains.workflowBackend.publishWorkflow(workflowUuid, { revision });
+    message.success(`已发布版本 ${publication.revision}：其他流程现在可以把它作为子工作流插入`);
+  } catch (err) {
+    if (err instanceof BackendBusinessError && err.isConflict) {
+      message.warning("流程在发布前又被修改（版本已变化），已重新读取；请确认当前内容后再发布");
+    } else {
+      message.error(`发布失败：${describeError(err)}`);
+    }
+  } finally {
+    publishing.value = false;
+    await refresh();
+  }
+}
 
 const templateNames = computed(() =>
   new Map((graph.value?.node_templates ?? []).map((item) => [item.uuid, item.display_name])),
@@ -131,6 +180,7 @@ async function refresh() {
       api.graph(workflowUuid),
       api.tasks({ page: 1, page_size: 100, workflow_uuid: workflowUuid }),
       loadPendingImpacts(),
+      loadPublications(),
     ]);
     graph.value = nextGraph;
     tasks.value = taskPage.items;
@@ -199,10 +249,21 @@ async function createTask(printAfterCreate = false) {
   running.value = true;
   try {
     await useWorkflowValidationStore().check(workflowUuid);
-    const task = await conn.api.domains.workflowBackend.createTask({
-      workflow_uuid: workflowUuid,
-      run_mode: runMode.value,
-    });
+    const mode = runMode.value;
+    const task = await submitWithEntryInput(
+      entryPrompt,
+      declaredIo.value.input_contract.parameters,
+      (input) => conn.api.domains.workflowBackend.createTask({
+        workflow_uuid: workflowUuid,
+        run_mode: mode,
+        ...(input ? { input } : {}),
+      }),
+      { title: `运行「${graph.value.workflow.name}」`, confirmText: mode === "step" ? "提交逐步运行" : "提交运行" },
+    );
+    if (!task) {
+      printSession?.close();
+      return;
+    }
     printSession?.complete({
       domainName: domain.config.name,
       workflowName: graph.value?.workflow.name ?? workflowUuid,
@@ -318,6 +379,58 @@ watch(
         </NDescriptions>
       </NCard>
 
+      <NCard title="入口参数、输出与发布" size="small">
+        <template #header-extra>
+          <NButton
+            size="small"
+            type="primary"
+            secondary
+            :loading="publishing"
+            :disabled="!conn.online || publicationsState === 'unsupported' || graph.nodes.length === 0"
+            :title="currentPublished ? '当前版本已发布；重复发布返回同一条记录' : '冻结当前版本，供其他流程作为子工作流插入'"
+            @click="publishCurrent"
+          >
+            {{ currentPublished ? `版本 ${graph.workflow.revision} 已发布` : `发布当前版本（${graph.workflow.revision}）` }}
+          </NButton>
+        </template>
+        <div class="io-grid">
+          <div>
+            <div class="io-title">入口参数</div>
+            <div v-if="!declaredIo.input_contract.parameters.length" class="dim">未声明：运行时直接使用节点里填好的参数</div>
+            <div v-for="item in declaredIo.input_contract.parameters" :key="item.name" class="io-item">
+              {{ describeEntryParameter(item) }}
+            </div>
+          </div>
+          <div>
+            <div class="io-title">输出</div>
+            <div v-if="!declaredIo.output_contract.outputs.length" class="dim">未声明：任务结果按节点逐条查看</div>
+            <div v-for="item in declaredIo.output_contract.outputs" :key="item.name" class="io-item">
+              {{ describeOutput(item) }}
+            </div>
+          </div>
+        </div>
+        <div class="io-title" style="margin-top: 12px">发布记录</div>
+        <div v-if="publicationsState === 'unsupported'" class="dim">当前后端不提供工作流发布接口。</div>
+        <NAlert v-else-if="publicationsState" type="warning" :bordered="false">读取发布记录失败：{{ publicationsState }}</NAlert>
+        <div v-else-if="!publications.length" class="dim">尚未发布。发布后，其他流程可在画布里把它作为子工作流插入。</div>
+        <NTable v-else size="small" striped>
+          <thead><tr><th>版本</th><th>发布时间</th><th>入口参数</th><th>输出</th><th>合同摘要</th></tr></thead>
+          <tbody>
+            <tr v-for="(item, index) in publications" :key="item.uuid">
+              <td>
+                {{ item.revision }}
+                <NTag v-if="index === 0" size="tiny" type="success" :bordered="false">最新</NTag>
+                <NTag v-if="item.revision === graph.workflow.revision" size="tiny" :bordered="false">当前</NTag>
+              </td>
+              <td class="mono">{{ fmtIso(item.create_time) }}</td>
+              <td>{{ item.inputs.map((input) => input.title || input.name).join("、") || "—" }}</td>
+              <td>{{ item.outputs.map((output) => output.title || output.name).join("、") || "—" }}</td>
+              <td class="mono dim" :title="item.contract_digest">{{ item.contract_digest.replace(/^sha256:/, "").slice(0, 12) }}</td>
+            </tr>
+          </tbody>
+        </NTable>
+      </NCard>
+
       <NCard title="Graph 节点" size="small">
         <NEmpty v-if="graph.nodes.length === 0" description="该定义尚未保存 Graph" />
         <NTable v-else size="small" striped>
@@ -381,6 +494,7 @@ watch(
       </NCard>
     </template>
     <WorkflowBindingsDialog :workflow-uuid="bindingsOpen ? workflowUuid : ''" @close="bindingsOpen = false" @saved="graph = $event" />
+    <EntryParamsDialog :prompt="entryPrompt" />
   </div>
 </template>
 
@@ -417,6 +531,23 @@ watch(
   text-overflow: ellipsis;
   white-space: nowrap;
   color: #5c6874;
+}
+
+.io-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 24px;
+}
+
+.io-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #5c6874;
+  margin-bottom: 4px;
+}
+
+.io-item {
+  font-size: 13px;
 }
 
 .impact-list {

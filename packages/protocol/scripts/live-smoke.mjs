@@ -164,6 +164,12 @@ await step("system.resetPreview", async () => {
   expectKeys(preview, ["supported", "pending", "confirmation_token", "backup_path", "detail"], "reset");
 });
 
+await step("system.readiness", async () => {
+  const readiness = await api.system.readiness();
+  expectKeys(readiness, ["status", "scheduler", "execution", "reasons"], "readiness");
+  return `status=${readiness.status} execution=${readiness.execution}${readiness.reasons.length ? ` reasons=${readiness.reasons.join("；")}` : ""}`;
+});
+
 await step("system.hostlinkPeers", async () => {
   const status = await api.system.hostlinkPeers();
   expectKeys(status, ["role", "peers", "client"], "hostlink");
@@ -223,6 +229,11 @@ await step("graphsV1.graphs / livePayload", async () => {
   expectKeys(live, ["nodes", "links"], "live payload");
   return `graphs=${page.total} live nodes=${live.nodes.length} links=${live.links.length}`;
 });
+await step("chemicalsV1.chemicals", async () => {
+  const page = await api.chemicalsV1.chemicals({ page_size: 20 });
+  expectKeys(page, ["items", "total", "page", "page_size"], "chemicals");
+  return `chemicals=${page.total}`;
+}, { optional: true });
 await step("telemetryV1.states / events", async () => {
   const [states, events] = await Promise.all([api.telemetryV1.states(), api.telemetryV1.events({ limit: 50 })]);
   for (const state of states) expectKeys(state, ["endpoint_uuid", "device_uuid", "properties", "connection_state"], "state");
@@ -235,6 +246,11 @@ await step("historyV1.events", async () => {
 await step("workflowBackend.workflows / tasks", async () => {
   const [workflows, tasks] = await Promise.all([api.workflowBackend.workflows({ page: 1, page_size: 20 }), api.workflowBackend.tasks({ page: 1, page_size: 20 })]);
   return `workflows=${workflows.total} tasks=${tasks.total}`;
+}, { optional: true });
+await step("workflowBackend.latestPublications", async () => {
+  const publications = await api.workflowBackend.latestPublications();
+  for (const item of publications) expectKeys(item, ["uuid", "workflow_uuid", "revision", "contract_digest", "inputs", "outputs"], "publication");
+  return `${publications.length} published workflow(s)`;
 }, { optional: true });
 await step("registry.entries", async () => {
   const { entries } = await api.registry.entries();

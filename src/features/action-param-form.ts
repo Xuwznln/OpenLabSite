@@ -10,6 +10,7 @@
  * - 置顶聚焦：可选 isFocused 回调（编辑器接变量表）；不传则默认全量展示；
  * - 参数写回统一走 paramJson（提交 payload 形状不变）。
  */
+import { entryReferencesOf } from "./workflow-io";
 import { computed, ref, watch, type Ref } from "vue";
 import {
   actionSchemaDetailFromCapability,
@@ -174,8 +175,17 @@ export function useActionParamForm(options: ActionParamFormOptions) {
     return !optionStateFor(field.kind).error;
   }
 
+  /** 引用了工作流入口参数的顶层参数：值在运行时由任务 input 给出，表单不展开、不改写。 */
+  const entryBoundParams = computed(() => {
+    try {
+      return new Set(entryReferencesOf(parseNodeParam(options.paramJson.value)).keys());
+    } catch {
+      return new Set<string>();
+    }
+  });
+
   const activePlaceholderFields = computed(() =>
-    placeholderFields.value.filter((field) => placeholderUsable(field)),
+    placeholderFields.value.filter((field) => placeholderUsable(field) && !entryBoundParams.value.has(field.param)),
   );
 
   const placeholderFallbackHints = computed(() => {
@@ -670,9 +680,10 @@ export function useActionParamForm(options: ActionParamFormOptions) {
 
   const paramFields = computed<ParameterField[]>(() => {
     // 已由选择器接管的 placeholder 参数不再平铺出叶子字段（回退时仍平铺）。
-    const handled = new Set(
-      activePlaceholderFields.value.map((field) => field.param),
-    );
+    const handled = new Set([
+      ...activePlaceholderFields.value.map((field) => field.param),
+      ...entryBoundParams.value,
+    ]);
     try {
       return flattenParameterFields(parseNodeParam(options.paramJson.value)).filter(
         (field) => !handled.has(field.path.split(".")[0]),
@@ -721,6 +732,7 @@ export function useActionParamForm(options: ActionParamFormOptions) {
     schemaDetail,
     fieldMeta,
     activePlaceholderFields,
+    entryBoundParams,
     placeholderFallbackHints,
     optionStateFor,
     placeholderCurrentValue,

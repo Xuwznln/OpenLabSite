@@ -17,6 +17,7 @@ export const OPERATIONS = [
   { id: "system.reset.request", domain: "system", method: "POST", path: "/api/v1/reset", summary: "停机归档全部业务数据", mutates: true, role: "any" },
   // ── system：诊断路由（unilabos/server/api/runtime/diagnostics.py） ──
   { id: "system.health", domain: "system", method: "GET", path: "/api/v1/health", summary: "健康状态：scheduler local/remote、execution ready/disabled", mutates: false, role: "any" },
+  { id: "system.readiness", domain: "system", method: "GET", path: "/api/v1/readiness", summary: "就绪探针：能接收并执行任务时 200，否则 503（正文同形状：status/scheduler/execution/reasons）", mutates: false, role: "any" },
   { id: "system.ping", domain: "system", method: "GET", path: "/api/v1/ping", summary: "HTTP ping-pong：回显客户端时间戳并附服务端时钟（链路时延 / 时钟偏差）", mutates: false, role: "any" },
   { id: "system.hostlink.peers", domain: "system", method: "GET", path: "/api/v1/hostlink/peers", summary: "HostLink 组网：host/slave 角色、在线 peer 与设备档案", mutates: false, role: "any" },
   { id: "system.scheduler.resources", domain: "system", method: "GET", path: "/api/v1/scheduler/resources", summary: "本机调度资源快照（503 = 调度权威在远端）", mutates: false, role: "any" },
@@ -50,10 +51,16 @@ export const OPERATIONS = [
   { id: "workflow.workflow.delete", domain: "workflow", method: "DELETE", path: "/api/v1/workflows/{workflow_uuid}", summary: "软删除 Workflow 并级联节点/边", mutates: true, role: "any" },
   { id: "workflow.graph.get", domain: "workflow", method: "GET", path: "/api/v1/workflows/{workflow_uuid}/graph", summary: "整图 hydration（nodes/edges/node_templates/handle_templates）", mutates: false, role: "any" },
   { id: "workflow.graph.save", domain: "workflow", method: "PUT", path: "/api/v1/workflows/{workflow_uuid}/graph", summary: "revision 乐观锁全量协调 Graph", mutates: true, role: "any" },
+  { id: "workflow.io.declare", domain: "workflow", method: "PUT", path: "/api/v1/workflows/{workflow_uuid}/io", summary: "声明入口参数合同 / 输出 / 绑定（服务端保留 meta_data.unilab；revision +1，返回整图）", mutates: true, role: "any" },
+  { id: "workflow.publication.create", domain: "workflow", method: "POST", path: "/api/v1/workflows/{workflow_uuid}/publications", summary: "发布当前修订为不可变快照（同修订幂等）", mutates: true, role: "any" },
+  { id: "workflow.publication.list", domain: "workflow", method: "GET", path: "/api/v1/workflows/{workflow_uuid}/publications", summary: "该工作流全部发布（revision 倒序，不含快照正文）", mutates: false, role: "any" },
+  { id: "workflow.publication.latest", domain: "workflow", method: "GET", path: "/api/v1/workflow-publications", summary: "每个工作流的最新发布（插入子工作流的调色板）", mutates: false, role: "any" },
+  { id: "workflow.composite-invocation.create", domain: "workflow", method: "POST", path: "/api/v1/workflows/{workflow_uuid}/composite-invocations", summary: "插入已发布子工作流并内联展开（返回 invocation_uuid / contract_pin / graph）", mutates: true, role: "any" },
   { id: "workflow.task.create", domain: "workflow", method: "POST", path: "/api/v1/workflow-tasks", summary: "提交运行：整图（workflow）或单点设备动作（ad_hoc_device_action）", mutates: true, role: "any" },
   { id: "workflow.task.list", domain: "workflow", method: "GET", path: "/api/v1/workflow-tasks", summary: "运行分页列表（status/workflow_uuid 过滤）", mutates: false, role: "any" },
   { id: "workflow.task.get", domain: "workflow", method: "GET", path: "/api/v1/workflow-tasks/{task_uuid}", summary: "运行详情", mutates: false, role: "any" },
   { id: "workflow.task.command", domain: "workflow", method: "POST", path: "/api/v1/workflow-tasks/{task_uuid}/commands", summary: "逐步任务：放行一个动作或转为自动执行（版本校验与幂等）", mutates: true, role: "any" },
+  { id: "workflow.task.input-edit", domain: "workflow", method: "PATCH", path: "/api/v1/workflow-tasks/{task_uuid}/input", summary: "暂停时修改未被消费的入口参数（冻结参数 / 未暂停 / revision 不符 3003）", mutates: true, role: "any" },
   { id: "workflow.task.jobs", domain: "workflow", method: "GET", path: "/api/v1/workflow-tasks/{task_uuid}/jobs", summary: "运行的全部 attempt（节点作业）平铺列表", mutates: false, role: "any" },
   { id: "workflow.task.node-runs", domain: "workflow", method: "GET", path: "/api/v1/workflow-tasks/{task_uuid}/node-runs", summary: "运行的节点运行视图：每节点一条，当前 attempt 结果 + attempts 历史", mutates: false, role: "any" },
   { id: "workflow.node-run.get", domain: "workflow", method: "GET", path: "/api/v1/workflow-node-runs/{run_uuid}", summary: "节点运行详情（含 attempts）", mutates: false, role: "any" },
@@ -168,6 +175,13 @@ export const OPERATIONS = [
   { id: "lab-v1.layout.get", domain: "lab-v1", method: "GET", path: "/api/v1/lab/layout", summary: "实验室布局文档（从未保存时 revision 0）", mutates: false, role: "any" },
   { id: "lab-v1.layout.put", domain: "lab-v1", method: "PUT", path: "/api/v1/lab/layout", summary: "整份替换布局（revision 乐观锁，409 = 过期）", mutates: true, role: "any" },
   { id: "lab-v1.layout.reset", domain: "lab-v1", method: "DELETE", path: "/api/v1/lab/layout", summary: "重置布局为未保存状态", mutates: true, role: "any" },
+
+  // ── chemicals-v1：化学品定义（materials.db；CAS / InChIKey 可空唯一键，版本乐观锁） ──
+  { id: "chemicals-v1.chemical.list", domain: "chemicals-v1", method: "GET", path: "/api/v1/chemicals", summary: "化学品定义分页（q 模糊匹配名称/别名/CAS/分子式）", mutates: false, role: "any" },
+  { id: "chemicals-v1.chemical.create", domain: "chemicals-v1", method: "POST", path: "/api/v1/chemicals", summary: "登记化学品（重复 CAS / InChIKey 3003）", mutates: true, role: "any" },
+  { id: "chemicals-v1.chemical.get", domain: "chemicals-v1", method: "GET", path: "/api/v1/chemicals/{chemical_uuid}", summary: "化学品定义详情（不存在或已删除 3002）", mutates: false, role: "any" },
+  { id: "chemicals-v1.chemical.update", domain: "chemicals-v1", method: "PATCH", path: "/api/v1/chemicals/{chemical_uuid}", summary: "部分修改（expected_version 乐观锁）", mutates: true, role: "any" },
+  { id: "chemicals-v1.chemical.delete", domain: "chemicals-v1", method: "DELETE", path: "/api/v1/chemicals/{chemical_uuid}", summary: "软删除（expected_version；CAS / InChIKey 让出）", mutates: true, role: "any" },
 
   // ── debug：四库只读浏览 ──
   { id: "debug.databases.list", domain: "debug", method: "GET", path: "/api/v1/debug/databases", summary: "四库文件状态与每张表行数", mutates: false, role: "any" },
