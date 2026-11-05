@@ -33,6 +33,17 @@ describe("逐步执行控制", () => {
     expect(stepExecutionControl(task({ run_mode: "normal", control_status: "active", execution_kind: "ad_hoc_device_action" }), []).canPause).toBe(false);
     expect(stepExecutionControl(task({ run_mode: "normal", control_status: "waiting_reconciliation", status: "running" }), [run("execution_unknown")]).canPause).toBe(true);
   });
+  it("运行中（含暂停）可以取消；取消中与终态不能再取消", () => {
+    expect(stepExecutionControl(task({ run_mode: "normal", control_status: "active", status: "running" }), [run("running")]).canCancel).toBe(true);
+    expect(stepExecutionControl(task(), [run("pending")]).canCancel).toBe(true);
+    expect(stepExecutionControl(task({ execution_kind: "ad_hoc_device_action", run_mode: "normal" }), []).canCancel).toBe(true);
+    const canceling = stepExecutionControl(task({ status: "canceling" }), [run("cancel_requested")]);
+    expect(canceling.canCancel).toBe(false);
+    expect(canceling.canceling).toBe(true);
+    expect(canceling.cancelHint).not.toBe("");
+    expect(stepExecutionControl(task({ status: "canceled" }), []).canCancel).toBe(false);
+    expect(stepExecutionControl(task({ control_revision: undefined }), []).canCancel).toBe(false);
+  });
   it("控制状态缺失与终态明确禁用，自动模式不显示步进面板", () => {
     expect(stepExecutionControl(task({ control_revision: undefined }), []).canStep).toBe(false);
     expect(stepExecutionControl(task({ control_revision: -1 }), []).canStep).toBe(false);
