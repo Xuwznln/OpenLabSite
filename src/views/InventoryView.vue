@@ -572,7 +572,7 @@ async function writeSubstanceLink(index: number, chemicalUuid: string | null, ch
       dataWriteWithLink(aggregate.data, index, chemicalUuid),
       { preconditions: [aggregatePrecondition(aggregate)] },
     );
-    message.success(chemicalUuid ? `内容物「${substance.name}」已关联到「${chemicalName}」` : `已解除内容物「${substance.name}」的化学品关联`);
+    message.success(chemicalUuid ? `内容物「${substance.name}」已关联到「${chemicalName}」` : `已解除内容物「${substance.name}」的化学品关联，设备上报不会再自动关联`);
     await refresh();
     return true;
   } catch (error) {

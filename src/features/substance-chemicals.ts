@@ -2,7 +2,8 @@
  * 物料内容物 ↔ 化学品定义的关联（materials.db v3，`MaterialSubstance.chemical_uuid`）。
  *
  * 读取：有引用的内容物带 `chemical_uuid` 与只读摘要 `chemical`；化学品已删除时 `chemical` 为
- * null、uuid 保留；未关联的内容物两个键都不出现。
+ * null、uuid 保留；未关联的内容物两个键都不出现。被显式解除过的带只读 `chemical_unlinked: true`
+ * （materials.db v4）：解除是持久的，设备按名称上报不会再自动关联，直到再次关联。
  *
  * 写入（PUT /instances/{uuid}/data 是整份替换）：页面发出的写入**所见即所得**——每一份内容物都
  * 显式带 `chemical_uuid`：改动的那一份是新值（uuid = 关联，null = 解除），其余是当前显示的关联
@@ -23,17 +24,19 @@ export type SubstanceLinkState =
   | { kind: "linked"; chemicalUuid: string; summary: ChemicalSummary }
   /** 引用的化学品已被软删除：uuid 还在，摘要为 null。 */
   | { kind: "deleted"; chemicalUuid: string }
-  | { kind: "unlinked" };
+  /** `manual`：被显式解除过（不会再自动关联）；否则只是还没有匹配到化学品。 */
+  | { kind: "unlinked"; manual: boolean };
 
 export function substanceLink(substance: MaterialsV1Substance): SubstanceLinkState {
   const chemicalUuid = typeof substance.chemical_uuid === "string" ? substance.chemical_uuid : "";
-  if (!chemicalUuid) return { kind: "unlinked" };
+  if (!chemicalUuid) return { kind: "unlinked", manual: substance.chemical_unlinked === true };
   return substance.chemical ? { kind: "linked", chemicalUuid, summary: substance.chemical } : { kind: "deleted", chemicalUuid };
 }
 
 /**
  * 回传用的内容物：写入模型的完整字段（物料权威要求 payload 与类型化请求体的完整 dump 逐字一致，
- * 缺省字段也要显式给出），去掉只读摘要，`chemical_uuid` 显式为当前显示的关联（没有就是 null）。
+ * 缺省字段也要显式给出），去掉只读的 `chemical` / `chemical_unlinked`，`chemical_uuid` 显式为当前显示的
+ * 关联（没有就是 null；对没关联过的 null 不会让它变成「已解除」，服务端只把已关联 → null 记为解除）。
  */
 function substanceWrite(substance: MaterialsV1Substance): MaterialsV1Substance {
   const link = substanceLink(substance);
