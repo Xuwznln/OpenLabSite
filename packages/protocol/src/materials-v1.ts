@@ -93,7 +93,8 @@ export type MaterialsV1PositionWrite = Partial<MaterialsV1Position>;
  * - **写入**：省略 `chemical_uuid` = 沿用同一物料同名内容物已有的引用，没有就按名称 / 英文名 /
  *   别名 / CAS 唯一匹配自动关联；显式 `null` = 解除引用（本次不自动匹配）；uuid = 关联
  *   （必须是未删除的化学品，否则 422）。`chemical` 写入时被忽略。
- *   「省略」与「显式 null」是两个不同的请求（幂等哈希不同），页面只在用户改了关联时才带这个键。
+ *   「省略」与「显式 null」是两个不同的请求（幂等哈希不同）。页面写入所见即所得：每份内容物都显式带
+ *   这个键（当前显示的关联，未关联即 null），自动匹配只留给省略它的设备上报与旧客户端。
  */
 export interface MaterialsV1Substance {
   substance_uuid?: string | null;

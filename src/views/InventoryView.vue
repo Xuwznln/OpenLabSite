@@ -542,8 +542,9 @@ async function submitEdit() {
 }
 
 // ── 内容物 ↔ 化学品关联 ─────────────────────────────────────────
-// PUT data 是整份替换：只有改动的那一份带 chemical_uuid（uuid 关联 / null 解除），其余省略（服务端沿用），
-// 并以读到的聚合 state_hash 为前提，期间被设备上报或别的页面改过就拒绝而不是覆盖。
+// PUT data 是整份替换，所见即所得：每份内容物都显式带 chemical_uuid——改动的那一份是新值（uuid 关联 / null 解除），
+// 其余是当前显示的关联（未关联即 null，不让服务端按名称重新自动关联）；以读到的聚合 state_hash 为前提，
+// 期间被设备上报或别的页面改过就拒绝而不是覆盖。
 
 const linkTarget = ref<{ materialUuid: string; index: number; name: string } | null>(null);
 const linkPickerOpen = ref(false);

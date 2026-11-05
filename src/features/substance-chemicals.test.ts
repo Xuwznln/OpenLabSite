@@ -39,10 +39,10 @@ describe("关联写入体（PUT data 整份替换）", () => {
     substance("乙醇", { chemical_uuid: "c-eth", chemical: null }),
   ]);
 
-  it("只有改动那一份带 chemical_uuid，其余省略键、去掉只读摘要；data 等字段原样带回", () => {
+  it("所见即所得：每份都显式带 chemical_uuid——改动的是新值，其余是当前显示的关联（已删除化学品回传原 uuid，未关联为 null）", () => {
     const body = dataWriteWithLink(current.data, 1, "c-new");
-    expect(body.substances?.map((item) => Object.prototype.hasOwnProperty.call(item, "chemical_uuid"))).toEqual([false, true, false]);
-    expect(body.substances?.[1].chemical_uuid).toBe("c-new");
+    expect(body.substances?.map((item) => item.chemical_uuid)).toEqual(["c-water", "c-new", "c-eth"]);
+    expect(body.substances?.every((item) => Object.prototype.hasOwnProperty.call(item, "chemical_uuid"))).toBe(true);
     expect(body.substances?.some((item) => Object.prototype.hasOwnProperty.call(item, "chemical"))).toBe(false);
     // 权威要求 payload 等于类型化请求体的完整 dump：每个字段都显式给出
     expect(body).toMatchObject({
@@ -55,13 +55,26 @@ describe("关联写入体（PUT data 整份替换）", () => {
     ]);
     expect(body.substances?.[0]).toEqual({
       substance_uuid: null, name: "水", quantity: 1, quantity_unit: "mL", physical_state: "liquid", composition: [], meta_data: {},
+      chemical_uuid: "c-water",
     });
   });
 
-  it("解除 = 显式 null（与省略是不同的请求）", () => {
+  it("解除 = 显式 null；未关联的其它内容物也显式 null（不留给服务端按名称自动匹配）", () => {
     const body = dataWriteWithLink(current.data, 0, null);
-    expect(body.substances?.[0]).toHaveProperty("chemical_uuid", null);
+    expect(body.substances?.map((item) => item.chemical_uuid)).toEqual([null, null, "c-eth"]);
     expect(() => dataWriteWithLink(current.data, 3, null)).toThrow(RangeError);
+  });
+
+  it("先解除 A，再给同一物料的 B 关联：A 保持未关联", () => {
+    // 1) 解除 A（水）
+    const unlinkA = dataWriteWithLink(current.data, 0, null);
+    expect(unlinkA.substances?.[0].chemical_uuid).toBeNull();
+    // 服务端读回：A 两个键都不出现（未关联），其余照旧
+    const afterUnlink = aggregate([substance("水"), substance("样品"), substance("乙醇", { chemical_uuid: "c-eth", chemical: null })]);
+    // 2) 给 B（样品）关联：A 必须显式 null，而不是省略后被按名称「水」重新自动关联
+    const linkB = dataWriteWithLink(afterUnlink.data, 1, "c-sample");
+    expect(linkB.substances?.map((item) => item.chemical_uuid)).toEqual([null, "c-sample", "c-eth"]);
+    expect(linkB.substances?.[0]).toHaveProperty("chemical_uuid", null);
   });
 
   it("以读到的聚合 state_hash 为前提", () => {

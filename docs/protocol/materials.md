@@ -110,7 +110,9 @@ physical_state`），化学品已软删除时 `chemical` 为 null、uuid 保留�
 | `chemical_uuid: null` | 解除引用，本次写入不自动匹配（之后省略的写入仍按上一行处理） |
 | `chemical_uuid: "<uuid>"` | 关联；必须是未删除的化学品，否则 HTTP 422 |
 
-`chemical` 写入时被忽略。「省略」与「null」是两个不同的请求（幂等哈希不同）。前端只在用户改了关联的那一份
-带 `chemical_uuid`，其余省略，并以读到的聚合 `state_hash` 作前提（`aggregate_type: "material"`），
-期间被设备上报或别的页面改过就 409 而不是覆盖。
+`chemical` 写入时被忽略。「省略」与「null」是两个不同的请求（幂等哈希不同）。页面发出的写入所见即所得：
+**每一份**内容物都显式带 `chemical_uuid`——改动的那一份是新值，其余是当前显示的关联（已关联即那个 uuid，
+化学品已删除也回传原 uuid；未关联即 null）。按名称自动匹配只发生在省略这个键的设备上报和旧客户端上，
+用户解除的关联不会在改别的内容物时被重新自动关联。写入以读到的聚合 `state_hash` 作前提
+（`aggregate_type: "material"`），期间被设备上报或别的页面改过就 409 而不是覆盖。
 

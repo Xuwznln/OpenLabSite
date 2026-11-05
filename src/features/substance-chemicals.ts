@@ -4,9 +4,11 @@
  * 读取：有引用的内容物带 `chemical_uuid` 与只读摘要 `chemical`；化学品已删除时 `chemical` 为
  * null、uuid 保留；未关联的内容物两个键都不出现。
  *
- * 写入（PUT /instances/{uuid}/data 是整份替换）：只有用户改动的那一份带 `chemical_uuid`
- * （uuid = 关联，null = 解除）；其余内容物**省略**这个键——服务端按同名沿用已有引用，
- * 不会被这次写入改动。`chemical` 摘要从不回传（服务端忽略它，带上只会让请求体变大）。
+ * 写入（PUT /instances/{uuid}/data 是整份替换）：页面发出的写入**所见即所得**——每一份内容物都
+ * 显式带 `chemical_uuid`：改动的那一份是新值（uuid = 关联，null = 解除），其余是当前显示的关联
+ * （已关联就是那个 uuid，化学品已删除也照样回传原 uuid——服务端接受保留已有引用；未关联就是 null）。
+ * 省略键会让服务端按名称自动匹配，那只该发生在设备上报和不带这个键的旧客户端上：否则用户刚解除的
+ * 内容物会在下一次改别的内容物时被重新自动关联。`chemical` 摘要从不回传（服务端忽略它）。
  */
 import { ApiError } from "@openlab/protocol";
 import type {
@@ -31,9 +33,10 @@ export function substanceLink(substance: MaterialsV1Substance): SubstanceLinkSta
 
 /**
  * 回传用的内容物：写入模型的完整字段（物料权威要求 payload 与类型化请求体的完整 dump 逐字一致，
- * 缺省字段也要显式给出），去掉只读摘要；引用键默认省略（= 沿用）。
+ * 缺省字段也要显式给出），去掉只读摘要，`chemical_uuid` 显式为当前显示的关联（没有就是 null）。
  */
 function substanceWrite(substance: MaterialsV1Substance): MaterialsV1Substance {
+  const link = substanceLink(substance);
   return {
     substance_uuid: substance.substance_uuid ?? null,
     name: substance.name,
@@ -42,12 +45,13 @@ function substanceWrite(substance: MaterialsV1Substance): MaterialsV1Substance {
     physical_state: substance.physical_state,
     composition: substance.composition ?? [],
     meta_data: substance.meta_data ?? {},
+    chemical_uuid: link.kind === "unlinked" ? null : link.chemicalUuid,
   };
 }
 
 /**
- * 改一份内容物的关联，得到整份数据写入体：`index` 那一份带 `chemical_uuid`（uuid 或 null），
- * 其余省略引用键。PUT data 是整份替换，且权威校验 payload 必须等于类型化请求体的完整 dump，
+ * 改一份内容物的关联，得到整份数据写入体：`index` 那一份的 `chemical_uuid` 换成新值（uuid 或 null），
+ * 其余显式回传当前显示的关联（所见即所得，不触发按名称自动匹配）。PUT data 是整份替换，且权威校验 payload 必须等于类型化请求体的完整 dump，
  * 所以 data / sites_initialized / 计数 / 状态原样带回，来源字段显式为 null（这是一次人工编辑）。
  */
 export function dataWriteWithLink(
