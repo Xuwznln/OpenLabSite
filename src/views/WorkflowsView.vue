@@ -33,6 +33,14 @@ import PageHeader from "../components/PageHeader.vue";
 import StatusPill from "../components/StatusPill.vue";
 import WorkflowInfoPopover from "../components/WorkflowInfoPopover.vue";
 import WorkflowBindingsDialog from "../components/WorkflowBindingsDialog.vue";
+import EntryParamFields from "../components/EntryParamFields.vue";
+import {
+  buildEntryInput,
+  describeEntryInputError,
+  initialEntryValues,
+  workflowEntryParameters,
+  type EntryFormValues,
+} from "../features/workflow-io";
 import { describeError } from "../features/errors";
 import { describeTask } from "../features/task-jobs";
 import { computeWorkflowGraphStats, type WorkflowGraphStats } from "../features/workflow-graph-stats";
@@ -361,6 +369,24 @@ const runnableOptions = computed(() =>
     .map((workflow) => ({ label: workflow.name, value: workflow.uuid })),
 );
 
+/** 所选流程声明的入口参数（定义列表里的 meta_data.unilab；最终以后端校验为准）。 */
+const runEntryParameters = computed(() =>
+  workflowEntryParameters(sched.definitions.find((workflow) => workflow.uuid === selectedWorkflowUuid.value)),
+);
+const runEntryValues = ref<EntryFormValues>({});
+const runEntryErrors = ref<Record<string, string>>({});
+const runEntryError = ref("");
+watch(
+  () => [selectedWorkflowUuid.value, runEntryParameters.value] as const,
+  ([, parameters], previous) => {
+    // 换了流程才重置；同一流程的定义刷新不清掉已填的值
+    if (previous && previous[0] === selectedWorkflowUuid.value && Object.keys(runEntryValues.value).length) return;
+    runEntryValues.value = initialEntryValues(parameters);
+    runEntryErrors.value = {};
+    runEntryError.value = "";
+  },
+);
+
 function openRun(workflowUuid: string) {
   selectedWorkflowUuid.value = workflowUuid;
   showRun.value = true;
@@ -373,13 +399,23 @@ async function createTask() {
     return;
   }
   const definition = sched.definitions.find((workflow) => workflow.uuid === selectedWorkflowUuid.value);
+  const parameters = runEntryParameters.value;
+  const entry = buildEntryInput(parameters, runEntryValues.value);
+  runEntryErrors.value = entry.errors;
+  runEntryError.value = "";
+  if (Object.keys(entry.errors).length) {
+    runEntryError.value = "请先修正标红的入口参数";
+    return;
+  }
   const printSession = printAfterCreate.value ? beginWorkflowPrint() : null;
   if (printAfterCreate.value && !printSession) {
     message.warning("浏览器拦截了打印窗口；任务仍会正常创建，可在任务详情中补打");
   }
   submitting.value = true;
   try {
-    const task = await sched.createTask(selectedWorkflowUuid.value, runMode.value);
+    const task = await sched.createTask(selectedWorkflowUuid.value, runMode.value, {
+      input: parameters.length ? entry.input : undefined,
+    });
     printSession?.complete({
       domainName: domain.config.name,
       workflowName: definition?.name ?? selectedWorkflowUuid.value,
@@ -396,7 +432,14 @@ async function createTask() {
     await router.push(`/workflow-tasks/${encodeURIComponent(task.uuid)}`);
   } catch (err) {
     printSession?.close();
-    message.error(describeError(err));
+    const entryError = describeEntryInputError(err, parameters);
+    if (entryError) {
+      // 入口参数被拒：贴回字段，保留已填的值
+      runEntryError.value = entryError.message;
+      if (entryError.field) runEntryErrors.value = { [entryError.field]: entryError.message };
+    } else {
+      message.error(describeError(err));
+    }
   } finally {
     submitting.value = false;
   }
@@ -617,6 +660,17 @@ onUnmounted(() => {
           :disabled="submitting"
         />
       </NFormItem>
+      <template v-if="runEntryParameters.length">
+        <div class="entry-heading">入口参数</div>
+        <EntryParamFields
+          v-model:values="runEntryValues"
+          :parameters="runEntryParameters"
+          :field-errors="runEntryErrors"
+          :disabled="submitting"
+        />
+        <NAlert v-if="runEntryError" type="error" :bordered="false" style="margin-top: 8px">{{ runEntryError }}</NAlert>
+        <div style="height: 12px" />
+      </template>
       <NCheckbox v-model:checked="printAfterCreate">开始后打印实验执行单（也可另存为 PDF）</NCheckbox>
       <template #footer>
         <NSpace justify="end">
@@ -632,6 +686,12 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.entry-heading {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
 .workflow-page {
   display: flex;
   flex-direction: column;

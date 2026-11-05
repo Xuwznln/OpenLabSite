@@ -44,10 +44,16 @@ rejected`。`retry_of_job_uuid` / `attempt_no` 表达重试链；`terminal_gate_
 | GET / PUT / DELETE | `/workflows/{uuid}` | 详情 / 更新元数据 / 软删除并级联节点边 |
 | GET | `/workflows/{uuid}/graph` | 整图 hydration：`workflow` `nodes` `edges` `node_templates` `handle_templates` |
 | PUT | `/workflows/{uuid}/graph` | `{revision, nodes[], edges[]}` 乐观锁全量协调；返回新 graph |
-| POST | `/workflow-tasks` | 提交运行（见下） |
+| PUT | `/workflows/{uuid}/io` | 声明入口参数合同 / 输出 / 绑定（写服务端保留的 `meta_data.unilab`，revision +1，返回整图；见 §2.1） |
+| POST | `/workflows/{uuid}/publications` | `{revision}` 发布当前修订（201；同修订幂等，旧修订 3003） |
+| GET | `/workflows/{uuid}/publications` | 该工作流全部发布（revision 倒序；不含快照正文） |
+| GET | `/workflow-publications` | 每个工作流的最新发布（插入子工作流的调色板） |
+| POST | `/workflows/{uuid}/composite-invocations` | 插入已发布子工作流并内联展开（201：`invocation_uuid` / `contract_pin` / `graph`） |
+| POST | `/workflow-tasks` | 提交运行（见下；声明了入口参数的工作流带 `input`） |
+| PATCH | `/workflow-tasks/{uuid}/input` | `{expected_revision, input, idempotency_key?}` 暂停时修改尚未被消费的入口参数 |
 | GET | `/workflow-tasks` | 运行分页（`status/workflow_uuid/cleanup_status`） |
 | GET | `/workflow-tasks/{uuid}` | 运行详情（含 `workflow_snapshot` / `execution_plan`） |
-| POST | `/workflow-tasks/{uuid}/commands` | `{type: "step" | "resume", expected_revision, idempotency_key}`：单点放行 / 转自动；返回 Task |
+| POST | `/workflow-tasks/{uuid}/commands` | `{type: "step" | "resume" | "pause" | "cancel", expected_revision, idempotency_key}`：单点放行 / 转自动 / 暂停 / 取消；返回 Task |
 | GET | `/workflow-tasks/{uuid}/node-runs` | 节点运行视图：每节点一条（拓扑序），`status / return_info` 是当前 attempt 的结果，`attempts[]` 是历史；画布节点状态用它 |
 | GET | `/workflow-tasks/{uuid}/jobs` | 全部 attempt（节点作业）平铺列表 |
 | GET | `/workflow-tasks/{uuid}/manual-confirmations` | 人工确认待办与历史（每 job 至多一条） |
@@ -178,6 +184,29 @@ target_node_uuid 关联工作流节点；不创建新任务。每条受理命令
 
 `@workflow` 装饰器声明的默认子工作流在 Host 启动时以稳定 uuid 上报到本域，出现在定义列表中；
 画布「克隆」它们时把 `depends_on` 还原成顺序连线、`meta_data.target_device_id` 还原成设备。
+
+### 2.1 入口参数、输出、发布与组合调用（工作流即节点）
+
+- **合同**写在服务端保留的 `workflow.meta_data.unilab`（`input_contract` / `output_contract` /
+  `output_bindings`），只能经 `PUT /io` 写入；普通 `PUT /workflows/{uuid}` 与 `PUT /graph` 不写也不清。
+  前端用 `declaredWorkflowIo(workflow)` 读取，不自行改写。
+- **画布节点引用入口参数**：param **顶层**值写 `{"kind": "workflow_input", "parameter": 名}`
+  （`workflowInputReference(名)`）。引用的名字必须已在合同里声明——`PUT /graph` 与 `PUT /io` 都校验（1000）。
+  所以「新增引用」要先 `PUT /io` 声明（或用 `node_params` 一并写入），「删除合同里的参数」要在图里不再引用之后。
+- **输出绑定**：画布节点 `{kind: "node_output", workflow_node_uuid, data_key}`（空串 = 整个返回值）；
+  组合调用 / 模板节点用 `source_handle_uuid`；也可直接透传入口参数。
+- **提交运行**：`POST /workflow-tasks {workflow_uuid, input}` 按合同校验（`workflow_input_unknown` /
+  `workflow_input_required` / `workflow_value_invalid` + `（/input/名）`，均 1000）并补默认值；
+  任务详情返回有效 `input` 与 `output`（列表不含 `output`）。未声明合同的工作流只接受 `{}`。
+- **暂停时修改**：`PATCH /workflow-tasks/{uuid}/input`，`expected_revision` 取 control_revision。
+  只在 `control_status="paused"` 且未结束时允许；已被已下发 attempt 用过的参数冻结（3003，消息含参数名），
+  同值提交是空操作；成功记为 `edit_input` 命令并推进 control_revision。
+- **发布**：`POST /publications {revision}` 冻结当前修订；`GET /workflow-publications` 给每个工作流最新一条。
+- **组合调用**：`POST /composite-invocations {revision, child_workflow_uuid, child_revision?, arguments?, pose?}`，
+  实参为静态值或 `{"kind": "workflow_input", "parameter": 父入口参数}`。父图多一个 `type="workflow"`、
+  `meta_data.unilab.composite` 记着固定发布的调用节点，以及 `parent_uuid` 链指向它的展开节点（uuid 由调用 uuid 派生）。
+  **前端回存整图时必须原样带上调用节点与展开节点（及它们之间的边）**；`meta_data.unilab` 可以不回传（服务端保留）。
+  父图里依赖调用节点（`depends_on: [调用 uuid]`）等价于依赖它展开出的全部叶子。
 
 ## 3. Registry Authority（跟随调度权威，Backend 信封）
 

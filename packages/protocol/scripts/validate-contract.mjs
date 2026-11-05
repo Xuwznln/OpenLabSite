@@ -21,6 +21,7 @@ const REQUIRED_DOMAINS = [
   "registry",
   "materials-v1",
   "graphs-v1",
+  "chemicals-v1",
   "telemetry-v1",
   "history-v1",
   "decisions",

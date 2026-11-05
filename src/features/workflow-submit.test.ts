@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BackendWorkflow, BackendWorkflowGraph, BackendWorkflowTask } from "@openlab/protocol";
 import { ApiError, BackendBusinessError } from "@openlab/protocol";
+import { compositeDataFromGraph } from "./composite-nodes";
+import { declarationOf } from "./editor-workflow-io";
 import {
   buildAuthorityGraph,
+  IoDeclareError,
   placeholderMaterialUuid,
   SubmitGraphError,
   submitWorkflow,
@@ -434,6 +437,50 @@ describe("buildAuthorityGraph", () => {
   });
 });
 
+describe("buildAuthorityGraph · 子工作流", () => {
+  const INV = "c0000000-0000-4000-8000-000000000001";
+  const LEAF = "c0000000-0000-4000-8000-000000000002";
+  const data = compositeDataFromGraph({
+    nodes: [
+      { uuid: INV, workflow_uuid: "wf", name: "子流程", type: "workflow", workflow_node_template_uuid: "tpl",
+        pose: {}, param: { volume: 5 }, execution_policy: {}, disabled: false, minimized: false, create_time: "", update_time: "",
+        meta_data: { unilab: { composite: { child_workflow_uuid: "child", child_workflow_revision: 2 } } } },
+      { uuid: LEAF, workflow_uuid: "wf", name: "加样", type: "device_action", parent_uuid: INV, action_name: "dose",
+        material_uuid: PUMP, pose: {}, param: { volume: 5 }, execution_policy: {}, disabled: false, minimized: false,
+        create_time: "", update_time: "", meta_data: { target_device_id: "pump_1" } },
+    ],
+    edges: [],
+  } as unknown as BackendWorkflowGraph, INV)!;
+  const composite = { id: INV, type: "composite", position: { x: 300, y: 50 }, data: data as unknown as Record<string, unknown> };
+
+  it("调用节点身份固定、展开节点原样写回；上下游依赖指向调用节点；调用节点不算本地跑不了", async () => {
+    const build = await buildAuthorityGraph({
+      nodes: [actionNode("n1", "pump_1", "dispense", 0), composite, actionNode("n2", "pump_1", "dispense", 600)],
+      edges: [{ source: "n1", target: INV, mappings: [] }, { source: INV, target: "n2", mappings: [] }],
+      disabled: new Set(),
+      resolveDevice,
+      reuseExistingUuids: false,
+    });
+    expect(build.uuidByNodeId.get(INV)).toBe(INV);
+    const byUuid = new Map(build.nodes.map((node) => [node.uuid, node]));
+    const n1 = build.uuidByNodeId.get("n1")!;
+    expect(byUuid.get(INV)).toMatchObject({ type: "workflow", pose: { x: 300, y: 50 }, execution_policy: { depends_on: [n1] } });
+    expect(byUuid.get(LEAF)).toMatchObject({ parent_uuid: INV, param: { volume: 5 } });
+    expect(byUuid.get(build.uuidByNodeId.get("n2")!)?.execution_policy).toEqual({ depends_on: [INV] });
+    expect(build.notLocallyExecutable).toEqual([]);
+    expect(build.edges).toEqual([]);
+  });
+
+  it("缺少展开节点或放进循环体时拒绝提交", async () => {
+    const broken = { ...composite, data: { ...composite.data, nodes: [] } };
+    await expect(buildAuthorityGraph({ nodes: [broken], edges: [], disabled: new Set(), resolveDevice })).rejects.toThrow(/展开节点/);
+    const loop = { id: "loop", type: "loop", position: { x: 0, y: 0 }, data: { mode: "for", count: 2, label: "L" } };
+    await expect(buildAuthorityGraph({
+      nodes: [loop, { ...composite, loopId: "loop" }], edges: [], disabled: new Set(), resolveDevice,
+    })).rejects.toThrow(/循环/);
+  });
+});
+
 describe("submitWorkflow", () => {
   const workflow = (revision: number): BackendWorkflow =>
     ({ uuid: "wf-1", name: "流程", tags: [], revision, create_time: "", update_time: "", meta_data: {} }) as BackendWorkflow;
@@ -500,6 +547,85 @@ describe("submitWorkflow", () => {
     const result = await submitWorkflow(api, { workflowUuid: "gone", name: "流程", nodes: [] });
     expect(result.created).toBe(true);
     expect(api.calls).toEqual(["create", "save@1", "task"]);
+  });
+
+  it("保存后的定义声明了入口参数：经 prompter 收集 input；取消则只保存不运行；边原样回传", async () => {
+    const contract = { input_contract: { version: 1, parameters: [{ name: "volume", schema: { type: "number" }, required: true }] } };
+    const declared = (revision: number) =>
+      ({ ...graphOf(revision), workflow: { ...workflow(revision), meta_data: { unilab: contract } } }) as unknown as BackendWorkflowGraph;
+    const edge = { uuid: "e1", source_node_uuid: "a", target_node_uuid: "b", source_handle_uuid: "h1", target_handle_uuid: "h2" };
+    const api = fakeApi({ saveGraph: vi.fn(async (_uuid, body) => declared(body.revision + 1)) });
+    const prompter = { ask: vi.fn(async () => ({ volume: 2 })), close: vi.fn() };
+    const result = await submitWorkflow(api, { workflowUuid: "wf-1", name: "流程", nodes: [], edges: [edge], prompter });
+    expect(vi.mocked(api.saveGraph).mock.calls[0][1].edges).toEqual([edge]);
+    expect(prompter.ask).toHaveBeenCalledWith(contract.input_contract.parameters, expect.objectContaining({ title: "运行「流程」" }));
+    expect(api.createTask).toHaveBeenCalledWith(expect.objectContaining({ input: { volume: 2 } }));
+    expect(result.task?.uuid).toBe("task-1");
+
+    const canceling = { ask: vi.fn(async () => null), close: vi.fn() };
+    const canceled = await submitWorkflow(
+      fakeApi({ saveGraph: vi.fn(async (_uuid, body) => declared(body.revision + 1)) }),
+      { workflowUuid: "wf-1", name: "流程", nodes: [], prompter: canceling },
+    );
+    expect(canceled).toMatchObject({ task: null, canceled: true });
+
+    // 没声明合同的定义不弹框、不带 input
+    const plain = fakeApi();
+    const silent = { ask: vi.fn(), close: vi.fn() };
+    await submitWorkflow(plain, { name: "流程", nodes: [], prompter: silent });
+    expect(silent.ask).not.toHaveBeenCalled();
+    expect(vi.mocked(plain.createTask).mock.calls[0][0]).not.toHaveProperty("input");
+  });
+
+  it("画布管理 I/O：新引用先声明并集合同 → 存图 → 写最终声明；模板节点绑定原样带回", async () => {
+    const io = { inputs: [{ name: "volume", schema: { type: "number" }, required: true }], outputs: [] };
+    const declaration = declarationOf(io, () => undefined);
+    const withUnilab = (revision: number, unilab: Record<string, unknown>, nodes: unknown[] = []) =>
+      ({ ...graphOf(revision), nodes, workflow: { ...workflow(revision), meta_data: { unilab } } }) as unknown as BackendWorkflowGraph;
+    const bound = { uuid: "t1", meta_data: { unilab: { input_bindings: { h: { parameter: "old" } } } } };
+    const calls: string[] = [];
+    const api = fakeApi({
+      graph: vi.fn(async () => (calls.push("graph"), withUnilab(3, { input_contract: { version: 1, parameters: [{ name: "old", schema: { type: "string" } }] } }, [bound]))),
+      declareIo: vi.fn(async (_uuid, body) => (calls.push(`io@${body.revision}`), withUnilab(body.revision + 1, {
+        input_contract: body.input_contract, output_contract: body.output_contract, output_bindings: body.output_bindings,
+      }, [bound]))),
+      saveGraph: vi.fn(async (_uuid, body) => (calls.push(`save@${body.revision}`), withUnilab(body.revision + 1, {
+        input_contract: { version: 1, parameters: [{ name: "volume", schema: { type: "number" }, required: true }, { name: "old", schema: { type: "string" } }] },
+      }, [bound]))),
+    });
+    await submitWorkflow(api, {
+      workflowUuid: "wf-1", name: "流程", nodes: [], saveOnly: true,
+      io: { declaration, referenced: new Set(["volume"]) },
+    });
+    expect(calls).toEqual(["graph", "io@3", "save@4", "io@5"]);
+    const [before, after] = vi.mocked(api.declareIo!).mock.calls.map((call) => call[1]);
+    expect(before.input_contract?.parameters.map((item) => item.name)).toEqual(["volume", "old"]);
+    expect(before.node_input_bindings).toEqual({ t1: { h: { parameter: "old" } } });
+    expect(after.input_contract?.parameters.map((item) => item.name)).toEqual(["volume"]);
+  });
+
+  it("I/O 已一致时不额外声明；声明失败报告图是否已保存", async () => {
+    const io = { inputs: [{ name: "volume", schema: { type: "number" }, required: false }], outputs: [] };
+    const declaration = declarationOf(io, () => undefined);
+    const same = { input_contract: declaration.input_contract };
+    const declared = (revision: number) =>
+      ({ ...graphOf(revision), workflow: { ...workflow(revision), meta_data: { unilab: same } } }) as unknown as BackendWorkflowGraph;
+    const api = fakeApi({
+      graph: vi.fn(async () => declared(3)),
+      declareIo: vi.fn(async () => declared(9)),
+      saveGraph: vi.fn(async (_uuid, body) => declared(body.revision + 1)),
+    });
+    await submitWorkflow(api, { workflowUuid: "wf-1", name: "流程", nodes: [], saveOnly: true, io: { declaration, referenced: new Set(["volume"]) } });
+    expect(api.declareIo).not.toHaveBeenCalled();
+
+    const failing = fakeApi({
+      graph: vi.fn(async () => graphOf(3)),
+      declareIo: vi.fn(async () => { throw new BackendBusinessError({ code: 1000, error: { msg: "workflow_io_invalid（/x）" } }); }),
+    });
+    const error = await submitWorkflow(failing, { workflowUuid: "wf-1", name: "流程", nodes: [], saveOnly: true, io: { declaration, referenced: new Set() } })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(IoDeclareError);
+    expect((error as IoDeclareError).graphSaved).toBe(true);
   });
 
   it("旧进程以 HTTP 404 表示绑定定义不存在时退回新建", async () => {

@@ -62,6 +62,18 @@ import {
 import { describeLoopProgress } from "../features/workflow-loops";
 import type { BackendLoopProgress } from "@openlab/protocol";
 import { beginWorkflowPrint } from "../features/workflow-print";
+import EntryParamFields from "../components/EntryParamFields.vue";
+import {
+  buildEntryInput,
+  describeEntryInputError,
+  describeInputEditConflict,
+  entryParameterLabel,
+  entryValueText,
+  initialEntryValues,
+  schemaTypeLabel,
+  taskDeclaredIo,
+  type EntryFormValues,
+} from "../features/workflow-io";
 import { useConnectionStore } from "../stores/connection";
 import { useDomainThemeStore } from "../stores/domain-theme";
 
@@ -136,6 +148,95 @@ async function commandTask(type: "step" | "resume" | "pause" | "cancel") {
     // 包括 revision 过期/另一页面已操作的情况都重拉，不在浏览器自行推进节点或修改控制态。
     await refresh();
     controlBusy.value = false;
+  }
+}
+
+// ── 入口参数与输出：运行时固化在任务快照里的合同；暂停时可修改尚未被消费的参数 ──
+
+const declaredIo = computed(() => taskDeclaredIo(task.value));
+const entryParameters = computed(() => declaredIo.value.input_contract.parameters);
+const declaredOutputs = computed(() => declaredIo.value.output_contract.outputs);
+const taskInput = computed(() => (task.value?.input ?? {}) as Record<string, unknown>);
+const taskOutput = computed(() => (task.value?.output ?? {}) as Record<string, unknown>);
+const showEntryCard = computed(() =>
+  entryParameters.value.length > 0 || declaredOutputs.value.length > 0 || Object.keys(taskInput.value).length > 0,
+);
+/** 与后端同一前提：仅暂停中的未结束任务可以改入口参数。 */
+const canEditInput = computed(() =>
+  Boolean(task.value && entryParameters.value.length
+    && task.value.control_status === "paused"
+    && (task.value.status === "pending" || task.value.status === "running")
+    && Number.isSafeInteger(task.value.control_revision)),
+);
+const editingInput = ref(false);
+const inputValues = ref<EntryFormValues>({});
+const inputErrors = ref<Record<string, string>>({});
+const inputMessage = ref("");
+const inputMessageType = ref<"warning" | "error" | "success">("warning");
+const inputBusy = ref(false);
+
+function startInputEdit() {
+  if (!canEditInput.value) return;
+  inputValues.value = initialEntryValues(entryParameters.value, task.value?.input);
+  inputErrors.value = {};
+  inputMessage.value = "";
+  editingInput.value = true;
+}
+
+// 任务离开暂停（恢复 / 结束 / 别处操作）时收起表单，避免对过期状态提交
+watch(canEditInput, (allowed) => {
+  if (!allowed) editingInput.value = false;
+});
+
+async function submitInputEdit() {
+  const current = task.value;
+  if (!current || current.control_revision === undefined || inputBusy.value || !canEditInput.value) return;
+  const built = buildEntryInput(entryParameters.value, inputValues.value, { baseline: current.input ?? {} });
+  inputErrors.value = built.errors;
+  if (Object.keys(built.errors).length) {
+    inputMessageType.value = "error";
+    inputMessage.value = "请先修正标红的入口参数";
+    return;
+  }
+  if (!built.changed.length) {
+    inputMessageType.value = "warning";
+    inputMessage.value = "没有改动任何参数。";
+    return;
+  }
+  inputBusy.value = true;
+  inputMessage.value = "";
+  try {
+    await wb().editTaskInput(current.uuid, {
+      expected_revision: current.control_revision,
+      input: built.input,
+      idempotency_key: crypto.randomUUID(),
+    });
+    const labels = built.changed.map((name) => {
+      const parameter = entryParameters.value.find((item) => item.name === name);
+      return `${parameter ? entryParameterLabel(parameter) : name}：${entryValueText(current.input?.[name])} → ${entryValueText(built.input[name])}`;
+    });
+    inputMessageType.value = "success";
+    inputMessage.value = `已修改 ${labels.join("；")}。恢复运行或执行下一步时，尚未下发的节点使用新值。`;
+    editingInput.value = false;
+  } catch (err) {
+    const conflict = describeInputEditConflict(err);
+    const entryError = describeEntryInputError(err, entryParameters.value);
+    if (conflict) {
+      inputMessageType.value = "warning";
+      inputMessage.value = conflict;
+      editingInput.value = false;
+    } else if (entryError) {
+      inputMessageType.value = "error";
+      inputMessage.value = entryError.message;
+      if (entryError.field) inputErrors.value = { [entryError.field]: entryError.message };
+    } else {
+      inputMessageType.value = "error";
+      inputMessage.value = describeError(err);
+    }
+  } finally {
+    // 成功或冲突都重读权威任务；control_revision 由后端推进
+    await refresh();
+    inputBusy.value = false;
   }
 }
 
@@ -601,6 +702,66 @@ watch(
         {{ lastError }}
       </NAlert>
 
+      <!-- ── 入口参数与输出（任务快照里的合同；暂停时可修改尚未被使用的参数） ── -->
+      <NCard v-if="task && showEntryCard" size="small" title="入口参数与输出">
+        <template #header-extra>
+          <NButton
+            v-if="canEditInput && !editingInput"
+            size="small"
+            type="primary"
+            secondary
+            :disabled="!conn.schedulerLocal || !conn.online || controlBaseUrl !== conn.baseUrl || loading || controlBusy"
+            @click="startInputEdit"
+          >
+            修改入口参数
+          </NButton>
+          <span v-else-if="!editingInput && entryParameters.length" class="dim">暂停任务后可修改尚未被使用的入口参数</span>
+        </template>
+        <template v-if="editingInput">
+          <NAlert type="info" :bordered="false" style="margin-bottom: 12px">
+            只改尚未下发的节点会用到的参数；已被下发节点用过的参数不能再改（后端会拒绝整次修改）。
+          </NAlert>
+          <EntryParamFields
+            v-model:values="inputValues"
+            :parameters="entryParameters"
+            :field-errors="inputErrors"
+            :disabled="inputBusy"
+          />
+          <div class="head-row" style="margin-top: 12px">
+            <NButton size="small" type="primary" :loading="inputBusy" @click="submitInputEdit">保存修改</NButton>
+            <NButton size="small" :disabled="inputBusy" @click="editingInput = false">取消</NButton>
+          </div>
+        </template>
+        <table v-else class="io-table">
+          <tbody>
+            <tr v-for="parameter in entryParameters" :key="parameter.name">
+              <th>{{ entryParameterLabel(parameter) }}</th>
+              <td class="dim">{{ schemaTypeLabel(parameter.schema) }}</td>
+              <td class="mono">
+                <template v-if="Object.prototype.hasOwnProperty.call(taskInput, parameter.name)">{{ entryValueText(taskInput[parameter.name]) }}</template>
+                <span v-else class="dim">未提供（引用它的参数不下发）</span>
+              </td>
+            </tr>
+            <tr v-for="name in Object.keys(taskInput).filter((key) => !entryParameters.some((item) => item.name === key))" :key="`extra-${name}`">
+              <th>{{ name }}</th>
+              <td class="dim">—</td>
+              <td class="mono">{{ entryValueText(taskInput[name]) }}</td>
+            </tr>
+            <tr v-for="output in declaredOutputs" :key="`out-${output.name}`" class="io-output">
+              <th>输出 · {{ entryParameterLabel(output) }}</th>
+              <td class="dim">{{ schemaTypeLabel(output.schema) }}</td>
+              <td class="mono">
+                <template v-if="Object.prototype.hasOwnProperty.call(taskOutput, output.name)">{{ entryValueText(taskOutput[output.name]) }}</template>
+                <span v-else class="dim">{{ task.status === "succeeded" ? "没有取到（绑定的节点未产出该值）" : "任务成功后求值" }}</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <NAlert v-if="inputMessage" :type="inputMessageType" :bordered="false" style="margin-top: 8px" closable @close="inputMessage = ''">
+          {{ inputMessage }}
+        </NAlert>
+      </NCard>
+
       <!-- ── 只读画布：快照图 + 节点运行状态着色 ── -->
       <NCard v-if="task && snapshotNodes(task).length" size="small" title="流程画布">
         <template #header-extra>
@@ -913,6 +1074,35 @@ watch(
   color: #1f262e;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.io-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.io-table th,
+.io-table td {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--hairline);
+  vertical-align: top;
+}
+
+.io-table th {
+  font-weight: 600;
+  width: 32%;
+}
+
+.io-table td.mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.io-output th {
+  color: #2f6b4f;
 }
 
 .secondary-row {

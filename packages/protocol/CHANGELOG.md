@@ -1,5 +1,19 @@
 # Changelog
 
+## 未发布：工作流入口参数、发布与组合调用；就绪探针与化学品定义
+
+- 快照同步 Uni-Lab-OS `feat/workflow-entry-params`（dev + PR #346）：新增 12 条浏览器操作，无删除。
+- workflow 域：`declareIo`（PUT /workflows/{uuid}/io）、`publishWorkflow` / `workflowPublications`
+  （/workflows/{uuid}/publications）、`latestPublications`（GET /workflow-publications）、
+  `insertCompositeInvocation`（POST /workflows/{uuid}/composite-invocations）、`editTaskInput`
+  （PATCH /workflow-tasks/{uuid}/input）；`createTask` 接受 `input`，任务 DTO 带 `input` / `output`。
+  新增合同 / 发布 / 组合调用类型，以及 `workflowInputReference` / `isWorkflowInputReference` /
+  `declaredWorkflowIo` 三个纯函数。
+- system 域：`readiness()`（GET /readiness）；503 是「尚未就绪」的正常回答，返回同形状正文而不抛错。
+- 新域 `chemicals-v1`（`createChemicalsV1Api` / `api.domains.chemicalsV1`）：化学品定义 CRUD，
+  `expected_version` 乐观锁；参数错误业务码是 2（`CHEMICAL_BUSINESS_CODES`）。
+- 需要包含上述路由的 Uni-Lab-OS 构建；旧构建上这些方法返回 404，页面按「不支持」降级。
+
 ## 未发布：工作流事件流订阅语义（v1.0 ADR 0006）
 
 - `/api/v1/events` 首连不再从序号 0 回放：服务端先发只含 `id` 的水位帧，此后只推新通知；

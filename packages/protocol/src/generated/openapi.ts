@@ -2,6 +2,46 @@
 // 重新生成：pnpm --filter @openlab/protocol openapi:types
 
 export type paths = {
+    "/api/v1/chemicals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Chemicals
+         * @description 按名称 / 别名 / CAS / 分子式模糊搜索，或按 CAS、InChIKey 精确查找。
+         */
+        get: operations["list_chemicals_api_v1_chemicals_get"];
+        put?: never;
+        /** Create Chemical */
+        post: operations["create_chemical_api_v1_chemicals_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/chemicals/{chemical_uuid}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Chemical */
+        get: operations["get_chemical_api_v1_chemicals__chemical_uuid__get"];
+        put?: never;
+        post?: never;
+        /** Delete Chemical */
+        delete: operations["delete_chemical_api_v1_chemicals__chemical_uuid__delete"];
+        options?: never;
+        head?: never;
+        /** Update Chemical */
+        patch: operations["update_chemical_api_v1_chemicals__chemical_uuid__patch"];
+        trace?: never;
+    };
     "/api/v1/debug/databases": {
         parameters: {
             query?: never;
@@ -1264,6 +1304,29 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Readiness
+         * @description 就绪探针：能接收并执行任务时 HTTP 200，否则 503（Kubernetes readiness 合同）。
+         *
+         *     与 ``/health``（进程存活，恒 200）不同：Host 子进程启动 / 安静点重启期间、执行适配器
+         *     尚未注册时返回 503；全量重置期间维护闸门同样返回 503。响应只含状态摘要。
+         */
+        get: operations["readiness_api_v1_readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/registry/digest": {
         parameters: {
             query?: never;
@@ -2159,6 +2222,26 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workflow-publications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Published Workflows
+         * @description 每个工作流的最新发布：输入输出、合同摘要与投影出的节点模板。
+         */
+        get: operations["list_published_workflows_api_v1_workflow_publications_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workflow-tasks": {
         parameters: {
             query?: never;
@@ -2209,6 +2292,26 @@ export type paths = {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflow-tasks/{task_uuid}/input": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Edit Workflow Task Input
+         * @description 暂停时修改入口参数；已被已下发节点用过的参数冻结（3003）。
+         */
+        patch: operations["edit_workflow_task_input_api_v1_workflow_tasks__task_uuid__input_patch"];
         trace?: never;
     };
     "/api/v1/workflow-tasks/{task_uuid}/interventions": {
@@ -2393,6 +2496,26 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workflows/{workflow_uuid}/composite-invocations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Insert Composite Invocation
+         * @description 插入组合调用：子工作流按冻结发布内联展开，父图 revision +1。
+         */
+        post: operations["insert_composite_invocation_api_v1_workflows__workflow_uuid__composite_invocations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workflows/{workflow_uuid}/graph": {
         parameters: {
             query?: never;
@@ -2405,6 +2528,47 @@ export type paths = {
         /** Save Graph */
         put: operations["save_graph_api_v1_workflows__workflow_uuid__graph_put"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/{workflow_uuid}/io": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Declare Workflow Io
+         * @description 声明输入输出合同与节点输入绑定；返回更新后的整图。
+         */
+        put: operations["declare_workflow_io_api_v1_workflows__workflow_uuid__io_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/{workflow_uuid}/publications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Workflow Publications */
+        get: operations["list_workflow_publications_api_v1_workflows__workflow_uuid__publications_get"];
+        put?: never;
+        /**
+         * Publish Workflow
+         * @description 把当前修订冻结为不可变发布。
+         */
+        post: operations["publish_workflow_api_v1_workflows__workflow_uuid__publications_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2621,6 +2785,81 @@ export type components = {
              */
             state: "connecting" | "active" | "reconciling" | "disconnected";
         };
+        /** ChemicalPatch */
+        ChemicalPatch: {
+            /** Aliases */
+            aliases?: string[] | null;
+            /** Cas */
+            cas?: string | null;
+            /** Density G Per Ml */
+            density_g_per_ml?: number | null;
+            /** Description */
+            description?: string | null;
+            /** Expected Version */
+            expected_version: number;
+            /** Inchi Key */
+            inchi_key?: string | null;
+            /** Meta Data */
+            meta_data?: {
+                [key: string]: unknown;
+            } | null;
+            /** Molecular Formula */
+            molecular_formula?: string | null;
+            /** Molecular Weight */
+            molecular_weight?: number | null;
+            /** Name */
+            name?: string | null;
+            /** Name En */
+            name_en?: string | null;
+            /** Physical State */
+            physical_state?: ("liquid" | "solid" | "gas" | "unknown") | null;
+            /** Smiles */
+            smiles?: string | null;
+        };
+        /** ChemicalWrite */
+        ChemicalWrite: {
+            /** Aliases */
+            aliases?: string[];
+            /**
+             * Cas
+             * @description CAS 登记号，校验格式与校验位；可空，未删除的行之间唯一
+             */
+            cas?: string | null;
+            /** Chemical Uuid */
+            chemical_uuid?: string | null;
+            /** Density G Per Ml */
+            density_g_per_ml?: number | null;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /**
+             * Inchi Key
+             * @description 27 位标准 InChIKey；可空，未删除的行之间唯一
+             */
+            inchi_key?: string | null;
+            /** Meta Data */
+            meta_data?: {
+                [key: string]: unknown;
+            };
+            /** Molecular Formula */
+            molecular_formula?: string | null;
+            /** Molecular Weight */
+            molecular_weight?: number | null;
+            /** Name */
+            name: string;
+            /** Name En */
+            name_en?: string | null;
+            /**
+             * Physical State
+             * @default unknown
+             * @enum {string}
+             */
+            physical_state: "liquid" | "solid" | "gas" | "unknown";
+            /** Smiles */
+            smiles?: string | null;
+        };
         /** CommandEnvelope */
         CommandEnvelope: {
             /** Backend Sequence */
@@ -2651,6 +2890,31 @@ export type components = {
             };
             /** Traceparent */
             traceparent?: string | null;
+        };
+        /**
+         * CompositeInvocationRequest
+         * @description 把已发布子工作流作为组合调用插入父图（父图 revision 乐观锁）。
+         *
+         *     ``child_revision`` 缺省取子工作流最新发布；``arguments`` 为子工作流输入的实参：
+         *     静态 JSON 值，或 ``{"kind": "workflow_input", "parameter": 父工作流输入名}``。
+         */
+        CompositeInvocationRequest: {
+            /** Arguments */
+            arguments?: {
+                [key: string]: unknown;
+            };
+            /** Child Revision */
+            child_revision?: number | null;
+            /** Child Workflow Uuid */
+            child_workflow_uuid: string;
+            /** Invocation Uuid */
+            invocation_uuid?: string | null;
+            /** Pose */
+            pose?: {
+                [key: string]: unknown;
+            };
+            /** Revision */
+            revision: number;
         };
         /**
          * DeviceActionCapability
@@ -4173,6 +4437,42 @@ export type components = {
             template_uuid: string;
         };
         /**
+         * WorkflowIODeclareRequest
+         * @description 声明工作流公共输入输出（写入服务端保留的 ``meta_data.unilab``）。
+         *
+         *     ``node_input_bindings`` 形如 ``{node_uuid: {handle_uuid: {"parameter": 输入名}}}``，
+         *     是完整替换：未列出的节点清空 input_bindings；被绑定输入在节点 param 中的静态值移除。
+         *     ``node_params``（可选）按节点合并进 param，用于解绑必填输入时给回静态值。
+         */
+        WorkflowIODeclareRequest: {
+            /** Input Contract */
+            input_contract?: {
+                [key: string]: unknown;
+            } | null;
+            /** Node Input Bindings */
+            node_input_bindings?: {
+                [key: string]: {
+                    [key: string]: unknown;
+                };
+            };
+            /** Node Params */
+            node_params?: {
+                [key: string]: {
+                    [key: string]: unknown;
+                };
+            };
+            /** Output Bindings */
+            output_bindings?: {
+                [key: string]: unknown;
+            };
+            /** Output Contract */
+            output_contract?: {
+                [key: string]: unknown;
+            } | null;
+            /** Revision */
+            revision: number;
+        };
+        /**
          * WorkflowNodeWrite
          * @description Complete WorkflowNode payload used by full-graph reconciliation.
          */
@@ -4232,6 +4532,14 @@ export type components = {
             uuid: string;
             /** Workflow Node Template Uuid */
             workflow_node_template_uuid?: string | null;
+        };
+        /**
+         * WorkflowPublishRequest
+         * @description 发布当前修订；revision 必须等于工作流当前 revision（重复发布同一修订幂等）。
+         */
+        WorkflowPublishRequest: {
+            /** Revision */
+            revision: number;
         };
         /**
          * WorkflowTaskCommandRequest
@@ -4296,6 +4604,10 @@ export type components = {
             execution_timeout_seconds: number;
             /** Idempotency Key */
             idempotency_key?: string | null;
+            /** Input */
+            input?: {
+                [key: string]: unknown;
+            };
             /** Meta Data */
             meta_data?: {
                 [key: string]: unknown;
@@ -4316,6 +4628,20 @@ export type components = {
              * @default
              */
             workflow_uuid: string;
+        };
+        /**
+         * WorkflowTaskInputEditRequest
+         * @description 暂停时修改入口参数：``input`` 为部分更新，``expected_revision`` 是任务 control_revision。
+         */
+        WorkflowTaskInputEditRequest: {
+            /** Expected Revision */
+            expected_revision: number;
+            /** Idempotency Key */
+            idempotency_key?: string | null;
+            /** Input */
+            input: {
+                [key: string]: unknown;
+            };
         };
         /** WorkflowUpdateRequest */
         WorkflowUpdateRequest: {
@@ -4341,6 +4667,174 @@ export type components = {
 };
 export type $defs = Record<string, never>;
 export interface operations {
+    list_chemicals_api_v1_chemicals_get: {
+        parameters: {
+            query?: {
+                cas?: string;
+                inchi_key?: string;
+                page?: number;
+                page_size?: number;
+                physical_state?: string;
+                q?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_chemical_api_v1_chemicals_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChemicalWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_chemical_api_v1_chemicals__chemical_uuid__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                chemical_uuid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_chemical_api_v1_chemicals__chemical_uuid__delete: {
+        parameters: {
+            query: {
+                expected_version: number;
+            };
+            header?: never;
+            path: {
+                chemical_uuid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_chemical_api_v1_chemicals__chemical_uuid__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                chemical_uuid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChemicalPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_databases_api_v1_debug_databases_get: {
         parameters: {
             query?: never;
@@ -6959,6 +7453,26 @@ export interface operations {
             };
         };
     };
+    readiness_api_v1_readiness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     get_registry_digest_api_v1_registry_digest_get: {
         parameters: {
             query?: never;
@@ -8837,6 +9351,26 @@ export interface operations {
             };
         };
     };
+    list_published_workflows_api_v1_workflow_publications_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     list_workflow_tasks_api_v1_workflow_tasks_get: {
         parameters: {
             query?: {
@@ -8948,6 +9482,41 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["WorkflowTaskCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    edit_workflow_task_input_api_v1_workflow_tasks__task_uuid__input_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_uuid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowTaskInputEditRequest"];
             };
         };
         responses: {
@@ -9401,6 +9970,41 @@ export interface operations {
             };
         };
     };
+    insert_composite_invocation_api_v1_workflows__workflow_uuid__composite_invocations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_uuid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompositeInvocationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_graph_api_v1_workflows__workflow_uuid__graph_get: {
         parameters: {
             query?: never;
@@ -9444,6 +10048,107 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["GraphWriteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    declare_workflow_io_api_v1_workflows__workflow_uuid__io_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_uuid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowIODeclareRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_workflow_publications_api_v1_workflows__workflow_uuid__publications_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_uuid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    publish_workflow_api_v1_workflows__workflow_uuid__publications_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_uuid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowPublishRequest"];
             };
         };
         responses: {

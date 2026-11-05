@@ -6,6 +6,7 @@ export type {
   operations as OpenApiOperations,
   paths as OpenApiPaths,
 } from "./generated/openapi.js";
+export * from "./chemicals-v1.js";
 export * from "./common.js";
 export * from "./debug.js";
 export * from "./device-actions.js";

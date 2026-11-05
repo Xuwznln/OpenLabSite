@@ -55,6 +55,20 @@ describe("pathCoveredByMappings", () => {
 });
 
 describe("missingParamEntries", () => {
+  it("引用工作流入口参数的顶层参数由任务 input 给值，不计未填", () => {
+    const detail = makeDetail({
+      required: ["vessel", "volume"],
+      goalProps: { ...RESOURCE_SHAPE_PROPS, volume: { type: "number" } },
+      placeholderKeys: { vessel: "unilabos_resources" },
+    });
+    const ref = (parameter: string) => ({ kind: "workflow_input", parameter });
+    expect(missingParamEntries({
+      detail,
+      paramJson: JSON.stringify({ vessel: ref("vessel"), volume: ref("amount") }),
+      mappedPaths: [],
+    })).toEqual([]);
+  });
+
   it("placeholder 未选择计入；已选（uuid）不计入", () => {
     const detail = makeDetail({
       placeholderKeys: { vessel: "unilabos_resources", pump: "unilabos_devices" },
