@@ -25,6 +25,7 @@ import { Controls } from "@vue-flow/controls";
 import { MiniMap } from "@vue-flow/minimap";
 import dagre from "@dagrejs/dagre";
 import {
+  NAlert,
   NButton,
   NDrawer,
   NDrawerContent,
@@ -152,25 +153,64 @@ import {
   type DryRunNodeInput,
   type DryRunReport,
 } from "../features/graph-dry-run";
-import type {
-  BackendWorkflow,
-  BackendWorkflowWriteInput,
-  DeviceActionSchemaDetail,
-  JsonObject,
-  RuntimeActionCapability,
+import {
+  declaredWorkflowIo,
+  type BackendCompositeArgument,
+  type BackendWorkflow,
+  type BackendWorkflowInputParameter,
+  type BackendWorkflowPublication,
+  type BackendWorkflowWriteInput,
+  type DeviceActionSchemaDetail,
+  type JsonObject,
+  type JsonValue,
+  type RuntimeActionCapability,
 } from "@openlab/protocol";
 import ActionParamFields from "../components/ActionParamFields.vue";
 import EntryParamsDialog from "../components/EntryParamsDialog.vue";
+import EntityRef from "../components/EntityRef.vue";
+import CompositeNode from "../components/CompositeNode.vue";
+import EditorIoDrawer from "../components/EditorIoDrawer.vue";
+import InsertWorkflowModal from "../components/InsertWorkflowModal.vue";
 import { createEntryParamsPrompt } from "../features/entry-params-prompt";
+import {
+  COMPOSITE_NODE_TYPE,
+  compositeDataFromGraph,
+  compositeEntryReferences,
+  compositeLeafSteps,
+  describeCompositeArgument,
+  describeCompositeError,
+  stripCompositeSubtrees,
+  type CompositeNodeData,
+} from "../features/composite-nodes";
+import {
+  bindParamToEntry,
+  declarationOf,
+  editorIoFromDeclared,
+  emptyEditorIo,
+  emptyValueOf,
+  entryUsage,
+  inferEntryKind,
+  normalizeEditorIo,
+  referencedEntryNames,
+  schemaOfKind,
+  suggestEntryName,
+  unbindParamFromEntry,
+  validateEditorIo,
+  type EditorWorkflowIo,
+} from "../features/editor-workflow-io";
+import { entryReferencesOf, parseEntryValue } from "../features/workflow-io";
+import { goalPropertySchema } from "../features/action-param-form";
 import { beginWorkflowPrint } from "../features/workflow-print";
 import {
   buildAuthorityGraph,
   DEFAULT_MANUAL_CONFIRM_TIMEOUT_S,
   HOST_NODE_ID,
   MANUAL_CONFIRM_ACTION,
+  IoDeclareError,
   newNodeUuid,
   SubmitGraphError,
   submitWorkflow,
+  type SubmitWorkflowResult,
 } from "../features/workflow-submit";
 import { useConnectionStore } from "../stores/connection";
 import { useSiteBindingsStore } from "../stores/site-bindings";
@@ -202,6 +242,7 @@ const nodeTypes: NodeTypesObject = {
   branch: markRaw(BranchNode) as unknown as NodeTypesObject[string],
   [GROUP_NODE_TYPE]: markRaw(GroupNode) as unknown as NodeTypesObject[string],
   [LOOP_NODE_TYPE]: markRaw(LoopNode) as unknown as NodeTypesObject[string],
+  [COMPOSITE_NODE_TYPE]: markRaw(CompositeNode) as unknown as NodeTypesObject[string],
 };
 
 const DRAFT_KEY = "unilab-edge-ui:editor-draft";
@@ -217,6 +258,13 @@ const submitting = ref(false);
 const draftSavedAt = ref(0);
 const variablesDrawerOpen = ref(false);
 const workflowVariables = ref<WorkflowVariable[]>([]);
+/**
+ * 画布声明的入口参数与输出（随草稿保存，保存定义时经 PUT /io 写入）。null = 这份草稿不管理 I/O，
+ * 保存时不碰权威里的声明；第一次打开「入口参数」或设某个参数为入口参数时接管（已绑定定义先读回它的声明）。
+ * shallowRef：合同里的递归 JSON 类型经深层 ref 解包会让 vue-tsc 爆栈，整体替换即可。
+ */
+const workflowIo = shallowRef<EditorWorkflowIo | null>(null);
+const ioDrawerOpen = ref(false);
 
 const priorityOptions = ref([
   { label: "紧急", value: "urgent" },
@@ -883,6 +931,10 @@ onNodeClick(({ node }) => {
     openSpecialEditor(String(node.id));
     return;
   }
+  if (node.type === COMPOSITE_NODE_TYPE) {
+    compositeDetailId.value = String(node.id);
+    return;
+  }
   openNodePanel(String(node.id));
 });
 
@@ -1422,6 +1474,8 @@ type Draft = {
   /** 已提交到权威的定义 uuid（再提交即更新）。 */
   authorityWorkflowUuid?: string;
   variables?: WorkflowVariable[];
+  /** 画布声明的入口参数与输出（缺省 = 不管理 I/O）。 */
+  io?: EditorWorkflowIo;
   nodes: {
     id: string;
     type?: string;
@@ -1470,6 +1524,7 @@ function snapshotDraft(): Draft {
     priority: priority.value,
     authorityWorkflowUuid: authorityWorkflowUuid.value || undefined,
     variables: cloneJson(workflowVariables.value),
+    ...(workflowIo.value ? { io: cloneJson(workflowIo.value) } : {}),
     nodes: liteNodes.value.map((n) => {
       const entry: Draft["nodes"][number] = {
         id: n.id,
@@ -1669,8 +1724,12 @@ function copySelection(nodeIds?: string[]): boolean {
     : selectedLiteNodes();
   if (!initial.length) return false;
   // 组框不进剪贴板（只是画布边界）；循环框连同全部成员（含嵌套）
+  // 子工作流不复制：展开节点身份由那一次插入决定，需要再用就再插入一次
+  if (initial.some((n) => n.type === COMPOSITE_NODE_TYPE)) {
+    message.warning("子工作流不能复制或创建副本：需要的话从「插入子工作流」再插入一次");
+  }
   const picked: LiteNode[] = [];
-  const queue = initial.filter((n) => !isGroupNode(n));
+  const queue = initial.filter((n) => !isGroupNode(n) && n.type !== COMPOSITE_NODE_TYPE);
   const idSet = new Set<string>();
   while (queue.length) {
     const node = queue.shift()!;
@@ -1805,6 +1864,15 @@ const ctxOptions = computed(() => {
         { label: "删除整组", key: "group-delete" },
       ];
     }
+    if (target?.type === COMPOSITE_NODE_TYPE) {
+      // 子工作流：同一次插入只能出现一次（展开节点身份由调用 uuid 派生），不提供副本 / 重复 / 进循环
+      return [
+        { label: "查看子工作流", key: "composite-view" },
+        { label: "断开所有连线", key: "node-disconnect" },
+        { type: "divider" as const, key: "d1" },
+        { label: "移除子工作流调用", key: "composite-remove" },
+      ];
+    }
     if (target && isLoopNode(target)) {
       return [
         { label: "编辑循环", key: "loop-edit" },
@@ -1908,6 +1976,12 @@ function onCtxSelect(key: string) {
     }
     case "node-fill":
       openSlotFill(id);
+      break;
+    case "composite-view":
+      compositeDetailId.value = id;
+      break;
+    case "composite-remove":
+      removeCompositeNode(id);
       break;
     case "node-repeat":
       openRepeatModal(id);
@@ -2708,6 +2782,10 @@ function wrapNodesInLoop(nodeIds: string[], data: LoopNodeData): string | null {
     message.warning("条件分支节点不能进循环体，请先移出选区");
     return null;
   }
+  if (seeds.some((n) => n.type === COMPOSITE_NODE_TYPE)) {
+    message.warning("子工作流不能放进循环体，请先移出选区");
+    return null;
+  }
   const common = commonParentOf(seeds);
   if (!common) {
     message.warning("选中的节点必须在同一层级（同一个组 / 循环里，或都在顶层）");
@@ -2752,6 +2830,10 @@ function moveNodesIntoLoop(nodeIds: string[], loopId: string) {
   if (!nodes.length) return;
   if (nodes.some((n) => n.type === "branch")) {
     message.warning("条件分支节点不能进循环体");
+    return;
+  }
+  if (nodes.some((n) => n.type === COMPOSITE_NODE_TYPE)) {
+    message.warning("子工作流不能放进循环体");
     return;
   }
   const byId = liteNodeMap();
@@ -3096,14 +3178,17 @@ function confirmSaveTemplate() {
   const tpl = templateFromCanvas(
     { id, name, description: saveTplDesc.value.trim() || `${nodeCount.value} 步流程` },
     // 组框不是步骤：存模板时打平，只保留成员节点；循环框保留，成员记所在循环
+    // 子工作流不进模板：它绑定的是这一次插入的身份
     liteNodes.value
-      .filter((n) => !isGroupNode(n))
+      .filter((n) => !isGroupNode(n) && n.type !== COMPOSITE_NODE_TYPE)
       .map((n) => ({ id: n.id, type: n.type, data: { ...n.data }, parent: nearestLoopAncestor(n.id, byId) })),
-    liteEdges.value.map((e) => ({
-      source: e.source,
-      target: e.target,
-      mappings: e.data?.mappings ?? [],
-    })),
+    liteEdges.value
+      .filter((e) => byId.get(e.source)?.type !== COMPOSITE_NODE_TYPE && byId.get(e.target)?.type !== COMPOSITE_NODE_TYPE)
+      .map((e) => ({
+        source: e.source,
+        target: e.target,
+        mappings: e.data?.mappings ?? [],
+      })),
   );
   userTemplates.value = [...userTemplates.value, tpl];
   persistUserTemplates();
@@ -3634,6 +3719,10 @@ function confirmRepeat() {
     message.warning("条件分支节点不参与重复展开，请先移出选区");
     return;
   }
+  if (seeds.some((n) => n.type === COMPOSITE_NODE_TYPE)) {
+    message.warning("子工作流不参与重复展开：需要多次就多插入几次");
+    return;
+  }
   if (seeds.some((n) => isContainerNode(n))) {
     message.warning("请选中组 / 循环里的节点再重复展开，组框和循环框本身不参与（循环框可用「创建副本」）");
     return;
@@ -3736,6 +3825,7 @@ function restoreDraft(draft: Draft) {
     (draft.workflowId && !/^wf-\d+$/.test(draft.workflowId) ? draft.workflowId : "");
   priority.value = draft.priority || "normal";
   workflowVariables.value = normalizeVariables(draft.variables);
+  workflowIo.value = normalizeEditorIo(draft.io);
   ensurePriorityOption(priority.value);
   setNodes(hydrateDraftNodes(draft.nodes));
   setEdges(
@@ -3764,6 +3854,7 @@ function newWorkflow() {
   priority.value = "normal";
   authorityWorkflowUuid.value = "";
   workflowVariables.value = [];
+  workflowIo.value = null;
   sourceWorkflow.value = null;
   nodeSeq = 1;
   lastInsertedId = "";
@@ -3840,7 +3931,10 @@ async function saveParameterTableToDefinition(): Promise<void> {
 
 async function cloneFrom(sourceId: string) {
   try {
-    const graph = await conn.api.domains.workflowBackend.graph(sourceId);
+    // 子工作流（组合调用）的展开节点身份全局唯一，不能带进副本；需要的话在副本里重新插入
+    const { graph, removed: removedComposites } = stripCompositeSubtrees(
+      await conn.api.domains.workflowBackend.graph(sourceId),
+    );
     if (!graph.nodes.length) {
       message.warning(`Workflow ${sourceId} 没有可克隆的 Graph`);
       return;
@@ -3920,11 +4014,23 @@ async function cloneFrom(sourceId: string) {
         });
       return fitFrame(members, { width: 320, height: 160 });
     };
+    // 入口参数与输出随副本带走（节点 param 里的引用原样保留，输出按节点 uuid 映射回画布节点）
+    const declared = declaredWorkflowIo(graph.workflow);
+    const importedIo = declared.input_contract.parameters.length || declared.output_contract.outputs.length
+      ? editorIoFromDeclared(declared, (uuid) => (nodeUuids.has(uuid) ? uuid : undefined))
+      : null;
+    if (removedComposites.length) {
+      message.warning(`子工作流 ${removedComposites.join("、")} 没有复制到副本：需要的话在副本里用「插入子工作流」重新插入`, { duration: 10_000 });
+    }
+    if (importedIo?.droppedOutputs.length) {
+      message.warning(`输出 ${importedIo.droppedOutputs.join("、")} 绑定的不是画布节点，未带进副本`);
+    }
     restoreDraft({
       workflowId: `wf-${Date.now()}`,
       workflowName: graph.workflow.name ? `${graph.workflow.name} 副本` : "",
       priority: "normal",
       variables: localVariables.length ? localVariables : storedVariables,
+      ...(importedIo ? { io: importedIo.io } : {}),
       nodes: graph.nodes.map((n, i) => {
         const template = n.workflow_node_template_uuid
           ? templateMap.get(n.workflow_node_template_uuid)
@@ -4133,6 +4239,258 @@ async function locateIssue(issue: DryRunIssue): Promise<void> {
 const submissionOpen = ref(false);
 /** 保存后的定义声明了入口参数时，运行前收集本次的 input。 */
 const entryPrompt = createEntryParamsPrompt();
+
+// ── 入口参数与输出（工作流即节点：声明 I/O，供运行时填写、发布后给父流程用） ──
+
+function actionNodeLabel(node: LiteNode): string {
+  return `${String(node.data.deviceId || "?")}/${String(node.data.actionName || "?")}`;
+}
+
+const compositeCanvasNodes = computed(() => liteNodes.value.filter((n) => n.type === COMPOSITE_NODE_TYPE));
+/** 入口参数名 → 使用处（节点参数顶层引用 + 子工作流实参）。 */
+const entryUsageMap = computed(() =>
+  entryUsage(
+    liteNodes.value
+      .filter((n) => (n.type ?? "action") === "action")
+      .map((n) => ({ id: n.id, label: `${actionNodeLabel(n)} · ${n.id}`, paramJson: n.data.paramJson })),
+    compositeCanvasNodes.value.map((n) => ({
+      label: `子工作流「${String(n.data.name ?? n.id)}」`,
+      names: compositeEntryReferences(n.data as unknown as CompositeNodeData),
+    })),
+  ),
+);
+const ioOutputNodeOptions = computed(() =>
+  liteNodes.value
+    .filter((n) => (n.type ?? "action") === "action")
+    .map((n) => ({ label: `${actionNodeLabel(n)} · ${n.id}`, value: n.id })),
+);
+const ioErrors = computed(() => {
+  const referenced = new Set(entryUsageMap.value.keys());
+  if (!workflowIo.value) {
+    return referenced.size ? [`画布引用了入口参数（${[...referenced].join("、")}），但这份草稿还没有声明入口参数`] : [];
+  }
+  return validateEditorIo(workflowIo.value, { nodeIds: new Set(liteNodes.value.map((n) => n.id)), referenced });
+});
+const ioModel = computed<EditorWorkflowIo>({
+  get: () => workflowIo.value ?? emptyEditorIo(),
+  set: (next) => {
+    workflowIo.value = next;
+    saveDraftSoon();
+  },
+});
+const entryInputCount = computed(() => workflowIo.value?.inputs.length ?? 0);
+
+/**
+ * 接管 I/O：已绑定定义且草稿还没管理过时，先读回权威里的声明（输出按节点 uuid 映射回画布节点），
+ * 避免第一次保存把别处声明的合同清掉。读不到就从空声明开始。
+ */
+async function ensureWorkflowIo(): Promise<EditorWorkflowIo> {
+  if (workflowIo.value) return workflowIo.value;
+  let io = emptyEditorIo();
+  if (authorityWorkflowUuid.value && conn.online) {
+    try {
+      const workflow = await conn.api.domains.workflowBackend.workflow(authorityWorkflowUuid.value);
+      const nodeIdByUuid = new Map(liteNodes.value.map((n) => [String(n.data.uuid ?? n.id), n.id]));
+      const imported = editorIoFromDeclared(declaredWorkflowIo(workflow), (uuid) => nodeIdByUuid.get(uuid));
+      io = imported.io;
+      if (imported.droppedOutputs.length) {
+        message.warning(`已读回定义里的入口参数；输出 ${imported.droppedOutputs.join("、")} 绑定的不是画布节点，未接管`);
+      }
+    } catch {
+      /* 读不到权威声明：从空声明开始 */
+    }
+  }
+  if (!workflowIo.value) workflowIo.value = io;
+  return workflowIo.value;
+}
+
+async function openIoDrawer() {
+  await ensureWorkflowIo();
+  ioDrawerOpen.value = true;
+}
+
+// 节点浮层里的「设为入口参数」：只认 param 顶层键（与后端引用规则一致）
+
+const panelEntryKey = ref<string | null>(null);
+const panelEntryTarget = ref<string | null>(null);
+
+function panelParamObject(): Record<string, unknown> | null {
+  try {
+    return parseNodeParam(editParam.value);
+  } catch {
+    return null;
+  }
+}
+
+const panelEntryRefs = computed(() => {
+  if (!nodePanelOpen.value) return [] as [string, string][];
+  return [...entryReferencesOf(panelParamObject())];
+});
+const panelEntryKeyOptions = computed(() => {
+  const param = panelParamObject();
+  if (!param) return [];
+  const bound = new Set(panelEntryRefs.value.map(([key]) => key));
+  return Object.keys(param)
+    .filter((key) => !bound.has(key))
+    .map((key) => {
+      const title = paramForm.fieldMeta(key).title;
+      return { label: title ? `${title}（${key}）` : key, value: key };
+    });
+});
+const panelEntryTargetOptions = computed(() => {
+  const inputs = workflowIo.value?.inputs ?? [];
+  const suggested = panelEntryKey.value ? suggestEntryName(panelEntryKey.value, new Set(inputs.map((item) => item.name))) : "";
+  return [
+    { label: suggested ? `新建入口参数「${suggested}」` : "新建入口参数", value: "__new__" },
+    ...inputs.map((item) => ({ label: `已有：${item.title ? `${item.title}（${item.name}）` : item.name}`, value: item.name })),
+  ];
+});
+
+function entryParameterTitle(name: string): string {
+  const parameter = workflowIo.value?.inputs.find((item) => item.name === name);
+  return parameter?.title ? `${parameter.title}（${name}）` : name;
+}
+
+async function bindPanelParamToEntry() {
+  const key = panelEntryKey.value;
+  const param = panelParamObject();
+  if (!key || !param) {
+    if (!param) message.error("参数不是合法 JSON 对象");
+    return;
+  }
+  const io = await ensureWorkflowIo();
+  let name = panelEntryTarget.value ?? "__new__";
+  if (name === "__new__") {
+    name = suggestEntryName(key, new Set(io.inputs.map((item) => item.name)));
+    const current = param[key];
+    const parameter: BackendWorkflowInputParameter = {
+      name,
+      schema: schemaOfKind(inferEntryKind(current, goalPropertySchema(paramForm.schemaDetail.value, key))),
+      required: true,
+    };
+    const title = paramForm.fieldMeta(key).title;
+    if (title) parameter.title = title;
+    // 当前值合法就作为默认值：运行时可以不填
+    if (current !== undefined && current !== null && current !== "" && !("error" in parseEntryValue(parameter, current))) {
+      parameter.default = cloneJson(current) as JsonValue;
+      parameter.required = false;
+    }
+    workflowIo.value = { ...io, inputs: [...io.inputs, parameter] };
+  }
+  editParam.value = bindParamToEntry(editParam.value, key, name);
+  applyPanelParamToNode();
+  commitHistory();
+  panelEntryKey.value = null;
+  panelEntryTarget.value = null;
+  message.success(`参数 ${key} 已改为引用入口参数「${name}」：每次运行时填写（可在「入口参数」里改类型 / 默认值）`);
+}
+
+function unbindPanelParam(key: string, name: string) {
+  const parameter = workflowIo.value?.inputs.find((item) => item.name === name);
+  const value: JsonValue = parameter
+    ? Object.prototype.hasOwnProperty.call(parameter, "default")
+      ? (parameter.default ?? null)
+      : emptyValueOf(parameter.schema)
+    : "";
+  try {
+    editParam.value = unbindParamFromEntry(editParam.value, key, value);
+  } catch {
+    message.error("参数不是合法 JSON 对象");
+    return;
+  }
+  applyPanelParamToNode();
+  commitHistory();
+  message.info(`参数 ${key} 已改回固定值 ${JSON.stringify(value)}`);
+}
+
+// ── 插入已发布的工作流（组合调用） ──
+
+const insertOpen = ref(false);
+const insertBusy = ref(false);
+const insertError = ref("");
+
+function openInsertWorkflow() {
+  if (!conn.schedulerOnline) {
+    message.error("尚未连接调度权威，无法插入子工作流");
+    return;
+  }
+  insertError.value = "";
+  insertOpen.value = true;
+}
+
+/**
+ * 先把当前画布保存为定义（父流程的入口参数合同也一并写入，绑定实参才能通过校验），
+ * 再按刚拿到的 revision 插入；返回的整图里只取这次调用的子树落到画布上。
+ */
+async function insertPublishedWorkflow(payload: {
+  publication: BackendWorkflowPublication;
+  arguments: Record<string, BackendCompositeArgument>;
+}) {
+  if (insertBusy.value) return;
+  insertBusy.value = true;
+  insertError.value = "";
+  try {
+    const saved = await performSubmit({ saveOnly: true, allowEmpty: true, quiet: true });
+    if (!saved) {
+      insertError.value = "当前画布没有保存成功，未插入；请先处理提示的问题";
+      return;
+    }
+    const anchorId = chainAnchorId();
+    const position = insertPosition(anchorId);
+    const result = await conn.api.domains.workflowBackend.insertCompositeInvocation(saved.workflow.uuid, {
+      revision: saved.workflow.revision,
+      child_workflow_uuid: payload.publication.workflow_uuid,
+      child_revision: payload.publication.revision,
+      invocation_uuid: newNodeUuid(),
+      arguments: payload.arguments,
+      pose: { x: Math.round(position.x), y: Math.round(position.y) },
+    });
+    const data = compositeDataFromGraph(result.graph, result.invocation_uuid);
+    if (!data) throw new Error("插入结果里找不到这次的组合调用节点");
+    addNodes([{ id: data.uuid, type: COMPOSITE_NODE_TYPE, position, data: data as unknown as Record<string, unknown> }]);
+    const anchor = anchorId ? nodeById(anchorId) : undefined;
+    if (anchor && !isGroupNode(anchor)) {
+      addEdges([{
+        id: `e-${anchorId}-${data.uuid}`, source: anchorId, target: data.uuid, sourceHandle: "out", targetHandle: "in",
+        type: "smoothstep", data: { mappings: [] }, style: EDGE_STYLE_PLAIN,
+      }]);
+    }
+    lastInsertedId = data.uuid;
+    ensureVisible(position);
+    commitHistory();
+    flushDraftNow();
+    insertOpen.value = false;
+    message.success(`已插入子工作流「${data.name}」（版本 ${data.childRevision}，${compositeLeafSteps(data).length} 步）；下次保存时一起写入顺序`);
+  } catch (error) {
+    insertError.value = describeCompositeError(error) ?? `插入失败：${describeError(error)}`;
+  } finally {
+    insertBusy.value = false;
+  }
+}
+
+// 点开子工作流节点：只读详情 + 移除
+const compositeDetailId = ref("");
+const compositeDetail = computed(() => {
+  const node = compositeDetailId.value ? nodeById(compositeDetailId.value) : undefined;
+  return node?.type === COMPOSITE_NODE_TYPE ? (node.data as unknown as CompositeNodeData) : null;
+});
+const compositeDetailSteps = computed(() => {
+  const data = compositeDetail.value;
+  if (!data) return [];
+  const params = new Map(data.nodes.map((node) => [node.uuid, node.param ?? {}]));
+  return compositeLeafSteps(data).map((step) => ({
+    ...step,
+    param: Object.entries(params.get(step.uuid) ?? {}).map(([key, value]) => describeCompositeArgument(key, value)).join("  "),
+  }));
+});
+
+function removeCompositeNode(nodeId: string) {
+  removeNodes([nodeId], true);
+  compositeDetailId.value = "";
+  commitHistory();
+  saveDraftSoon();
+  message.info("已从画布移除子工作流调用：保存定义后权威图里的展开节点一并删除");
+}
 const runMode = ref<WorkflowExecutionMode>("normal");
 
 function validateVariableGroups(): boolean {
@@ -4195,26 +4553,28 @@ function submit(): void {
  * 边为空（与 @workflow 声明式步骤同一套约定）。节点 uuid 首次分配后写回草稿，定义 uuid 也绑定到草稿，
  * 再次提交是更新同一定义（PUT graph 带 revision）。
  */
-async function performSubmit(options: { saveOnly?: boolean; runMode?: WorkflowExecutionMode } = {}) {
-  if (submitting.value) return;
-  if (!nodeCount.value) {
+async function performSubmit(
+  options: { saveOnly?: boolean; runMode?: WorkflowExecutionMode; allowEmpty?: boolean; quiet?: boolean } = {},
+): Promise<SubmitWorkflowResult | null> {
+  if (submitting.value) return null;
+  if (!nodeCount.value && !options.allowEmpty) {
     message.warning("画布为空，先从上方设备按钮插入节点");
-    return;
+    return null;
   }
   if (slotCount.value) {
     message.warning(`还有 ${slotCount.value} 个空位未填充：点击虚线空位节点补全后再提交`);
-    return;
+    return null;
   }
   if (!conn.online) {
     message.error("尚未连接后端，无法提交");
-    return;
+    return null;
   }
-  if (!validateVariableGroups()) return;
+  if (!validateVariableGroups()) return null;
   syncVariablesToNodes();
   const transformed = buildSubmitGraph();
   if ("error" in transformed) {
     message.error(transformed.error);
-    return;
+    return null;
   }
   saveVariableProfile(workflowId.value);
   submitting.value = true;
@@ -4300,7 +4660,21 @@ async function performSubmit(options: { saveOnly?: boolean; runMode?: WorkflowEx
           "可以先「保存为定义」，运行前请移除或替换这些节点。",
         { duration: 12_000 },
       );
-      return;
+      return null;
+    }
+
+    // 入口参数 / 输出：画布管理 I/O 时随图一起写（顺序见 editor-workflow-io.ts planIoSave）
+    const referenced = referencedEntryNames(build.nodes.map((node) => JSON.stringify(node.param ?? {})));
+    if (referenced.size && !workflowIo.value) await ensureWorkflowIo();
+    let io: { declaration: ReturnType<typeof declarationOf>; referenced: Set<string> } | undefined;
+    if (workflowIo.value) {
+      const ioProblems = validateEditorIo(workflowIo.value, { nodeIds: new Set(liteNodes.value.map((n) => n.id)), referenced });
+      if (ioProblems.length) {
+        ioDrawerOpen.value = true;
+        message.error(`入口参数 / 输出待处理：${ioProblems[0]}`, { duration: 10_000 });
+        return null;
+      }
+      io = { declaration: declarationOf(workflowIo.value, (id) => build.uuidByNodeId.get(id)), referenced };
     }
 
     const name = workflowName.value.trim() || `画布流程 ${new Date().toLocaleString("zh-CN", { hour12: false })}`;
@@ -4314,13 +4688,17 @@ async function performSubmit(options: { saveOnly?: boolean; runMode?: WorkflowEx
         parameter_table: buildParameterTableMeta(workflowVariables.value) as unknown as JsonObject,
       },
       nodes: build.nodes,
+      edges: build.edges,
       saveOnly: options.saveOnly,
       prompter: entryPrompt,
+      io,
     });
     authorityWorkflowUuid.value = result.workflow.uuid;
     if (!workflowName.value.trim()) workflowName.value = name;
     flushDraftNow();
-    if (result.canceled) {
+    if (options.quiet) {
+      // 调用方（插入子工作流）自己给结果提示
+    } else if (result.canceled) {
       message.info(`已保存定义 ${name}（revision ${result.workflow.revision}），未提交运行`);
     } else if (result.task) {
       submissionOpen.value = false;
@@ -4329,12 +4707,22 @@ async function performSubmit(options: { saveOnly?: boolean; runMode?: WorkflowEx
     } else {
       message.success(`${result.created ? "已创建" : "已更新"}工作流定义 ${name}（revision ${result.workflow.revision}）`);
     }
+    return result;
   } catch (error) {
     if (error instanceof SubmitGraphError) {
       message.error(error.message, { duration: 10_000 });
+    } else if (error instanceof IoDeclareError) {
+      authorityWorkflowUuid.value = error.workflow.uuid;
+      flushDraftNow();
+      ioDrawerOpen.value = true;
+      message.error(
+        `${error.graphSaved ? "图已保存，但" : "图未保存："}入口参数 / 输出声明被后端拒绝：${describeError(error.original)}`,
+        { duration: 12_000 },
+      );
     } else {
       message.error(`提交失败：${describeError(error)}`, { duration: 10_000 });
     }
+    return null;
   } finally {
     submitting.value = false;
   }
@@ -4417,6 +4805,25 @@ onUnmounted(() => {
           @click="saveParameterTableToDefinition"
         >
           参数表存入定义
+        </NButton>
+        <NButton
+          size="small"
+          secondary
+          :type="ioErrors.length ? 'warning' : 'default'"
+          title="声明每次运行要填写的入口参数，以及任务对外给出的输出（保存定义时一起写入）"
+          @click="openIoDrawer"
+        >
+          入口参数
+          <span v-if="entryInputCount" class="button-count">{{ entryInputCount }}</span>
+        </NButton>
+        <NButton
+          size="small"
+          secondary
+          :disabled="!conn.schedulerOnline"
+          title="把一个已发布的工作流作为子工作流插入（插入前先保存当前画布）"
+          @click="openInsertWorkflow"
+        >
+          插入子工作流
         </NButton>
         <NButton
           size="small"
@@ -4901,6 +5308,40 @@ onUnmounted(() => {
                   </NSpace>
                 </template>
               </ActionParamFields>
+              <!-- 入口参数：顶层参数改为引用工作流入口参数，运行时由任务 input 给值 -->
+              <div class="panel-entry">
+                <div class="node-panel-col-title">
+                  入口参数
+                  <NButton size="tiny" quaternary @click="openIoDrawer">管理</NButton>
+                </div>
+                <div v-for="[key, name] in panelEntryRefs" :key="key" class="panel-entry-row">
+                  <code>{{ key }}</code>
+                  <span class="panel-entry-arrow">←</span>
+                  <NTag size="small" type="success" :bordered="false">{{ entryParameterTitle(name) }}</NTag>
+                  <NButton size="tiny" quaternary @click="unbindPanelParam(key, name)">改回固定值</NButton>
+                </div>
+                <div v-if="panelEntryKeyOptions.length" class="panel-entry-row">
+                  <NSelect
+                    v-model:value="panelEntryKey"
+                    :options="panelEntryKeyOptions"
+                    size="tiny"
+                    placeholder="选一个参数"
+                    class="panel-entry-select"
+                  />
+                  <NSelect
+                    v-model:value="panelEntryTarget"
+                    :options="panelEntryTargetOptions"
+                    size="tiny"
+                    placeholder="新建入口参数"
+                    class="panel-entry-select"
+                    :disabled="!panelEntryKey"
+                  />
+                  <NButton size="tiny" type="primary" secondary :disabled="!panelEntryKey" @click="bindPanelParamToEntry">
+                    设为入口参数
+                  </NButton>
+                </div>
+                <div v-else-if="!panelEntryRefs.length" class="node-panel-hint">当前没有可设为入口参数的顶层参数。</div>
+              </div>
             </section>
           </div>
 
@@ -5567,6 +6008,60 @@ onUnmounted(() => {
     </NDrawer>
 
     <EntryParamsDialog :prompt="entryPrompt" />
+    <EditorIoDrawer
+      v-model:show="ioDrawerOpen"
+      v-model:io="ioModel"
+      :node-options="ioOutputNodeOptions"
+      :usage="entryUsageMap"
+      :errors="ioErrors"
+      :bound="Boolean(authorityWorkflowUuid)"
+    />
+    <InsertWorkflowModal
+      v-model:show="insertOpen"
+      :parent-inputs="workflowIo?.inputs ?? []"
+      :current-workflow-uuid="authorityWorkflowUuid"
+      :busy="insertBusy || submitting"
+      :error="insertError"
+      @insert="insertPublishedWorkflow"
+    />
+    <NModal
+      :show="Boolean(compositeDetail)"
+      preset="card"
+      :title="`子工作流 · ${compositeDetail?.name ?? ''}`"
+      style="width: min(640px, 94vw)"
+      @update:show="!$event && (compositeDetailId = '')"
+    >
+      <template v-if="compositeDetail">
+        <NAlert type="info" :bordered="false" style="margin-bottom: 12px">
+          按发布版本 {{ compositeDetail.childRevision }} 的快照展开，画布上只读。要改步骤：编辑子工作流并重新发布，
+          然后移除这个调用、重新插入。连线只决定它在当前流程里的先后。
+        </NAlert>
+        <div class="composite-detail-meta">
+          子工作流 <EntityRef :uuid="compositeDetail.childWorkflowUuid" mono /> · 调用 <code>{{ compositeDetail.uuid.slice(0, 8) }}</code>
+        </div>
+        <div v-if="Object.keys(compositeDetail.arguments).length" class="composite-detail-args">
+          <span v-for="(value, key) in compositeDetail.arguments" :key="key" class="composite-detail-arg">
+            {{ describeCompositeArgument(String(key), value) }}
+          </span>
+        </div>
+        <table class="composite-detail-table">
+          <thead><tr><th>步骤</th><th>设备 / 动作</th><th>参数</th></tr></thead>
+          <tbody>
+            <tr v-for="step in compositeDetailSteps" :key="step.uuid">
+              <td>{{ step.name }}</td>
+              <td class="mono">{{ step.device || "—" }} / {{ step.action || "—" }}</td>
+              <td class="mono">{{ step.param || "—" }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </template>
+      <template #footer>
+        <NSpace justify="space-between">
+          <NButton type="error" secondary @click="removeCompositeNode(compositeDetailId)">移除这个子工作流调用</NButton>
+          <NButton @click="compositeDetailId = ''">关闭</NButton>
+        </NSpace>
+      </template>
+    </NModal>
     <WorkflowVariablesDrawer
       :show="variablesDrawerOpen"
       :variables="workflowVariables"
@@ -5701,6 +6196,76 @@ onUnmounted(() => {
   font-family: var(--font-mono);
   font-size: 11px;
   color: #a6acb5;
+}
+
+.panel-entry {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--hairline);
+}
+
+.panel-entry-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.panel-entry-row code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.panel-entry-arrow {
+  color: #8b929c;
+}
+
+.panel-entry-select {
+  flex: 1;
+  min-width: 0;
+}
+
+.composite-detail-meta {
+  font-size: 12px;
+  color: #5c6874;
+  margin-bottom: 8px;
+}
+
+.composite-detail-args {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.composite-detail-arg {
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: #ede9fe;
+  color: #5b21b6;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.composite-detail-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.composite-detail-table th,
+.composite-detail-table td {
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--hairline);
+  text-align: left;
+  vertical-align: top;
+}
+
+.composite-detail-table td.mono {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
 }
 
 .button-count {

@@ -14,7 +14,9 @@
 import type {
   BackendGraphWriteInput,
   BackendWorkflow,
+  BackendWorkflowEdgeWrite,
   BackendWorkflowGraph,
+  BackendWorkflowIODeclareInput,
   BackendWorkflowNodeWrite,
   BackendWorkflowTask,
   BackendWorkflowTaskSubmitInput,
@@ -24,6 +26,14 @@ import type {
 import { ApiError, BackendBusinessError, declaredWorkflowIo } from "@openlab/protocol";
 import { submitWithEntryInput, type EntryInputPrompter } from "./entry-params-prompt";
 import { LOOP_NODE_TYPE, loopSpecFromNodeData, type LoopNodeData } from "./workflow-loops";
+import {
+  COMPOSITE_NODE_TYPE,
+  collectNodeInputBindings,
+  compositeWriteNodes,
+  toEdgeWrite,
+  type CompositeNodeData,
+} from "./composite-nodes";
+import { planIoSave, sameDeclaration, type IoDeclaration } from "./editor-workflow-io";
 
 export interface SubmitNodeInput {
   id: string;
@@ -65,6 +75,8 @@ export interface BuildAuthorityGraphInput {
 
 export interface AuthorityGraphBuild {
   nodes: BackendWorkflowNodeWrite[];
+  /** 只有子工作流（组合调用）子树内部的边；画布本身不产生边。 */
+  edges: BackendWorkflowEdgeWrite[];
   /** 节点 id → 权威 uuid（新分配的也在里面，调用方写回草稿）。 */
   uuidByNodeId: Map<string, string>;
   warnings: string[];
@@ -249,6 +261,17 @@ export async function buildAuthorityGraph(input: BuildAuthorityGraphInput): Prom
   const nodeUuidOwners = new Map<string, string>();
   const reuseExistingUuids = input.reuseExistingUuids !== false;
   for (const node of input.nodes) {
+    if (node.type === COMPOSITE_NODE_TYPE) {
+      // 子工作流的身份由插入时的调用 uuid 决定（展开节点 uuid 由它派生），任何时候都不能换
+      const uuid = String((node.data as Partial<CompositeNodeData>).uuid ?? "").trim();
+      if (!isUsableUuid(uuid) || usedNodeUuids.has(uuid.toLowerCase())) {
+        throw new SubmitGraphError(`子工作流节点 ${node.id} 的调用身份缺失或重复，请删除后重新插入`);
+      }
+      uuidByNodeId.set(node.id, uuid);
+      usedNodeUuids.add(uuid.toLowerCase());
+      nodeUuidOwners.set(uuid.toLowerCase(), node.id);
+      continue;
+    }
     const stored = reuseExistingUuids
       ? (input.existingUuids?.get(node.id) ?? node.data.uuid)
       : undefined;
@@ -283,6 +306,9 @@ export async function buildAuthorityGraph(input: BuildAuthorityGraphInput): Prom
 
   const unknownDevices = new Set<string>();
   const nodes: BackendWorkflowNodeWrite[] = [];
+  const edges: BackendWorkflowEdgeWrite[] = [];
+  /** 子工作流子树里的节点 uuid：调用节点（type=workflow）不产生 Job，不算「本地跑不了」。 */
+  const compositeMembers = new Set<string>();
   const loopMemberCount = new Map<string, number>();
   for (const node of input.nodes) {
     if (node.loopId) loopMemberCount.set(node.loopId, (loopMemberCount.get(node.loopId) ?? 0) + 1);
@@ -294,6 +320,21 @@ export async function buildAuthorityGraph(input: BuildAuthorityGraphInput): Prom
     const dependsOn = upstream.get(node.id) ?? [];
     const pose: JsonObject = { x: Math.round(node.position.x), y: Math.round(node.position.y) };
     const disabled = input.disabled.has(node.id);
+
+    if (node.type === COMPOSITE_NODE_TYPE) {
+      const data = node.data as unknown as CompositeNodeData;
+      if (!Array.isArray(data.nodes) || data.nodes[0]?.uuid !== uuid) {
+        throw new SubmitGraphError(`子工作流「${String(data.name ?? node.id)}」缺少展开节点，请删除后重新插入`);
+      }
+      if (node.loopId) {
+        throw new SubmitGraphError(`子工作流「${data.name}」不能放进循环体，请先移出循环`);
+      }
+      const written = compositeWriteNodes(data, { pose, dependsOn, disabled, editorNodeId: node.id });
+      for (const item of written) compositeMembers.add(item.uuid);
+      nodes.push(...written);
+      edges.push(...(data.edges ?? []).map(toEdgeWrite));
+      continue;
+    }
     const groupMeta: JsonObject | undefined = node.group
       ? {
           id: node.group.id,
@@ -448,17 +489,35 @@ export async function buildAuthorityGraph(input: BuildAuthorityGraphInput): Prom
 
   const notLocallyExecutable = nodes
     .filter((node) => !node.disabled && !LOCALLY_EXECUTABLE_KINDS.has(node.type))
+    .filter((node) => !(compositeMembers.has(node.uuid) && String(node.type).toLowerCase() === "workflow"))
     .map((node) => ({ id: String(node.meta_data?.editor_node_id ?? node.uuid), name: node.name, type: node.type }));
-  return { nodes, uuidByNodeId, warnings, notLocallyExecutable };
+  return { nodes, edges, uuidByNodeId, warnings, notLocallyExecutable };
 }
 
-/** 提交只依赖 workflowBackend 域的这五个方法（便于测试注入）。 */
+/** 提交只依赖 workflowBackend 域的这几个方法（便于测试注入）；声明 I/O 时还要 graph / declareIo。 */
 export interface SubmitWorkflowApi {
   createWorkflow: (body: BackendWorkflowWriteInput) => Promise<BackendWorkflow>;
   updateWorkflow: (uuid: string, body: BackendWorkflowWriteInput) => Promise<BackendWorkflow>;
   workflow: (uuid: string) => Promise<BackendWorkflow>;
   saveGraph: (uuid: string, body: BackendGraphWriteInput) => Promise<BackendWorkflowGraph>;
   createTask: (body: BackendWorkflowTaskSubmitInput) => Promise<BackendWorkflowTask>;
+  graph?: (uuid: string) => Promise<BackendWorkflowGraph>;
+  declareIo?: (uuid: string, body: BackendWorkflowIODeclareInput) => Promise<BackendWorkflowGraph>;
+}
+
+/** 声明 I/O 失败（图已保存）：调用方据此提示「图已保存，但入口参数 / 输出没写进去」。 */
+export class IoDeclareError extends Error {
+  readonly original: unknown;
+  readonly graphSaved: boolean;
+  /** 已存在（或刚创建）的定义：调用方据此保持草稿绑定。 */
+  readonly workflow: BackendWorkflow;
+  constructor(original: unknown, graphSaved: boolean, workflow: BackendWorkflow) {
+    super(original instanceof Error ? original.message : String(original));
+    this.name = "IoDeclareError";
+    this.original = original;
+    this.graphSaved = graphSaved;
+    this.workflow = workflow;
+  }
 }
 
 export interface SubmitWorkflowInput {
@@ -475,6 +534,11 @@ export interface SubmitWorkflowInput {
   runMode?: "normal" | "step";
   /** 定义声明了入口参数时用来收集本次运行的 input；不给则不带 input 提交。 */
   prompter?: EntryInputPrompter;
+  /**
+   * 画布管理的入口参数 / 输出（缺省 = 不碰权威里的 I/O 声明）。`referenced` 是本次要写入的图里
+   * 引用到的入口参数名，用来判断存图前是否要先声明过渡合同（见 editor-workflow-io.ts planIoSave）。
+   */
+  io?: { declaration: IoDeclaration; referenced: ReadonlySet<string> };
 }
 
 export interface SubmitWorkflowResult {
@@ -517,13 +581,36 @@ export async function submitWorkflow(api: SubmitWorkflowApi, input: SubmitWorkfl
     created = true;
   }
 
+  const io = input.io;
+  if (io && (!api.graph || !api.declareIo)) throw new Error("提交 API 缺少 graph / declareIo，无法声明入口参数");
+  if (io) {
+    // 新引用要先进合同，PUT graph 才会接受；node_input_bindings 是完整替换，原样带回模板节点的绑定
+    const current = created ? null : await api.graph!(workflow.uuid);
+    const plan = planIoSave(declaredWorkflowIo(current?.workflow ?? workflow), io.declaration, io.referenced);
+    if (plan.before) {
+      try {
+        const declared = await api.declareIo!(workflow.uuid, {
+          revision: current?.workflow.revision ?? workflow.revision,
+          ...plan.before,
+          node_input_bindings: collectNodeInputBindings(current?.nodes ?? []),
+        });
+        workflow = declared.workflow;
+      } catch (error) {
+        throw new IoDeclareError(error, false, workflow);
+      }
+    } else if (current) {
+      workflow = current.workflow;
+    }
+  }
+
   let revision = workflow.revision;
+  let savedGraph: BackendWorkflowGraph | null = null;
   for (let attempt = 0; ; attempt++) {
     try {
-      const graph = await api.saveGraph(workflow.uuid, {
+      savedGraph = await api.saveGraph(workflow.uuid, {
         revision, nodes: input.nodes, edges: input.edges ?? [], site_binding_mode: "preserve",
       });
-      workflow = graph.workflow;
+      workflow = savedGraph.workflow;
       break;
     } catch (error) {
       if (attempt === 0 && error instanceof BackendBusinessError && error.isConflict) {
@@ -531,6 +618,19 @@ export async function submitWorkflow(api: SubmitWorkflowApi, input: SubmitWorkfl
         continue;
       }
       throw error;
+    }
+  }
+
+  if (io && savedGraph && !sameDeclaration(declaredWorkflowIo(workflow), io.declaration)) {
+    try {
+      const declared = await api.declareIo!(workflow.uuid, {
+        revision: workflow.revision,
+        ...io.declaration,
+        node_input_bindings: collectNodeInputBindings(savedGraph.nodes),
+      });
+      workflow = declared.workflow;
+    } catch (error) {
+      throw new IoDeclareError(error, true, workflow);
     }
   }
 
