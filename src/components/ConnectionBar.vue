@@ -5,21 +5,30 @@
  * 地址 = `unilab` 进程管理端口（`--port`，默认 8002），默认直连本机。只有要连别的
  * 进程（另一台 Host、`--role backend` 调度权威）或显式启用了 Vite 代理 / 反向代理
  * （此时地址就是页面同源）时才需要改。
+ *
+ * 控制令牌也在这里填：写请求被拒（401 + 4001）时弹窗提示，并可直接打开填写框。
  */
-import { computed, ref, watch } from "vue";
-import { NButton, NIcon, NInput, NPopover, useMessage } from "naive-ui";
+import { computed, nextTick, ref, watch } from "vue";
+import { NButton, NIcon, NInput, NPopover, useDialog, useMessage, type InputInst } from "naive-ui";
 import { SettingsOutline } from "@vicons/ionicons5";
 import StatusPill from "./StatusPill.vue";
 import { DEFAULT_LOCAL_EDGE_URL, DEV_PROXY_TARGET, normalizeBaseUrl, useConnectionStore } from "../stores/connection";
 import { classifyTarget, portProxyCommand } from "../features/insecure-target";
+import { maskControlToken } from "../features/control-token";
 
 const conn = useConnectionStore();
 const message = useMessage();
+const dialog = useDialog();
 const draft = ref(conn.baseUrl);
 const show = ref(false);
+const tokenDraft = ref("");
+const tokenInput = ref<InputInst | null>(null);
 
 watch(show, (open) => {
-  if (open) draft.value = conn.baseUrl;
+  if (open) {
+    draft.value = conn.baseUrl;
+    tokenDraft.value = "";
+  }
 });
 
 const stripScheme = (url: string) => url.replace(/^https?:\/\//, "");
@@ -60,6 +69,55 @@ const originNote = computed(() => {
   return "";
 });
 
+function saveToken() {
+  const value = tokenDraft.value.trim();
+  if (!value) return;
+  if (!conn.setToken(value)) {
+    message.error("令牌格式不对：应是一串不含空格的字符，请完整复制 unilab token 的输出");
+    return;
+  }
+  tokenDraft.value = "";
+  message.success(`控制令牌已保存（仅用于 ${hostPort.value}）`);
+}
+
+function clearToken() {
+  conn.clearToken();
+  tokenDraft.value = "";
+  message.info("已清除控制令牌");
+}
+
+/** 打开连接设置并聚焦令牌输入框。延后一拍：从对话框按钮点进来时，免得同一次点击被当成「点击外部」关掉。 */
+function openTokenEditor() {
+  window.setTimeout(() => {
+    show.value = true;
+    void nextTick(() => tokenInput.value?.focus());
+  }, 0);
+}
+
+/** 写请求被拒：每次进入「被拒」状态提示一次；之后的失败由各页面的错误文案说明。 */
+let tokenDialogOpen = false;
+watch(() => conn.tokenRejected, (rejected) => {
+  if (!rejected) return;
+  if (show.value) {
+    void nextTick(() => tokenInput.value?.focus());
+    return;
+  }
+  if (tokenDialogOpen) return;
+  tokenDialogOpen = true;
+  dialog.warning({
+    title: "需要控制令牌",
+    content: conn.token
+      ? `${hostPort.value} 拒绝了写操作：保存的控制令牌不正确或已更换。请在运行 unilab 的机器上执行 unilab token 查看当前令牌，重新填写。`
+      : `${hostPort.value} 要求控制令牌才能执行写操作。请在运行 unilab 的机器上执行 unilab token 查看令牌，填写到连接设置。`,
+    positiveText: "填写令牌",
+    negativeText: "稍后",
+    onPositiveClick: () => openTokenEditor(),
+    onAfterLeave: () => {
+      tokenDialogOpen = false;
+    },
+  });
+});
+
 async function apply(url = draft.value) {
   conn.setBaseUrl(url);
   draft.value = conn.baseUrl;
@@ -81,6 +139,16 @@ async function apply(url = draft.value) {
       :label="conn.readinessState.badge ? `${conn.roleLabel} · ${conn.readinessState.badge}` : conn.roleLabel"
       :title="[conn.readinessState.detail, ...conn.readinessState.reasons].join('\n')"
     />
+    <NButton
+      v-if="conn.tokenRejected"
+      size="small"
+      type="warning"
+      secondary
+      title="写操作被后端拒绝：控制令牌缺失或不正确"
+      @click="openTokenEditor()"
+    >
+      需要控制令牌
+    </NButton>
     <NPopover v-model:show="show" trigger="click" placement="bottom-end" :width="380">
       <template #trigger>
         <NButton quaternary size="small" title="连接设置" aria-label="连接设置">
@@ -154,6 +222,34 @@ async function apply(url = draft.value) {
           本页面是 HTTPS：Chrome / Edge / Firefox 允许直连本机 <code>http://127.0.0.1</code>；
           Safari 会拦截，请改用其他浏览器或用 <code>http://</code> 打开本站。
         </p>
+
+        <div class="pop-token">
+          <div class="pop-head">
+            <span class="pop-title">控制令牌</span>
+            <span class="token-state mono" :class="{ unset: !conn.token }">
+              {{ conn.token ? `已设置 ${maskControlToken(conn.token)}` : "未设置" }}
+            </span>
+          </div>
+          <div class="pop-row">
+            <NInput
+              ref="tokenInput"
+              v-model:value="tokenDraft"
+              type="password"
+              show-password-on="click"
+              :placeholder="conn.token ? '粘贴新令牌以替换' : '粘贴控制令牌'"
+              :input-props="{ autocomplete: 'off', spellcheck: false }"
+              size="small"
+              class="mono"
+              @keyup.enter="saveToken()"
+            />
+            <NButton size="small" :disabled="!tokenDraft.trim()" @click="saveToken()">保存</NButton>
+            <NButton v-if="conn.token" size="small" quaternary @click="clearToken()">清除</NButton>
+          </div>
+          <p class="pop-hint">写操作需要它；在运行 unilab 的机器上执行 <code>unilab token</code> 查看。</p>
+          <p v-if="conn.tokenRejected" class="pop-error">
+            {{ conn.token ? "后端拒绝了写操作：当前令牌不正确或已更换，请重新填写。" : "后端要求控制令牌才能执行写操作，请先填写。" }}
+          </p>
+        </div>
 
         <a class="link-btn" href="https://github.com/Xuwznln/OpenLabSite/blob/main/docs/LOCAL_START.md" target="_blank" rel="noopener noreferrer">首次使用？查看本地启动教程</a>
         <div class="pop-foot">
@@ -247,6 +343,26 @@ async function apply(url = draft.value) {
 .pop-row {
   display: flex;
   gap: 8px;
+}
+
+.pop-token {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--hairline);
+}
+
+.token-state {
+  font-size: 12px;
+  font-weight: 600;
+  color: #0b7a55;
+}
+
+.token-state.unset {
+  font-family: var(--font-sans);
+  font-weight: 500;
+  color: #6e7580;
 }
 
 .pop-row .mono :deep(input) {

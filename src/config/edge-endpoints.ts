@@ -1,5 +1,10 @@
 export const DEFAULT_LOCAL_EDGE_URL = "http://127.0.0.1:8002";
 
+/** 后端地址归一：去首尾空白与末尾斜杠（地址持久化、控制令牌分后端存放共用同一口径）。 */
+export function normalizeBaseUrl(value: string): string {
+  return value.trim().replace(/\/+$/, "");
+}
+
 const LEGACY_DEMO_ENDPOINTS = new Set([
   "https://edge.whalent.com",
   "http://140.143.251.219:28005",

@@ -1,5 +1,13 @@
 # Changelog
 
+## 未发布：写请求的控制令牌
+
+- 传输层新增 `getToken` 选项（`createHttpTransport` / `createEdgeApi`，类型 `ControlTokenProvider`）：
+  写请求（POST / PUT / PATCH / DELETE）发出前现取令牌，非空时附加 `Authorization: Bearer <token>`。
+  GET 与 SSE 不带令牌；未提供或返回空值时请求与此前完全一致，旧版微后端不受影响。
+- `ApiError.isControlTokenRejected`（HTTP 401 + `code` 4001，常量 `CONTROL_TOKEN_REJECTED_CODE`）：
+  写请求因令牌缺失或不正确被拒。令牌由微后端保存在 `<working_dir>/control_token`，`unilab token` 查看。
+
 ## 未发布：内容物关联化学品定义；修正物料数据 / 位置写入的 operation
 
 - 快照同步 Uni-Lab-OS `feat/substance-chemical-link`（dev + PR #353）：路由不变，`MaterialSubstance`

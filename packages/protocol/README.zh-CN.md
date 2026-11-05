@@ -78,6 +78,16 @@ try {
 `127.0.0.1:8002` 是调用方机器上的后端管理 API，不是 HostLink 设备通信端口。
 能力是否可用取决于后端版本、进程角色和当前运行状态。
 
+### 控制令牌
+
+要求控制令牌的后端会以 HTTP 401 拒绝不带令牌的写请求（POST / PUT / PATCH / DELETE，
+`error.isControlTokenRejected`）。在后端机器上执行 `unilab token` 查看令牌，再传入取值函数；
+每次写请求现取，更新令牌无需重建客户端。读请求与事件流始终不带令牌。
+
+```ts
+const api = createEdgeApi("http://127.0.0.1:8002", { getToken: () => localStorage.getItem("token") });
+```
+
 ### 实时通知
 
 SDK 提供事件流地址；订阅生命周期由应用管理。通知用于触发 HTTP 重读，不应作为完整业务正文。
