@@ -22,6 +22,7 @@ describe("通用版主题", () => {
       "monitor",
       "editor",
       "inventory",
+      "chemicals",
       "devices",
       "toolkit",
       "entities",

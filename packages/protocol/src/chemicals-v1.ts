@@ -36,6 +36,23 @@ export interface Chemical {
   version: number;
 }
 
+/**
+ * 物料内容物读取时附带的化学品摘要（`MaterialsV1Substance.chemical`，只读，写入时被忽略）。
+ * 字段与 {@link Chemical} 同名同义，是它的子集。
+ */
+export type ChemicalSummary = Pick<
+  Chemical,
+  | "chemical_uuid"
+  | "name"
+  | "cas"
+  | "inchi_key"
+  | "molecular_formula"
+  | "smiles"
+  | "molecular_weight"
+  | "density_g_per_ml"
+  | "physical_state"
+>;
+
 /** POST /chemicals（拒绝未知字段）。 */
 export interface ChemicalWriteInput {
   name: string;

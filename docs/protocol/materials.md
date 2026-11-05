@@ -16,8 +16,8 @@ Edge 设备侧只持有投影，前端在权威完成变更后可经 `notify-dev
   （`active reserved in_use quarantined consumed retired`）`version`。
 - `position`：`position_x/y/z`（可为 null = 权威中无坐标）、`size_width/height/depth`、
   旋转、`layout`、`cross_section_type`。实验室地图直接用这些字段绘制。
-- `data`：`substances[]`（name / quantity / quantity_unit / physical_state）、业务 `data`、
-  `content_version`。
+- `data`：`substances[]`（name / quantity / quantity_unit / physical_state，关联了化学品时还有
+  `chemical_uuid` 与只读摘要 `chemical`）、业务 `data`、`content_version`。
 - `sites[]`：`site_uuid` `label` `site_index` `occupied_material_uuid` `pose`
   `allowed_resource_categories` `owner_material_uuid`。位点占用只由权威维护。
 
@@ -66,8 +66,8 @@ Edge 设备侧只持有投影，前端在权威完成变更后可经 `notify-dev
 | POST | `/materials/instantiate` | `instantiate_material` | `{registry_class, name, barcode?}` → 微后端按 registry 实例化并落库，返回整棵树 |
 | POST | `/materials/trees` | `create_material_tree` | `{nodes[]}` parent-first、恰一个根 |
 | PATCH | `/materials/instances/{uuid}` | `patch_material` | 名称 / 条码 / 描述 / lifecycle_status 等标识字段 |
-| PUT | `/materials/instances/{uuid}/data` | `put_material_data` | `substances[]` / `data` |
-| PUT | `/materials/instances/{uuid}/position` | `put_material_position` | 位置 / 尺寸 |
+| PUT | `/materials/instances/{uuid}/data` | `put_data` | 整份替换 `substances[]` / `data` / `sites_initialized` / 状态（漏传即清空） |
+| PUT | `/materials/instances/{uuid}/position` | `put_position` | 位置 / 尺寸 |
 | DELETE | `/materials/instances/{uuid}` | `delete_material` | `{material_uuid, recursive}`；释放占用位点 |
 | POST | `/materials/move` | `move_material` | `{material_uuid, destination_site_uuid?, parent_material_uuid?}` 同一权威内换位 |
 | POST | `/materials/transfer` | `transfer_material` | `{source_device_id, target_device_id, items[{material_uuid, target_material_uuid, target_site}]}` 跨设备：权威提交位置 + 两端设备同步，返回即已确认 |
@@ -95,3 +95,22 @@ Edge 设备侧只持有投影，前端在权威完成变更后可经 `notify-dev
 
 `payload.nodes[]` 是 `config_info` 风格的物料行（`id` `uuid` `type` `class` `pose` `sites`…），
 `payload.links[]` 是 `{source, target, type?, source_handle?, target_handle?}`。
+
+## 内容物关联化学品定义（materials.db v3）
+
+`MaterialSubstance.chemical_uuid` 引用 `chemicals-v1` 的化学品定义；读取时有引用的内容物另带只读摘要
+`chemical`（`chemical_uuid name cas inchi_key molecular_formula smiles molecular_weight density_g_per_ml
+physical_state`），化学品已软删除时 `chemical` 为 null、uuid 保留；未关联的内容物两个键都不出现。
+
+写入（`put_data` / 建树 / 快照 / 增量）时三种写法语义不同：
+
+| 写法 | 语义 |
+| --- | --- |
+| 省略 `chemical_uuid` | 沿用同一物料同名（不区分大小写）内容物已有的引用；没有就按名称 / 英文名 / 别名 / CAS 唯一匹配自动关联 |
+| `chemical_uuid: null` | 解除引用，本次写入不自动匹配（之后省略的写入仍按上一行处理） |
+| `chemical_uuid: "<uuid>"` | 关联；必须是未删除的化学品，否则 HTTP 422 |
+
+`chemical` 写入时被忽略。「省略」与「null」是两个不同的请求（幂等哈希不同）。前端只在用户改了关联的那一份
+带 `chemical_uuid`，其余省略，并以读到的聚合 `state_hash` 作前提（`aggregate_type: "material"`），
+期间被设备上报或别的页面改过就 409 而不是覆盖。
+

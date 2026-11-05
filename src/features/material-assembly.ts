@@ -1,4 +1,4 @@
-import type { MaterialsV1Aggregate, MaterialsV1Tree } from "@openlab/protocol";
+import type { MaterialsV1Aggregate, MaterialsV1Substance, MaterialsV1Tree } from "@openlab/protocol";
 import { finiteNumber, mapSites, type MapSite } from "./material-map";
 
 export interface AssemblyNode {
@@ -10,7 +10,8 @@ export interface AssemblyNode {
   barcode?: string;
   status: string;
   slot_id: string;
-  content: { substance?: string; volume_ml?: number };
+  /** 第一份内容物：名称、体积，以及原始记录（含关联的化学品摘要）。 */
+  content: { substance?: string; volume_ml?: number; record?: MaterialsV1Substance };
   geometry: { x: number; y: number; z: number; w: number; d: number; h: number };
   emptySites: MapSite[];
   children: AssemblyNode[];
@@ -47,7 +48,8 @@ export function assemblyFromMaterials(tree: MaterialsV1Tree): LabAssembly {
       category: identity.resource_type, barcode: identity.barcode, status: identity.lifecycle_status,
       slot_id: parentSite?.site.label || "", spec: { volume_ml: explicitVolume },
       content: { substance: substance?.name, volume_ml: explicitVolume ??
-        (substance?.quantity_unit.toLowerCase() === "ml" ? substance.quantity : undefined) },
+        (substance?.quantity_unit.toLowerCase() === "ml" ? substance.quantity : undefined),
+        ...(substance ? { record: substance } : {}) },
       geometry: {
         // 位点是当前落位事实：move 可只更新关系，不必等待设备补上位置快照。
         x: parentSite?.x ?? finiteNumber(p.position_x, 0),
