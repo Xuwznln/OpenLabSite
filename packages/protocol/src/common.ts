@@ -131,6 +131,9 @@ export class BackendBusinessError extends Error {
 import axios from "axios";
 import type { AxiosInstance } from "axios";
 
+/** 写请求被拒（HTTP 401）时微后端返回的业务码：控制令牌缺失或不正确。 */
+export const CONTROL_TOKEN_REJECTED_CODE = 4001 as const;
+
 export class ApiError extends Error {
   readonly status: number;
   readonly body?: ProtocolErrorBody;
@@ -151,7 +154,18 @@ export class ApiError extends Error {
   get isUnsupported(): boolean {
     return this.status === 404 || this.status === 503;
   }
+
+  /** 写请求因控制令牌缺失或不正确被拒（HTTP 401 + code 4001）；旧版微后端不会返回。 */
+  get isControlTokenRejected(): boolean {
+    return this.status === 401 && Number(this.body?.code) === CONTROL_TOKEN_REJECTED_CODE;
+  }
 }
+
+/**
+ * 控制令牌来源：每次写请求时调用，返回空值表示「不带令牌」。
+ * 令牌由微后端保存在 `<working_dir>/control_token`，用户经 `unilab token` 查看。
+ */
+export type ControlTokenProvider = () => string | null | undefined;
 
 export interface HttpTransportOptions {
   /** 默认请求超时（毫秒），默认 10_000。 */
@@ -160,6 +174,15 @@ export interface HttpTransportOptions {
   headers?: Record<string, string>;
   /** 注入自定义 axios 实例（测试 mock / 自定义拦截器）；默认内部创建。 */
   axios?: AxiosInstance;
+  /**
+   * 控制令牌：写请求（POST / PUT / PATCH / DELETE）发出前调用，返回非空字符串时附加
+   * `Authorization: Bearer <token>`。读请求（GET、SSE）不需要令牌，始终不带，避免额外的
+   * CORS 预检；未提供或返回空值时请求与不带该选项时完全一致。
+   *
+   * 用标准 `Authorization` 头而不是自定义头：旧版微后端的 CORS 只放行
+   * `Authorization, Content-Type, Accept, Last-Event-ID`。
+   */
+  getToken?: ControlTokenProvider;
 }
 
 export interface RequestConfig {
@@ -202,7 +225,20 @@ export function createHttpTransport(
       validateStatus: () => true,
     });
 
+  /** 单次请求的 headers；两者都不需要时返回 undefined（与不带令牌的旧行为逐字节一致）。 */
+  function requestHeaders(config: RequestConfig): Record<string, string> | undefined {
+    const headers: Record<string, string> = {};
+    // 只有带正文时才声明 JSON：workflow 路由会解码任何 JSON 类型的请求体，
+    // 空体 + application/json 会被判为格式错误。
+    if (config.body !== undefined) headers["Content-Type"] = "application/json";
+    // 令牌每次请求现取：调用方更新令牌后无需重建客户端。
+    const token = config.method === "GET" ? "" : options.getToken?.()?.trim();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    return Object.keys(headers).length ? headers : undefined;
+  }
+
   async function request<T>(config: RequestConfig): Promise<T> {
+    const headers = requestHeaders(config);
     let response;
     try {
       response = await instance.request<T>({
@@ -211,9 +247,7 @@ export function createHttpTransport(
         params: cleanParams(config.params),
         paramsSerializer: { indexes: null },
         data: config.body,
-        // 只有带正文时才声明 JSON：workflow 路由会解码任何 JSON 类型的请求体，
-        // 空体 + application/json 会被判为格式错误。
-        headers: config.body === undefined ? undefined : { "Content-Type": "application/json" },
+        headers,
         timeout: config.timeoutMs ?? defaultTimeout,
         validateStatus: () => true,
       });

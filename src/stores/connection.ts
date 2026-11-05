@@ -11,6 +11,9 @@
  *
  * health 在线后再读 `/api/v1/readiness`（能否接收并执行任务：设备初始化 / Host 重启期间
  * not_ready）；旧后端 404 时记为不支持，之后不再探测（换地址时重置）。
+ *
+ * 控制令牌按后端地址分开保存；写请求经 `getToken` 现取，只发给令牌所属的那个地址。
+ * 写请求被拒（401 + 4001）由 describeError 上报，`tokenRejected` 置位直到重新保存令牌或换地址。
  */
 
 import { defineStore } from "pinia";
@@ -29,17 +32,21 @@ import { bindWorkflowInvalidations, WORKFLOW_INVALIDATION_EVENT_TYPES } from "..
 import { openNoticeSource, type NoticeSource } from "../features/shared-notice";
 import { describeError, isOfflineError } from "../features/errors";
 import { classifyTarget } from "../features/insecure-target";
-import { DEFAULT_LOCAL_EDGE_URL, initialBackendUrl } from "../config/edge-endpoints";
+import {
+  CONTROL_TOKEN_STORAGE_PREFIX,
+  isValidControlToken,
+  onControlTokenRejected,
+  readControlToken,
+  writeControlToken,
+  type ConnectionLink,
+} from "../features/control-token";
+import { DEFAULT_LOCAL_EDGE_URL, initialBackendUrl, normalizeBaseUrl } from "../config/edge-endpoints";
 
 const STORAGE_KEY = "openlab:base-url";
 const RECENT_KEY = "openlab:recent-base-urls";
 
-export { DEFAULT_LOCAL_EDGE_URL };
+export { DEFAULT_LOCAL_EDGE_URL, normalizeBaseUrl };
 const LOCAL_DEFAULT_MIGRATION_KEY = "openlab:local-default-v1";
-
-export function normalizeBaseUrl(value: string): string {
-  return value.trim().replace(/\/+$/, "");
-}
 
 export type NoticeState = "unsupported" | "connecting" | "live" | "retry";
 export type CapabilityState = "unknown" | "available" | "unsupported";
@@ -177,7 +184,24 @@ export const useConnectionStore = defineStore("connection", () => {
   /** 连接状态里的就绪口径（胶囊文案 / 颜色 / 原因）。 */
   const readinessState = computed(() => readinessView(readiness.value, readinessSupport.value, online.value));
 
-  const api = computed<EdgeApi>(() => createEdgeApi(baseUrl.value));
+  // ── 控制令牌 ──────────────────────────────────────────────
+  /** 令牌变更计数：localStorage 本身不是响应式，保存 / 清除 / 其他标签页改动时自增。 */
+  const tokenRevision = ref(0);
+  /** 当前后端已保存的令牌（空串 = 未设置）。 */
+  const token = computed(() => {
+    void tokenRevision.value;
+    return readControlToken(localStorage, baseUrl.value);
+  });
+  /** 最近一次写请求因令牌缺失 / 不正确被拒；重新保存令牌或换地址时清除。 */
+  const tokenRejected = ref(false);
+  /** 由外部链接（?backend=）指定了地址：同源探测不再覆盖它。 */
+  let linkedUrl = false;
+
+  // getToken 绑定创建时的地址：即使旧实例上还有在途写请求，也不会把令牌带给别的后端。
+  const api = computed<EdgeApi>(() => {
+    const url = baseUrl.value;
+    return createEdgeApi(url, { getToken: () => readControlToken(localStorage, url) });
+  });
 
   /** 本进程是否持有 Workflow Authority（可创建/编辑/运行工作流）。 */
   const schedulerLocal = computed(() => online.value && health.value?.scheduler !== "remote");
@@ -238,6 +262,41 @@ export const useConnectionStore = defineStore("connection", () => {
     localStorage.setItem(STORAGE_KEY, next);
     rememberRecent(next);
   }
+
+  /** 为当前后端保存令牌；格式不合法（含空白 / 非 ASCII）时不保存并返回 false。 */
+  function setToken(value: string): boolean {
+    const next = value.trim();
+    if (!isValidControlToken(next)) return false;
+    writeControlToken(localStorage, baseUrl.value, next);
+    tokenRevision.value += 1;
+    tokenRejected.value = false;
+    return true;
+  }
+
+  function clearToken() {
+    writeControlToken(localStorage, baseUrl.value, "");
+    tokenRevision.value += 1;
+  }
+
+  /** 外部链接导入：先切地址，再把令牌存到该地址名下。 */
+  function applyConnectionLink(link: ConnectionLink) {
+    if (link.backend) {
+      linkedUrl = true;
+      setBaseUrl(link.backend);
+    }
+    if (link.token) setToken(link.token);
+  }
+
+  onScopeDispose(onControlTokenRejected(() => {
+    tokenRejected.value = true;
+  }));
+
+  /** 其他标签页保存 / 清除令牌时同步展示（请求本身每次现取，不依赖这里）。 */
+  function onStorage(event: StorageEvent) {
+    if (event.key === null || event.key.startsWith(CONTROL_TOKEN_STORAGE_PREFIX)) tokenRevision.value += 1;
+  }
+  window.addEventListener("storage", onStorage);
+  onScopeDispose(() => window.removeEventListener("storage", onStorage));
 
   let registryProbePending = false;
 
@@ -327,7 +386,7 @@ export const useConnectionStore = defineStore("connection", () => {
       void detectSameOriginBackend().then((hit) => {
         if (!hit) return;
         sameOriginBackend.value = true;
-        if (!storedUrl && baseUrl.value === initialUrl) setBaseUrl(PAGE_ORIGIN);
+        if (!storedUrl && !linkedUrl && baseUrl.value === initialUrl) setBaseUrl(PAGE_ORIGIN);
       });
     }
   }
@@ -347,6 +406,7 @@ export const useConnectionStore = defineStore("connection", () => {
   watch(baseUrl, () => {
     health.value = null;
     online.value = false;
+    tokenRejected.value = false;
     registrySupport.value = "unknown";
     readiness.value = null;
     readinessSupport.value = "unknown";
@@ -385,6 +445,11 @@ export const useConnectionStore = defineStore("connection", () => {
     onLogNotice,
     api,
     setBaseUrl,
+    token,
+    tokenRejected,
+    setToken,
+    clearToken,
+    applyConnectionLink,
     checkHealth,
     startPolling,
     stopPolling,

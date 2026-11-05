@@ -41,6 +41,7 @@ import { createWorkflowBackendApi } from "./workflow-backend.js";
 
 export { ApiError, BackendBusinessError } from "./common.js";
 
+/** 传输层选项：超时、默认 headers、自定义 axios，以及写请求控制令牌 `getToken`。 */
 export type EdgeApiOptions = HttpTransportOptions;
 
 export interface EdgeApiDomains {

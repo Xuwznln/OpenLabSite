@@ -80,6 +80,17 @@ try {
 The default endpoint is the backend management API on the caller's computer, not the HostLink device port.
 Availability depends on the backend build, process role, and runtime state.
 
+### Control token
+
+Backends that require a control token reject write requests (POST / PUT / PATCH / DELETE) without it
+with HTTP 401 (`error.isControlTokenRejected`). Run `unilab token` on the backend machine to see it,
+then pass a provider; it is read on every write request, so updating it needs no new client.
+Read requests and event streams never carry the token.
+
+```ts
+const api = createEdgeApi("http://127.0.0.1:8002", { getToken: () => localStorage.getItem("token") });
+```
+
 ### Real-time notifications
 
 The SDK exposes event-stream URLs; the caller manages subscriptions.
