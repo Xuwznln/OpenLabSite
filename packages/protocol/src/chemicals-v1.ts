@@ -5,11 +5,11 @@
  * 行之间唯一，软删除后可以重新登记）。CAS 校验格式与校验位，InChIKey 统一大写。
  *
  * - 响应使用 `{code, data, error}` 信封（经 common.ts 唯一解包器抛 BackendBusinessError）；
- *   业务码与 graphs 一致：**2** 参数错误（不是 workflow 的 1000）、3002 不存在、
- *   3003 冲突（重复 CAS / InChIKey、版本过期）。
+ *   业务码与 workflow / graphs 同一张表（Uni-Lab-OS api/envelope.py）：1000 参数错误、
+ *   3002 不存在、3003 冲突（重复 CAS / InChIKey、版本过期）。
  * - 修改与删除带 `expected_version` 乐观锁；时间是毫秒整数（`*_ms`）。
  */
-import { backendRequest, backendVoid, type HttpTransport, type JsonObject } from "./common.js";
+import { BACKEND_BUSINESS_CODES, backendRequest, backendVoid, type HttpTransport, type JsonObject } from "./common.js";
 
 export type ChemicalPhysicalState = "liquid" | "solid" | "gas" | "unknown";
 
@@ -91,11 +91,11 @@ export interface ChemicalPage {
   page_size: number;
 }
 
-/** 化学品定义业务码（与 workflow 域的 1000 不同，参数错误是 2）。 */
+/** 化学品定义业务码：与 workflow / graphs 共用 BACKEND_BUSINESS_CODES。 */
 export const CHEMICAL_BUSINESS_CODES = {
-  invalidInput: 2,
-  notFound: 3002,
-  conflict: 3003,
+  invalidInput: BACKEND_BUSINESS_CODES.invalidInput,
+  notFound: BACKEND_BUSINESS_CODES.notFound,
+  conflict: BACKEND_BUSINESS_CODES.conflict,
 } as const;
 
 export function createChemicalsV1Api(http: HttpTransport) {

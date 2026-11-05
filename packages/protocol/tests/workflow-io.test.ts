@@ -144,15 +144,15 @@ describe("chemicals-v1 化学品定义", () => {
     expect(mock.calls.at(-1)?.params).toEqual({ expected_version: 2 });
   });
 
-  it("业务失败按信封抛错：参数错误是 2，重复与过期是 3003", async () => {
+  it("业务失败按信封抛错：参数错误是 1000，重复与过期是 3003", async () => {
     const mock = createMockHttp();
     const api = createChemicalsV1Api(mock.http);
-    mock.nextResponse = { status: 200, data: { code: 2, error: "CAS 登记号校验位不正确：'7732-18-4'" } };
+    mock.nextResponse = { status: 200, data: { code: 1000, error: { msg: "CAS 登记号校验位不正确：'7732-18-4'" } } };
     await expect(api.createChemical({ name: "坏的", cas: "7732-18-4" })).rejects.toMatchObject({
       code: CHEMICAL_BUSINESS_CODES.invalidInput,
       message: expect.stringContaining("校验位"),
     });
-    mock.nextResponse = { status: 200, data: { code: 3003, error: "版本已过期" } };
+    mock.nextResponse = { status: 200, data: { code: 3003, error: { msg: "版本已过期" } } };
     await expect(api.deleteChemical("c1", 1)).rejects.toMatchObject({ code: CHEMICAL_BUSINESS_CODES.conflict });
     mock.nextResponse = { status: 200, data: { code: 0 } };
     await expect(api.deleteChemical("c1", 2)).resolves.toBeUndefined();
