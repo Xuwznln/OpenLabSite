@@ -28,7 +28,18 @@ describe("内容物关联状态", () => {
   it("有摘要 = 已关联；有 uuid 无摘要 = 化学品已删除；两键缺席 = 未关联", () => {
     expect(substanceLink(substance("溶剂", { chemical_uuid: "c-water", chemical: SUMMARY }))).toEqual({ kind: "linked", chemicalUuid: "c-water", summary: SUMMARY });
     expect(substanceLink(substance("溶剂", { chemical_uuid: "c-gone", chemical: null }))).toEqual({ kind: "deleted", chemicalUuid: "c-gone" });
-    expect(substanceLink(substance("溶剂"))).toEqual({ kind: "unlinked" });
+    expect(substanceLink(substance("溶剂"))).toEqual({ kind: "unlinked", manual: false });
+  });
+
+  it("chemical_unlinked = 手动解除过（不会再自动关联）；更早的后端不发这个键", () => {
+    expect(substanceLink(substance("溶剂", { chemical_unlinked: true }))).toEqual({ kind: "unlinked", manual: true });
+    expect(substanceLink(substance("溶剂", { chemical_unlinked: false }))).toEqual({ kind: "unlinked", manual: false });
+  });
+
+  it("回传不带只读的 chemical_unlinked，已解除的那份显式为 null", () => {
+    const body = dataWriteWithLink(aggregate([substance("水", { chemical_unlinked: true }), substance("样品")]).data, 1, "c-new");
+    expect(body.substances?.map((item) => item.chemical_uuid)).toEqual([null, "c-new"]);
+    expect(body.substances?.some((item) => Object.prototype.hasOwnProperty.call(item, "chemical_unlinked"))).toBe(false);
   });
 });
 

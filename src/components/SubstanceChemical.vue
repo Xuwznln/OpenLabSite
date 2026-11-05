@@ -28,7 +28,8 @@ const link = computed(() => substanceLink(props.substance));
     <template v-else-if="link.kind === 'deleted'">
       <RouterLink class="chem-deleted" :to="chemicalPath(link.chemicalUuid)" title="引用保留，化学品已被删除">关联的化学品已删除</RouterLink>
     </template>
-    <span v-else class="chem-none">未关联化学品</span>
+    <span v-else-if="link.manual" class="chem-none" title="已手动解除：设备按名称上报不会再自动关联，需要时手动关联">已解除关联</span>
+    <span v-else class="chem-none" title="按名称 / 别名 / CAS 唯一匹配到化学品时会自动关联">未关联化学品</span>
     <span v-if="props.editable" class="chem-actions">
       <NButton size="tiny" quaternary type="primary" :disabled="props.busy" @click="emit('link')">
         {{ link.kind === "unlinked" ? "关联化学品" : "更换" }}
