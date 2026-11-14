@@ -1,11 +1,11 @@
 /**
- * 控制令牌：微后端要求写请求（POST / PUT / PATCH / DELETE）带 `Authorization: Bearer <token>`，
- * 读请求与 SSE 不需要。令牌由后端保存在 `<working_dir>/control_token`，用户在运行 unilab
- * 的机器上执行 `unilab token` 查看。
+ * 控制令牌：微后端要求写请求（POST / PUT / PATCH / DELETE）带 `X-UniLab-Token: <token>`
+ * （V1 合同里 `Authorization: Bearer` 留给工站 api_key），读请求与 SSE 不需要。令牌由后端保存在
+ * `<working_dir>/control_token`，用户在运行 unilab 的机器上执行 `unilab token` 查看。
  *
  * - 存放：localStorage，按后端地址分开（`openlab.controlToken:<归一化地址>`），令牌只发给它所属的后端；
  * - 链接导入：微后端落地页链接 `#/?backend=<地址>&token=<令牌>`，任意路由都认，导入后立刻从地址栏去掉；
- * - 被拒：HTTP 401 + code 4001，经 describeError 统一上报，连接设置据此提示填写。
+ * - 被拒：HTTP 401 + 业务码 1002，经 describeError 统一上报，连接设置据此提示填写。
  */
 import type { LocationQuery, LocationQueryValue } from "vue-router";
 import type { ApiError } from "@openlab/protocol";

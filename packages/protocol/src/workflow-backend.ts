@@ -5,8 +5,14 @@
  * Graph，`/workflow-tasks` 是一次运行，`/workflow-node-jobs` 是节点作业。
  * 接入云端 Backend 后本域不在 Edge 进程挂载，前端应连接调度权威地址。
  *
- * - 响应使用 Backend `{code,data,error}` 信封；HTTP 200 且 code!=0 是业务失败，
- *   经 common.ts 的唯一解包器抛 BackendBusinessError。
+ * - 响应使用 V1 `{code,data,error}` 信封；HTTP 200 且 code!=0 是业务失败，
+ *   传输层统一解包并抛 BackendBusinessError。
+ * - V1 合同：任务命令返回**命令投影**（HTTP 201），业务拒绝是 `status="rejected"` +
+ *   `result.reason`（客户端抛 {@link TaskCommandRejectedError}）；`pause` 只暂停派发，
+ *   `switch_to_step` 才转逐步；人工确认按 job 提交；干预是全局列表 + 按修订决策；
+ *   组合调用按发布合同（`contract_uuid`）插入实验操作并返回父图。
+ * - SSE 事件名按 V1：`workflow.runtime.changed`（dev 细粒度种类在 `data.kind`）、
+ *   `workflow.authoring.changed`、`station.error_handling.changed`，游标与 `stream.reset` 不变。
  * - 状态词汇是 canonical（任务终态 `succeeded`），页面禁止自行改写字符串。
  * - 单点设备动作也走本域：`createTask({execution_kind: "ad_hoc_device_action"})`
  *   生成单 job 任务并复用整图的调度 / 历史 / 异常链路。
@@ -17,6 +23,7 @@
  *   暂停时经 PATCH /workflow-tasks/{uuid}/input 修改未被消费的入口参数。
  */
 import {
+  BackendBusinessError,
   backendRequest,
   backendVoid,
   createHttpTransport,
@@ -25,6 +32,30 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./common.js";
+import type { OpenApiBody, OpenApiQuery } from "./openapi-types.js";
+
+// ---------------------------------------------------------------------------
+// SSE（GET /api/v1/events）：V1 事件名
+// ---------------------------------------------------------------------------
+
+/** 运行态失效通知；dev 细粒度种类放在 `data.kind`（见 {@link WorkflowRuntimeChangeKind}）。 */
+export const WORKFLOW_RUNTIME_CHANGED_EVENT = "workflow.runtime.changed" as const;
+/** 工作流定义 / 作者态失效通知（`data.kind` 为 `workflow` / `definition`）。 */
+export const WORKFLOW_AUTHORING_CHANGED_EVENT = "workflow.authoring.changed" as const;
+/** 工站异常处置状态变化（`data.station_id`）。 */
+export const STATION_ERROR_HANDLING_CHANGED_EVENT = "station.error_handling.changed" as const;
+/** 游标超前（`cursor_ahead`）或过期（`cursor_expired`）：id 为新水位，客户端必须重读 REST。 */
+export const STREAM_RESET_EVENT = "stream.reset" as const;
+/** `/api/v1/events` 上全部持久通知事件名（不含无 id 的 `runtime.logs.changed`）。 */
+export const WORKFLOW_EVENT_NAMES = [
+  WORKFLOW_RUNTIME_CHANGED_EVENT,
+  WORKFLOW_AUTHORING_CHANGED_EVENT,
+  STATION_ERROR_HANDLING_CHANGED_EVENT,
+  STREAM_RESET_EVENT,
+] as const;
+
+export type WorkflowRuntimeChangeKind = "task" | "node_run" | "node_job" | "manual_confirmation" | "resource";
+export type WorkflowAuthoringChangeKind = "workflow" | "definition";
 
 /** Backend Base 字段：软删除行不出现在公共 DTO；description 为空时省略。 */
 export interface BackendWorkflowBase {
@@ -36,10 +67,18 @@ export interface BackendWorkflowBase {
 }
 
 /** `workflow` 表 DTO：定义域权威，revision 是 Graph 写入的乐观锁。 */
+export type BackendWorkflowType = "normal" | "experiment_operation";
+
 export interface BackendWorkflow extends BackendWorkflowBase {
   name: string;
   tags: JsonValue[];
   revision: number;
+  /** V1：普通工作流或实验操作（只有实验操作可以被其他工作流组合引用）；创建后不能改。 */
+  workflow_type?: BackendWorkflowType | (string & {});
+  /** V1：实验操作类别。 */
+  operation_category_uuid?: string | null;
+  /** V1：`draft`（当前修订未发布）/ `published`。 */
+  status?: "draft" | "published" | (string & {});
 }
 
 /**
@@ -114,6 +153,8 @@ export interface BackendWorkflowGraph {
   edges: BackendWorkflowEdge[];
   node_templates: BackendWorkflowNodeTemplate[];
   handle_templates: BackendWorkflowHandleTemplate[];
+  /** V1：图级库存需求（dev 把节点级需求放在 meta_data，列表为空）。 */
+  inventory_requirements?: JsonObject[];
 }
 
 /** Backend canonical 任务终态是 succeeded。 */
@@ -172,6 +213,16 @@ export interface BackendWorkflowTask extends BackendWorkflowBase {
   reconciliation_resume_control_status?: string;
   started_at?: string;
   finished_at?: string;
+  /** V1：`normal` / `high`。 */
+  priority?: "normal" | "high" | (string & {});
+  /** V1：随任务冻结的库存绑定。 */
+  inventory_bindings?: JsonObject[];
+  /** V1：`normal` / `step`（= run_mode 的执行面视图）。 */
+  execution_mode?: "normal" | "step" | (string & {});
+  /** V1：派发闸门；`pause` 命令把它置为 `paused`，`resume` 恢复 `active`。 */
+  dispatch_gate?: "active" | "paused" | (string & {});
+  /** V1：任务在等什么（资源、人工、对账……）。 */
+  wait_reason?: string | null;
 }
 
 export type BackendWorkflowNodeJobStatus =
@@ -294,7 +345,9 @@ export interface BackendWorkflowNodeRun extends BackendWorkflowBase {
 
 export interface BackendPage<T> {
   items: T[];
-  total: number;
+  /** V1 工作流 / 任务列表只保证 `has_more`；dev 列表另带 total。 */
+  total?: number;
+  has_more?: boolean;
   page: number;
   page_size: number;
 }
@@ -326,9 +379,9 @@ export type BackendManualConfirmationStatus =
   | "timed_out"
   | "canceled";
 
-/** 人工确认决策写入；动作别名由 Backend 规范化并持久化。 */
+/** V1 `POST /workflow-node-jobs/{job_uuid}/manual-confirmation`：`approve` / `reject`，其余为 dev 可选扩展。 */
 export interface BackendManualConfirmationDecisionInput {
-  action: "approve" | "confirm" | "skip" | "reject" | "cancel" | "timeout" | (string & {});
+  action: "approve" | "reject";
   confirmed_by?: string;
   comment?: string;
   decision_idempotency_key?: string;
@@ -362,7 +415,6 @@ export type BackendInterventionStatus = "open" | "selected" | "superseded";
 export interface BackendIntervention extends BackendWorkflowBase {
   workflow_task_uuid: string;
   workflow_node_job_uuid: string;
-  edge_agent_uuid: string;
   revision: number;
   status: BackendInterventionStatus;
   options: JsonObject[];
@@ -372,9 +424,20 @@ export interface BackendIntervention extends BackendWorkflowBase {
   opened_at: string;
   /** status=selected 时必有。 */
   selected_option_id?: string;
-  decision_idempotency_key?: string;
+  /** 执行面的 decision_id（稳定投递身份）。 */
   edge_command_uuid?: string;
+  /** 决策投递状态：`none` / `pending` / `delivered` 等。 */
+  delivery_status?: string;
+  delivered_at?: string;
   decided_at?: string;
+}
+
+/** V1 `POST /workflow-interventions/{uuid}/decisions`：按修订选择设备提供的方案。 */
+export interface BackendInterventionDecisionInput {
+  revision: number;
+  option_id: string;
+  /** operator_intervention 需要服务端补记的结果；普通 retry / skip / abort 不传。 */
+  result?: JsonValue;
 }
 
 export type BackendNodeJobResultOutcome =
@@ -408,7 +471,7 @@ export interface BackendNodeJobResult extends BackendWorkflowBase {
 }
 
 /**
- * `workflow_node_job_feedback_history` 行 DTO（spec §6.4）。
+ * `workflow_node_job_feedback_history` 行 DTO（V1 `GET /workflow-node-jobs/{uuid}/feedback` 的 items）。
  * 每 job 多条，sequence 从 1 递增且 job 内唯一；排序 sequence ASC。
  */
 export interface BackendNodeJobFeedback extends BackendWorkflowBase {
@@ -429,6 +492,10 @@ export interface BackendWorkflowWriteInput {
   tags?: JsonValue[];
   description?: string | null;
   meta_data?: JsonObject;
+  /** V1：创建时选择 `normal`（缺省）或 `experiment_operation`；更新时不能改（1000）。 */
+  workflow_type?: BackendWorkflowType;
+  /** V1：省略 = 保持 / 旧标签推导，null = 清除。 */
+  operation_category_uuid?: string | null;
 }
 
 export interface BackendWorkflowNodeWrite {
@@ -471,23 +538,91 @@ export interface BackendGraphWriteInput {
 }
 
 /** execution_kind=workflow（默认）：按 Workflow 定义整图运行。 */
+/** V1 任务控制命令类型。 */
+export type BackendWorkflowTaskCommandType =
+  | "step"
+  | "resume"
+  | "pause"
+  | "switch_to_step"
+  | "cancel"
+  | "unlock_resources";
+
 export interface BackendWorkflowTaskCommandInput {
   /**
-   * step：仅放行一个动作 attempt；resume：转为自动执行；
-   * pause：自动运行中的任务转为逐步，已下发的动作照常跑完，不再派发新动作；
-   * cancel：任务进入 canceling，不再派发；正在执行的动作收到取消请求，设备锁保持到
-   * 它真实返回，全部返回后任务落 canceled。
+   * - pause：自动运行中暂停派发（`dispatch_gate=paused`，已下发的动作照常跑完）；之后可 resume 或 step；
+   * - switch_to_step：自动运行中的任务转为逐步（dev 原来的 pause 语义）；
+   * - step：仅放行一个动作 attempt（逐步模式暂停中，或自动模式暂停派发中——后者先转逐步）；
+   * - resume：自动模式解除暂停 / 逐步模式转为自动执行；
+   * - cancel：任务进入 canceling，不再派发；正在执行的动作收到取消请求，设备锁保持到
+   *   它真实返回，全部返回后任务落 canceled；
+   * - unlock_resources：异常终态任务人工解除资源（须 `meta_data.confirmed_physical_safe: true` + description）。
    * 暂停时修改入口参数不走本命令，见 {@link BackendWorkflowTaskInputEditInput}（同样推进 control_revision）。
    */
-  type: "step" | "resume" | "pause" | "cancel";
-  expected_revision: number;
+  type: BackendWorkflowTaskCommandType;
+  /** V1 可选：给出时按任务 control_revision 校验（不符 3003）。 */
+  expected_revision?: number | null;
+  /** 1..200 字符；同一次点击的重试复用同一键。 */
   idempotency_key: string;
+  /** 只有 step 可以指定目标节点。 */
+  target_node_uuid?: string | null;
+  description?: string | null;
+  meta_data?: JsonObject;
+}
+
+/** V1 `WorkflowTaskCommand` 投影：`pending`（单步许可等下一次派发认领）/ `succeeded` / `rejected`。 */
+export interface BackendWorkflowTaskCommand {
+  uuid: string;
+  create_time: string;
+  update_time: string;
+  meta_data: JsonObject;
+  workflow_task_uuid: string;
+  type: BackendWorkflowTaskCommandType | (string & {});
+  idempotency_key: string;
+  status: "pending" | "succeeded" | "rejected" | (string & {});
+  /** 拒绝时 `result.reason`（如 `task_is_terminal`、`task_is_not_paused_step`、`step_in_progress`）。 */
+  result: JsonObject;
+  trace_context: JsonObject;
+  description?: string;
+  target_node_uuid?: string;
+  consumed_at?: string;
+}
+
+/** 任务命令拒绝原因 → 操作员可读说明（未列出的原样显示）。 */
+export const TASK_COMMAND_REJECT_REASONS: Record<string, string> = {
+  task_is_terminal: "任务已结束",
+  task_is_not_abnormal_terminal: "只有失败 / 取消 / 超时的任务可以解除资源",
+  only_workflow_tasks_accept_execution_control: "单点设备动作任务不接受暂停 / 单步控制",
+  task_is_not_in_normal_mode: "任务不在自动执行模式",
+  task_is_not_paused: "任务没有暂停",
+  task_is_not_paused_step: "任务不在等待下一步的暂停状态",
+  step_in_progress: "上一步仍在执行",
+  target_node_not_ready: "目标节点还不能执行",
+  job_outcome_unsettled: "有作业的结果尚未结算",
+  claim_outcome_uncertain: "有资源占用的结果不确定",
+};
+
+/** 任务命令被拒（HTTP 201 + `status="rejected"`）：按 3003 状态冲突处理。 */
+export class TaskCommandRejectedError extends BackendBusinessError {
+  readonly command: BackendWorkflowTaskCommand;
+  readonly reason: string;
+
+  constructor(command: BackendWorkflowTaskCommand) {
+    const reason = String(command.result?.reason ?? "rejected");
+    super({ code: 3003, error: { msg: `任务命令被拒：${TASK_COMMAND_REJECT_REASONS[reason] ?? reason}`, code: reason } });
+    this.name = "TaskCommandRejectedError";
+    this.command = command;
+    this.reason = reason;
+  }
 }
 
 export interface BackendWorkflowTaskCreateInput {
   execution_kind?: "workflow";
   workflow_uuid: string;
   run_mode?: BackendWorkflowRunMode;
+  /** V1：`normal`（缺省）/ `high`。 */
+  priority?: "normal" | "high";
+  /** V1：库存绑定（随任务冻结；预留由库存域负责）。 */
+  inventory_bindings?: OpenApiBody<"/api/v1/workflow-tasks", "post">["inventory_bindings"];
   target_node_uuid?: string | null;
   description?: string | null;
   meta_data?: JsonObject;
@@ -603,10 +738,21 @@ export interface BackendWorkflowPublishInput {
  * `node_template.schema` 与 `/graph` 一样是 JSON 文本。
  */
 export interface BackendWorkflowPublication {
+  /** V1 发布合同 uuid（= contract_uuid，组合调用用它引用这次发布）。 */
   uuid: string;
   workflow_uuid: string;
   revision: number;
   name: string;
+  /** V1 合同字段：发布时的工作流修订 / 该工作流第几次发布 / 输入输出合同 / 规模与指纹。 */
+  workflow_revision?: number;
+  version?: number;
+  input_contract?: BackendWorkflowInputContract;
+  output_contract?: BackendWorkflowOutputContract;
+  executor_requirements?: JsonObject[];
+  node_template_uuid?: string | null;
+  node_count?: number;
+  edge_count?: number;
+  revision_fingerprint?: string;
   /** 语义图规范 JSON 的 `sha256:` 摘要。 */
   source_hash: string;
   /** 对外合同（输入 / 输出）摘要；没有单独的 contract_uuid。 */
@@ -621,17 +767,22 @@ export interface BackendWorkflowPublication {
 /** 组合调用实参：静态 JSON 值，或引用父工作流自己的入口参数。 */
 export type BackendCompositeArgument = JsonValue | BackendWorkflowInputReference;
 
-/** POST /workflows/{parent}/composite-invocations（拒绝未知字段）。 */
+/**
+ * POST /workflows/{parent}/composite-invocations（V1 body，拒绝未知字段）。
+ * 子工作流必须是实验操作（`workflow_type="experiment_operation"`，否则 1000）且当前修订已发布（否则 3003）。
+ */
 export interface BackendCompositeInvocationInput {
   /** 父图当前 revision；成功后 +1。 */
   revision: number;
-  child_workflow_uuid: string;
-  /** 缺省 = 子工作流最新发布。 */
-  child_revision?: number | null;
+  /** 发布合同 uuid（{@link BackendWorkflowPublication.uuid}）；子修订 = 该发布的修订。 */
+  contract_uuid: string;
   /** 缺省由服务端生成；展开节点的 uuid 由它派生。 */
   invocation_uuid?: string | null;
+  /** dev 发布没有执行器需求，必须为空对象。 */
+  device_bindings?: Record<string, string>;
   pose?: JsonObject;
-  arguments?: Record<string, BackendCompositeArgument>;
+  /** 入口参数实参（dev 的 arguments）：静态值或引用父工作流入口参数。 */
+  param?: Record<string, BackendCompositeArgument>;
 }
 
 /** 组合调用固定的子工作流发布（写在调用节点 `meta_data.unilab.composite`）。 */
@@ -730,10 +881,9 @@ export interface BackendAuthoringDraftInput {
   expected_workflow_revision: number;
 }
 
+/** V1 `{candidate_hash}`：草稿 hash 与基准修订由服务端从已存候选推导（旧三元 CAS 体 1000）。 */
 export interface BackendAuthoringApplyInput {
-  expected_draft_hash: string;
-  expected_workflow_revision: number;
-  expected_candidate_hash: string;
+  candidate_hash: string;
 }
 
 /** 注册表工作流模板 → 工作流：角色绑定缺省时类角色单实例自动填、设备角色即其设备 id。 */
@@ -751,6 +901,75 @@ export interface BackendWorkflowFromTemplateResult {
   bindings: Record<string, string>;
 }
 
+// ---------------------------------------------------------------------------
+// V1 增量编辑 / 类别 / 节点模板 / 任务观测 / 干预 / 资源占用（V1 合同新增的浏览器路由）
+// 响应在 OpenAPI 里多为 Envelope[Any]：常用字段在下面声明，其余按 JsonObject 透传。
+// ---------------------------------------------------------------------------
+
+export interface BackendOperationCategory {
+  uuid: string;
+  name: string;
+  sort_order: number;
+  create_time?: string;
+  update_time?: string;
+}
+
+/** V1 任务展示投影（`/workflow-task-presentations`）：紧凑任务 + 内嵌紧凑作业。 */
+export interface BackendTaskPresentation extends JsonObject {
+  uuid: string;
+  status: string;
+}
+
+export interface BackendTaskDeleteEligibility {
+  can_delete: boolean;
+  already_deleted: boolean;
+  delete_blockers: JsonObject[];
+  status?: string;
+  [key: string]: JsonValue | undefined;
+}
+
+export interface BackendTaskStepState extends JsonObject {
+  in_flight_job_count: number;
+  requires_selection: boolean;
+  can_step: boolean;
+}
+
+/** V1 结构化人工交互请求（choice / text / values / point / corner）。 */
+export interface BackendHumanInteraction extends JsonObject {
+  uuid: string;
+  status: string;
+}
+
+export type BackendHumanInteractionReply = OpenApiBody<"/api/v1/workflow-human-interactions/{interaction_uuid}/reply", "post">;
+export type BackendWorkflowNodeCreateInput = OpenApiBody<"/api/v1/workflows/{workflow_uuid}/nodes", "post">;
+export type BackendWorkflowNodePatchInput = OpenApiBody<"/api/v1/workflow-nodes/{node_uuid}", "patch">;
+export type BackendWorkflowEdgeCreateInput = OpenApiBody<"/api/v1/workflows/{workflow_uuid}/edges", "post">;
+export type BackendWorkflowBatchDeleteInput = OpenApiBody<"/api/v1/workflows/{workflow_uuid}/batch-delete", "post">;
+export type BackendWorkflowDuplicateInput = OpenApiBody<"/api/v1/workflows/{workflow_uuid}/duplicate", "post">;
+export type BackendWorkflowImportInput = OpenApiBody<"/api/v1/workflows/import", "post">;
+export type BackendTemplateInstanceInput = OpenApiBody<"/api/v1/workflows/template-instances", "post">;
+export type BackendRunPreflightInput = OpenApiBody<"/api/v1/workflows/{workflow_uuid}/run-preflight", "post">;
+export type BackendResourceScopesInput = OpenApiBody<"/api/v1/workflows/{workflow_uuid}/resource-scopes", "put">;
+export type BackendAuthoringCompileInput = OpenApiBody<"/api/v1/authoring/compile", "post">;
+export type BackendAuthoringGenerateInput = OpenApiBody<"/api/v1/authoring/generate-python", "post">;
+export type BackendAuthoringValidateInput = OpenApiBody<"/api/v1/authoring/validate", "post">;
+export type BackendForceReleaseInput = OpenApiBody<"/api/v1/workflow-tasks/{task_uuid}/execution-locks/{lease_uuid}/force-release", "post">;
+export type BackendReconcileQuantityInput = OpenApiBody<"/api/v1/workflow-node-jobs/{job_uuid}/reconcile-quantity", "post">;
+export type BackendResolveUncertainInput = OpenApiBody<"/api/v1/workflow-node-jobs/{job_uuid}/resolve-uncertain", "post">;
+export type BackendSettleMaterialTransferInput = OpenApiBody<"/api/v1/workflow-node-jobs/{job_uuid}/settle-material-transfer", "post">;
+export type BackendDeviceActionRunInput = OpenApiBody<"/api/v1/device-action-runs", "post">;
+/** 资源区间释放 / 借用归还 / 设备托管释放：记录版本 + 原因（审计）。 */
+export interface BackendReleaseInput {
+  expected_version: number;
+  reason: string;
+}
+export type BackendIntervalLendInput = OpenApiBody<"/api/v1/workflow-resource-intervals/{owner_uuid}/lend", "post">;
+export type BackendTaskPresentationQuery = OpenApiQuery<"/api/v1/workflow-task-presentations", "get">;
+export type BackendNodeTemplateQuery = OpenApiQuery<"/api/v1/workflow-node-templates", "get">;
+export type BackendResourceIntervalQuery = OpenApiQuery<"/api/v1/workflow-resource-intervals", "get">;
+export type BackendResourceLoanQuery = OpenApiQuery<"/api/v1/workflow-resource-loans", "get">;
+export type BackendDeviceTenancyQuery = OpenApiQuery<"/api/v1/workflow-device-tenancies", "get">;
+
 export function createWorkflowBackendApi(http: HttpTransport) {
   return {
     /** POST /api/v1/workflows —— 创建 Workflow 定义 */
@@ -767,8 +986,8 @@ export function createWorkflowBackendApi(http: HttpTransport) {
         path: "/api/v1/workflows/from-template",
         body,
       }),
-    /** GET /api/v1/workflows —— 定义分页列表 */
-    workflows: (params: { page?: number; page_size?: number; name?: string } = {}) =>
+    /** GET /api/v1/workflows —— 定义分页列表（V1 过滤 keyword / name / workflow_type / status / operation_category_uuid） */
+    workflows: (params: OpenApiQuery<"/api/v1/workflows", "get"> = {}) =>
       backendRequest<BackendPage<BackendWorkflow>>(http, {
         method: "GET",
         path: "/api/v1/workflows",
@@ -836,14 +1055,15 @@ export function createWorkflowBackendApi(http: HttpTransport) {
         path: "/api/v1/workflow-publications",
       }),
     /**
-     * POST /api/v1/workflows/{workflow_uuid}/composite-invocations —— 把已发布子工作流插入父图并内联展开（201）。
-     * 子工作流未发布 3002；递归 / 缺必填实参 / 实参类型不符 1000（消息含诊断码与路径）；父图 revision 不符 3003。
+     * POST /api/v1/workflows/{workflow_uuid}/composite-invocations —— 按发布合同插入实验操作并内联展开，
+     * 返回插入后的父图（当前层，HTTP 200）。合同不存在 3002；子工作流不是实验操作 / 递归 / 实参不符 1000；
+     * 子工作流当前修订未发布或父图 revision 不符 3003。
      */
     insertCompositeInvocation: (workflowUuid: string, body: BackendCompositeInvocationInput) =>
-      backendRequest<BackendCompositeInvocationResult>(http, {
+      backendRequest<BackendWorkflowGraph>(http, {
         method: "POST",
         path: `/api/v1/workflows/${encodeURIComponent(workflowUuid)}/composite-invocations`,
-        body,
+        body: { device_bindings: {}, ...body },
       }),
     /** POST /api/v1/workflow-tasks —— 提交运行（整图 / 单点设备动作） */
     createTask: (body: BackendWorkflowTaskSubmitInput) =>
@@ -860,6 +1080,7 @@ export function createWorkflowBackendApi(http: HttpTransport) {
         workflow_uuid?: string;
         status?: BackendWorkflowTaskStatus | "";
         cleanup_status?: BackendWorkflowTaskCleanupStatus | "";
+        execution_kind?: "workflow" | "ad_hoc_device_action" | "";
       } = {},
     ) =>
       backendRequest<BackendPage<BackendWorkflowTask>>(http, {
@@ -873,13 +1094,19 @@ export function createWorkflowBackendApi(http: HttpTransport) {
         method: "GET",
         path: `/api/v1/workflow-tasks/${encodeURIComponent(taskUuid)}`,
       }),
-    /** POST /api/v1/workflow-tasks/{task_uuid}/commands —— 单点放行 / 切回自动 / 暂停 / 取消 */
-    commandTask: (taskUuid: string, body: BackendWorkflowTaskCommandInput) =>
-      backendRequest<BackendWorkflowTask>(http, {
+    /**
+     * POST /api/v1/workflow-tasks/{task_uuid}/commands —— 幂等提交一次控制命令，返回命令投影（HTTP 201）。
+     * 业务拒绝（`status="rejected"`）抛 {@link TaskCommandRejectedError}；成功后重读任务拿新的 control_revision。
+     */
+    commandTask: async (taskUuid: string, body: BackendWorkflowTaskCommandInput) => {
+      const command = await backendRequest<BackendWorkflowTaskCommand>(http, {
         method: "POST",
         path: `/api/v1/workflow-tasks/${encodeURIComponent(taskUuid)}/commands`,
         body,
-      }),
+      });
+      if (command?.status === "rejected") throw new TaskCommandRejectedError(command);
+      return command;
+    },
     /** PATCH /api/v1/workflow-tasks/{task_uuid}/input —— 暂停时修改尚未被消费的入口参数（记为 edit_input 命令） */
     editTaskInput: (taskUuid: string, body: BackendWorkflowTaskInputEditInput) =>
       backendRequest<BackendWorkflowTask>(http, {
@@ -924,33 +1151,15 @@ export function createWorkflowBackendApi(http: HttpTransport) {
         method: "GET",
         path: `/api/v1/workflow-manual-confirmations/${encodeURIComponent(confirmationUuid)}`,
       }),
-    /** POST /api/v1/workflow-manual-confirmations/{confirmation_uuid}/decision */
-    decideManualConfirmation: (
-      confirmationUuid: string,
-      body: BackendManualConfirmationDecisionInput,
-    ) =>
+    /**
+     * POST /api/v1/workflow-node-jobs/{job_uuid}/manual-confirmation —— V1 按作业提交人工确认
+     * （`approve` / `reject`；确认记录的 `workflow_node_job_uuid` 即 job_uuid）。返回确认记录。
+     */
+    decideJobManualConfirmation: (jobUuid: string, body: BackendManualConfirmationDecisionInput) =>
       backendRequest<BackendManualConfirmation>(http, {
         method: "POST",
-        path: `/api/v1/workflow-manual-confirmations/${encodeURIComponent(confirmationUuid)}/decision`,
+        path: `/api/v1/workflow-node-jobs/${encodeURIComponent(jobUuid)}/manual-confirmation`,
         body,
-      }),
-    /** POST /api/v1/workflow-tasks/{task_uuid}/manual-confirmations/{confirmation_uuid}/decision */
-    decideTaskManualConfirmation: (
-      taskUuid: string,
-      confirmationUuid: string,
-      body: BackendManualConfirmationDecisionInput,
-    ) =>
-      backendRequest<BackendManualConfirmation>(http, {
-        method: "POST",
-        path: `/api/v1/workflow-tasks/${encodeURIComponent(taskUuid)}/manual-confirmations/${encodeURIComponent(confirmationUuid)}/decision`,
-        body,
-      }),
-    /** GET /api/v1/workflow-tasks/{task_uuid}/interventions —— 干预记录（revision 序列） */
-    taskInterventions: (taskUuid: string, params: BackendRuntimeReadParams = {}) =>
-      backendRequest<BackendIntervention[]>(http, {
-        method: "GET",
-        path: `/api/v1/workflow-tasks/${encodeURIComponent(taskUuid)}/interventions`,
-        params,
       }),
     /** GET /api/v1/workflow-node-jobs/{job_uuid}/results —— 每 job 至多一条（见类型注释） */
     jobResults: (jobUuid: string, params: BackendRuntimeReadParams = {}) =>
@@ -959,11 +1168,11 @@ export function createWorkflowBackendApi(http: HttpTransport) {
         path: `/api/v1/workflow-node-jobs/${encodeURIComponent(jobUuid)}/results`,
         params,
       }),
-    /** GET /api/v1/workflow-node-jobs/{job_uuid}/feedback-history —— sequence 自然序 */
-    jobFeedbackHistory: (jobUuid: string, params: BackendRuntimeReadParams = {}) =>
-      backendRequest<BackendNodeJobFeedback[]>(http, {
+    /** GET /api/v1/workflow-node-jobs/{job_uuid}/feedback —— V1 page / page_size，sequence 自然序 */
+    jobFeedback: (jobUuid: string, params: { page?: number; page_size?: number } = {}) =>
+      backendRequest<BackendPage<BackendNodeJobFeedback>>(http, {
         method: "GET",
-        path: `/api/v1/workflow-node-jobs/${encodeURIComponent(jobUuid)}/feedback-history`,
+        path: `/api/v1/workflow-node-jobs/${encodeURIComponent(jobUuid)}/feedback`,
         params,
       }),
     /** GET /api/v1/workflows/{workflow_uuid}/authoring —— Authoring 聚合 */
@@ -986,10 +1195,308 @@ export function createWorkflowBackendApi(http: HttpTransport) {
         path: `/api/v1/workflows/${encodeURIComponent(workflowUuid)}/authoring/apply`,
         body,
       }),
+    // ── V1：实验操作类别 ──────────────────────────────────────────
+    /** 类别列表（V1 `{items}`，按 sort_order）。 */
+    operationCategories: async () =>
+      (await backendRequest<{ items: BackendOperationCategory[] }>(http, { method: "GET", path: "/api/v1/experiment-operation-categories" }))
+        .items,
+    operationCategory: (categoryUuid: string) =>
+      backendRequest<BackendOperationCategory>(http, {
+        method: "GET",
+        path: `/api/v1/experiment-operation-categories/${encodeURIComponent(categoryUuid)}`,
+      }),
+    createOperationCategory: (body: { name: string; sort_order?: number }) =>
+      backendRequest<BackendOperationCategory>(http, { method: "POST", path: "/api/v1/experiment-operation-categories", body }),
+    updateOperationCategory: (categoryUuid: string, body: { name?: string; sort_order?: number }) =>
+      backendRequest<BackendOperationCategory>(http, {
+        method: "PUT",
+        path: `/api/v1/experiment-operation-categories/${encodeURIComponent(categoryUuid)}`,
+        body,
+      }),
+    /** 仍被实验操作引用时 3003。 */
+    deleteOperationCategory: (categoryUuid: string) =>
+      backendVoid(http, {
+        method: "DELETE",
+        path: `/api/v1/experiment-operation-categories/${encodeURIComponent(categoryUuid)}`,
+      }),
+
+    // ── V1：导入 / 复制 / 模板目录 ────────────────────────────────
+    /** 旧版 JSON 导入（直接或 `data` 包裹），节点 / 连线身份重建；返回整图（201）。 */
+    importWorkflow: (body: BackendWorkflowImportInput) =>
+      backendRequest<BackendWorkflowGraph>(http, { method: "POST", path: "/api/v1/workflows/import", body }),
+    /** 原始 `.py` 源码导入（只解析不执行）：建工作流 + 托管源码 + 保存草稿并应用；返回整图（201）。 */
+    importPythonWorkflow: (source: string, filename: string) =>
+      backendRequest<BackendWorkflowGraph>(http, {
+        method: "POST",
+        path: "/api/v1/local/workflows/import-python",
+        body: source,
+        headers: { "Content-Type": "text/x-python; charset=utf-8", "X-Workflow-Filename": filename },
+      }),
+    duplicateWorkflow: (workflowUuid: string, body: BackendWorkflowDuplicateInput = {}) =>
+      backendRequest<BackendWorkflow>(http, {
+        method: "POST",
+        path: `/api/v1/workflows/${encodeURIComponent(workflowUuid)}/duplicate`,
+        body,
+      }),
+    /** 引用了该工作流（组合调用）的父工作流。 */
+    referencedBy: (workflowUuid: string) =>
+      backendRequest<JsonObject[]>(http, {
+        method: "GET",
+        path: `/api/v1/workflows/${encodeURIComponent(workflowUuid)}/referenced-by`,
+      }),
+    /** 注册表 @workflow 模板目录（含角色、可绑定设备）。 */
+    templateCatalog: () =>
+      backendRequest<JsonObject>(http, { method: "GET", path: "/api/v1/workflows/template-catalog" }),
+    /** 模板实例化为工作流（V1 形状的 from-template）。 */
+    createTemplateInstance: (body: BackendTemplateInstanceInput) =>
+      backendRequest<JsonObject>(http, { method: "POST", path: "/api/v1/workflows/template-instances", body }),
+
+    // ── V1：节点 / 连线增量编辑（全图 CAS 保存的薄封装） ────────────
+    workflowNodes: (workflowUuid: string) =>
+      backendRequest<BackendWorkflowNode[]>(http, {
+        method: "GET",
+        path: `/api/v1/workflows/${encodeURIComponent(workflowUuid)}/nodes`,
+      }),
+    addWorkflowNode: (workflowUuid: string, body: BackendWorkflowNodeCreateInput) =>
+      backendRequest<BackendWorkflowGraph>(http, {
+        method: "POST",
+        path: `/api/v1/workflows/${encodeURIComponent(workflowUuid)}/nodes`,
+        body,
+      }),
+    addWorkflowEdge: (workflowUuid: string, body: BackendWorkflowEdgeCreateInput) =>
+      backendRequest<BackendWorkflowGraph>(http, {
+        method: "POST",
+        path: `/api/v1/workflows/${encodeURIComponent(workflowUuid)}/edges`,
+        body,
+      }),
+    batchDelete: (workflowUuid: string, body: BackendWorkflowBatchDeleteInput) =>
+      backendRequest<BackendWorkflowGraph>(http, {
+        method: "POST",
+        path: `/api/v1/workflows/${encodeURIComponent(workflowUuid)}/batch-delete`,
+        body,
+      }),
+    workflowNode: (nodeUuid: string) =>
+      backendRequest<BackendWorkflowNode>(http, { method: "GET", path: `/api/v1/workflow-nodes/${encodeURIComponent(nodeUuid)}` }),
+    /** 只应用显式给出的字段。 */
+    patchWorkflowNode: (nodeUuid: string, body: BackendWorkflowNodePatchInput) =>
+      backendRequest<BackendWorkflowNode>(http, {
+        method: "PATCH",
+        path: `/api/v1/workflow-nodes/${encodeURIComponent(nodeUuid)}`,
+        body,
+      }),
+    /** 仍有子节点时 3003。 */
+    deleteWorkflowNode: (nodeUuid: string) =>
+      backendVoid(http, { method: "DELETE", path: `/api/v1/workflow-nodes/${encodeURIComponent(nodeUuid)}` }),
+    duplicateWorkflowNode: (nodeUuid: string, body: BackendWorkflowDuplicateInput = {}) =>
+      backendRequest<BackendWorkflowGraph>(http, {
+        method: "POST",
+        path: `/api/v1/workflow-nodes/${encodeURIComponent(nodeUuid)}/duplicate`,
+        body,
+      }),
+    deleteWorkflowEdge: (edgeUuid: string) =>
+      backendVoid(http, { method: "DELETE", path: `/api/v1/workflow-edges/${encodeURIComponent(edgeUuid)}` }),
+    /** 节点模板目录（page / page_size / 过滤）。 */
+    nodeTemplates: (params: BackendNodeTemplateQuery = {}) =>
+      backendRequest<BackendPage<BackendWorkflowNodeTemplate>>(http, {
+        method: "GET",
+        path: "/api/v1/workflow-node-templates",
+        params,
+      }),
+    nodeTemplate: (templateUuid: string) =>
+      backendRequest<BackendWorkflowNodeTemplate>(http, {
+        method: "GET",
+        path: `/api/v1/workflow-node-templates/${encodeURIComponent(templateUuid)}`,
+      }),
+    /** 资源作用域声明（整份替换）。 */
+    putResourceScopes: (workflowUuid: string, body: BackendResourceScopesInput) =>
+      backendRequest<BackendWorkflowGraph>(http, {
+        method: "PUT",
+        path: `/api/v1/workflows/${encodeURIComponent(workflowUuid)}/resource-scopes`,
+        body,
+      }),
+
+    // ── V1：运行前检查 ────────────────────────────────────────────
+    /** 不建任务、不占资源的候选运行检查（无入口参数）。 */
+    runPreflight: (workflowUuid: string, params: { run_mode?: string; target_node_uuid?: string } = {}) =>
+      backendRequest<JsonObject>(http, {
+        method: "GET",
+        path: `/api/v1/workflows/${encodeURIComponent(workflowUuid)}/run-preflight`,
+        params,
+      }),
+    /** 带入口参数 / 库存绑定的运行前检查。 */
+    submitRunPreflight: (workflowUuid: string, body: BackendRunPreflightInput) =>
+      backendRequest<JsonObject>(http, {
+        method: "POST",
+        path: `/api/v1/workflows/${encodeURIComponent(workflowUuid)}/run-preflight`,
+        body,
+      }),
+
+    // ── V1：作者态转换（源码 ↔ 图） ───────────────────────────────
+    compileAuthoring: (body: BackendAuthoringCompileInput) =>
+      backendRequest<JsonObject>(http, { method: "POST", path: "/api/v1/authoring/compile", body }),
+    generatePython: (body: BackendAuthoringGenerateInput) =>
+      backendRequest<JsonObject>(http, { method: "POST", path: "/api/v1/authoring/generate-python", body }),
+    validateAuthoring: (body: BackendAuthoringValidateInput) =>
+      backendRequest<JsonObject>(http, { method: "POST", path: "/api/v1/authoring/validate", body }),
+
+    // ── V1：任务观测与生命周期 ────────────────────────────────────
+    /** 紧凑任务 + 内嵌作业；`view=matrix` 返回活跃 / 需关注任务 + 最近 terminal_limit 个终态任务。 */
+    taskPresentations: (params: BackendTaskPresentationQuery = {}) =>
+      backendRequest<BackendPage<BackendTaskPresentation>>(http, {
+        method: "GET",
+        path: "/api/v1/workflow-task-presentations",
+        params,
+      }),
+    taskDeleteEligibility: (taskUuid: string) =>
+      backendRequest<BackendTaskDeleteEligibility>(http, {
+        method: "GET",
+        path: `/api/v1/workflow-tasks/${encodeURIComponent(taskUuid)}/delete-eligibility`,
+      }),
+    /** 软删除；有阻塞项 3003，重放返回 already_deleted。 */
+    deleteTask: (taskUuid: string) =>
+      backendRequest<JsonObject>(http, { method: "DELETE", path: `/api/v1/workflow-tasks/${encodeURIComponent(taskUuid)}` }),
+    /** 任务事件（after_sequence 游标，按任务分组的持久通知日志）。 */
+    taskEvents: (taskUuid: string, params: { after_sequence?: number; limit?: number } = {}) =>
+      backendRequest<JsonObject>(http, {
+        method: "GET",
+        path: `/api/v1/workflow-tasks/${encodeURIComponent(taskUuid)}/events`,
+        params,
+      }),
+    taskStepState: (taskUuid: string) =>
+      backendRequest<BackendTaskStepState>(http, {
+        method: "GET",
+        path: `/api/v1/workflow-tasks/${encodeURIComponent(taskUuid)}/step-state`,
+      }),
+    /** 暂停时把参数合并进某个待执行 attempt（V1 按作业粒度；入口参数仍用 editTaskInput）。 */
+    patchTaskJobParam: (taskUuid: string, jobUuid: string, body: { param: JsonObject }) =>
+      backendRequest<JsonObject>(http, {
+        method: "PATCH",
+        path: `/api/v1/workflow-tasks/${encodeURIComponent(taskUuid)}/jobs/${encodeURIComponent(jobUuid)}/param`,
+        body,
+      }),
+    taskExecutionLocks: (taskUuid: string) =>
+      backendRequest<JsonObject[]>(http, {
+        method: "GET",
+        path: `/api/v1/workflow-tasks/${encodeURIComponent(taskUuid)}/execution-locks`,
+      }),
+    forceReleaseExecutionLock: (taskUuid: string, leaseUuid: string, body: BackendForceReleaseInput) =>
+      backendRequest<JsonObject>(http, {
+        method: "POST",
+        path: `/api/v1/workflow-tasks/${encodeURIComponent(taskUuid)}/execution-locks/${encodeURIComponent(leaseUuid)}/force-release`,
+        body,
+      }),
+    taskMaterialEvents: (taskUuid: string) =>
+      backendRequest<JsonObject[]>(http, {
+        method: "GET",
+        path: `/api/v1/workflow-tasks/${encodeURIComponent(taskUuid)}/material-events`,
+      }),
+    taskInventoryConsumptions: (taskUuid: string) =>
+      backendRequest<JsonObject[]>(http, {
+        method: "GET",
+        path: `/api/v1/workflow-tasks/${encodeURIComponent(taskUuid)}/inventory-consumptions`,
+      }),
+    jobInventoryConsumptions: (jobUuid: string) =>
+      backendRequest<JsonObject[]>(http, {
+        method: "GET",
+        path: `/api/v1/workflow-node-jobs/${encodeURIComponent(jobUuid)}/inventory-consumptions`,
+      }),
+    reagentInventoryConsumptions: (reagentUuid: string) =>
+      backendRequest<JsonObject[]>(http, {
+        method: "GET",
+        path: `/api/v1/reagents/${encodeURIComponent(reagentUuid)}/inventory-consumptions`,
+      }),
+
+    // ── V1：干预与人工交互 ────────────────────────────────────────
+    /** 全局干预列表（`open` / `selected` / `superseded`，limit 1..500）；按任务看用 workflow_task_uuid 过滤。 */
+    interventions: (params: { status?: BackendInterventionStatus; limit?: number } = {}) =>
+      backendRequest<BackendIntervention[]>(http, { method: "GET", path: "/api/v1/workflow-interventions", params }),
+    intervention: (interventionUuid: string) =>
+      backendRequest<BackendIntervention>(http, {
+        method: "GET",
+        path: `/api/v1/workflow-interventions/${encodeURIComponent(interventionUuid)}`,
+      }),
+    /** 按修订选择方案；201 新决策 / 200 重放，未投递 3003（用同一键重试）。 */
+    decideIntervention: (interventionUuid: string, body: BackendInterventionDecisionInput, idempotencyKey: string) =>
+      backendRequest<JsonObject>(http, {
+        method: "POST",
+        path: `/api/v1/workflow-interventions/${encodeURIComponent(interventionUuid)}/decisions`,
+        body,
+        headers: { "Idempotency-Key": idempotencyKey },
+      }),
+    taskHumanInteractions: (taskUuid: string) =>
+      backendRequest<BackendHumanInteraction[]>(http, {
+        method: "GET",
+        path: `/api/v1/workflow-tasks/${encodeURIComponent(taskUuid)}/human-interactions`,
+      }),
+    replyHumanInteraction: (interactionUuid: string, body: BackendHumanInteractionReply) =>
+      backendRequest<BackendHumanInteraction>(http, {
+        method: "POST",
+        path: `/api/v1/workflow-human-interactions/${encodeURIComponent(interactionUuid)}/reply`,
+        body,
+      }),
+
+    // ── V1：作业结果核对 ──────────────────────────────────────────
+    reconcileJobQuantity: (jobUuid: string, body: BackendReconcileQuantityInput) =>
+      backendRequest<JsonObject>(http, {
+        method: "POST",
+        path: `/api/v1/workflow-node-jobs/${encodeURIComponent(jobUuid)}/reconcile-quantity`,
+        body,
+      }),
+    /** 结果未知处置：只接受 `canceled`（经决策台投递 abort），等待边缘确认时 HTTP 202。 */
+    resolveUncertainJob: (jobUuid: string, body: BackendResolveUncertainInput) =>
+      backendRequest<JsonObject>(http, {
+        method: "POST",
+        path: `/api/v1/workflow-node-jobs/${encodeURIComponent(jobUuid)}/resolve-uncertain`,
+        body,
+      }),
+    /** 失败转运的实际位置结算（作业保持失败主状态，释放已结算占用）。 */
+    settleMaterialTransfer: (jobUuid: string, body: BackendSettleMaterialTransferInput) =>
+      backendRequest<JsonObject>(http, {
+        method: "POST",
+        path: `/api/v1/workflow-node-jobs/${encodeURIComponent(jobUuid)}/settle-material-transfer`,
+        body,
+      }),
+    /** V1 单点设备动作（按物料 + 节点模板）；201 新建 / 200 重放。 */
+    createDeviceActionRun: (body: BackendDeviceActionRunInput) =>
+      backendRequest<JsonObject>(http, { method: "POST", path: "/api/v1/device-action-runs", body }),
+
+    // ── 资源区间 / 借还 / 设备托管（dev 独有，V1 信封） ────────────
+    resourceIntervals: (params: BackendResourceIntervalQuery = {}) =>
+      backendRequest<JsonObject[]>(http, { method: "GET", path: "/api/v1/workflow-resource-intervals", params }),
+    releaseResourceInterval: (ownerUuid: string, body: BackendReleaseInput) =>
+      backendRequest<JsonObject>(http, {
+        method: "POST",
+        path: `/api/v1/workflow-resource-intervals/${encodeURIComponent(ownerUuid)}/release`,
+        body,
+      }),
+    lendResourceInterval: (ownerUuid: string, body: BackendIntervalLendInput) =>
+      backendRequest<JsonObject>(http, {
+        method: "POST",
+        path: `/api/v1/workflow-resource-intervals/${encodeURIComponent(ownerUuid)}/lend`,
+        body,
+      }),
+    resourceLoans: (params: BackendResourceLoanQuery = {}) =>
+      backendRequest<JsonObject[]>(http, { method: "GET", path: "/api/v1/workflow-resource-loans", params }),
+    returnResourceLoan: (loanUuid: string, body: BackendReleaseInput) =>
+      backendRequest<JsonObject>(http, {
+        method: "POST",
+        path: `/api/v1/workflow-resource-loans/${encodeURIComponent(loanUuid)}/return`,
+        body,
+      }),
+    deviceTenancies: (params: BackendDeviceTenancyQuery = {}) =>
+      backendRequest<JsonObject[]>(http, { method: "GET", path: "/api/v1/workflow-device-tenancies", params }),
+    releaseDeviceTenancy: (tenancyUuid: string, body: BackendReleaseInput) =>
+      backendRequest<JsonObject>(http, {
+        method: "POST",
+        path: `/api/v1/workflow-device-tenancies/${encodeURIComponent(tenancyUuid)}/release`,
+        body,
+      }),
+    /** 资源等待图（等待者 + 活跃占用，Tarjan 环检测）。 */
+    waitGraph: () => backendRequest<JsonObject>(http, { method: "GET", path: "/api/v1/workflow-runtime/wait-graph" }),
+
     /**
      * SSE GET /api/v1/events —— `frontend_event` 游标流（Last-Event-ID 续传；首连从当前水位开始，
-     * 游标失效时收到 `stream.reset`）。
-     * 事件行不作为实体浏览；EventSource 场景用本 URL。
+     * 游标失效时收到 `stream.reset`）。事件名见 {@link WORKFLOW_EVENT_NAMES}；只作失效通知。
      */
     eventsUrl: () => http.url("/api/v1/events"),
   };

@@ -28,13 +28,13 @@ import {
 } from "naive-ui";
 import { RefreshOutline } from "@vicons/ionicons5";
 import {
-  ApiError,
   type RegistryEntryDetail,
   type RegistryEntryStatus,
   type RegistryEntrySummary,
   type RegistryEntryVersion,
   type RegistryPendingImpact,
   type RegistryReport,
+  isCapabilityUnavailable,
 } from "@openlab/protocol";
 import PageHeader from "../components/PageHeader.vue";
 import { describeError } from "../features/errors";
@@ -70,7 +70,7 @@ async function refresh() {
   if (entryResult.status === "fulfilled") {
     entries.value = entryResult.value.entries;
     lastError.value = "";
-  } else if (entryResult.reason instanceof ApiError && entryResult.reason.isUnsupported) {
+  } else if (isCapabilityUnavailable(entryResult.reason)) {
     conn.registrySupport = "unsupported";
   } else {
     lastError.value = describe(entryResult.reason);

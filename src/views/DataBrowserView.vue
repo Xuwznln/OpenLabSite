@@ -24,10 +24,10 @@ import {
 } from "naive-ui";
 import { RefreshOutline, ServerOutline } from "@vicons/ionicons5";
 import {
-  ApiError,
   type DebugDatabaseSummary,
   type DebugRow,
   type DebugTablePage,
+  isCapabilityUnavailable,
 } from "@openlab/protocol";
 import PageHeader from "../components/PageHeader.vue";
 import { useConnectionStore } from "../stores/connection";
@@ -78,7 +78,7 @@ async function loadDatabases() {
       selectedTable.value = tables.value.find((table) => table.rows > 0)?.name ?? tables.value[0]?.name ?? "";
     }
   } catch (error) {
-    if (error instanceof ApiError && error.isUnsupported) unsupported.value = true;
+    if (isCapabilityUnavailable(error)) unsupported.value = true;
     else lastError.value = describeError(error);
   } finally {
     loadingDatabases.value = false;

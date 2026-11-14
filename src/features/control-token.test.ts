@@ -26,8 +26,8 @@ function memoryStorage(): TokenStorage & { data: Map<string, string> } {
 
 const rejected = () =>
   new ApiError(401, "control token missing or invalid", {
-    code: 4001,
-    detail: "control token missing or invalid",
+    code: 1002,
+    error: { msg: "control token missing or invalid" },
   });
 
 describe("控制令牌：按后端地址分开保存", () => {
@@ -164,7 +164,7 @@ describe("控制令牌：写请求被拒的统一提示", () => {
     const stop = onControlTokenRejected(listener);
     try {
       expect(describeError(new ApiError(401, "unauthorized", { detail: "unauthorized" }))).toBe("HTTP 401：unauthorized");
-      expect(describeError(new ApiError(403, "forbidden", { code: 4001 }))).toBe("HTTP 403：forbidden");
+      expect(describeError(new ApiError(403, "forbidden", { code: 1002 }))).toBe("HTTP 403：forbidden");
       expect(listener).not.toHaveBeenCalled();
     } finally {
       stop();

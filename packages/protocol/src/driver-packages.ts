@@ -151,6 +151,12 @@ export interface DriverPackageGraphLaunch {
   process: DeviceProcess;
 }
 
+/** 操作确认 / 恢复的请求体：操作记录版本 + 原因（审计）。 */
+export interface DriverPackageOperationConfirmInput {
+  expected_version: number;
+  reason: string;
+}
+
 export function createDriverPackagesApi(http: HttpTransport) {
   const base = "/api/v1/driver-packages";
   return {
@@ -172,6 +178,22 @@ export function createDriverPackagesApi(http: HttpTransport) {
       http.request<DriverPackageOperation>({
         method: "GET",
         path: `${base}/operations/${encodeURIComponent(operationId)}`,
+      }),
+    /** GET /driver-packages/changes —— 源码变更、需重启的 Host / Slave 及连带影响（只读，不触发重启）。 */
+    changes: () => http.request<JsonObject>({ method: "GET", path: `${base}/changes` }),
+    /** POST /driver-packages/operations/{id}/confirm —— 人工确认一个待确认的操作（`expected_version` 乐观锁）。 */
+    confirmOperation: (operationId: string, body: DriverPackageOperationConfirmInput) =>
+      http.request<JsonObject>({
+        method: "POST",
+        path: `${base}/operations/${encodeURIComponent(operationId)}/confirm`,
+        body,
+      }),
+    /** POST /driver-packages/operations/{id}/recover —— 重试一个中断操作的恢复步骤。 */
+    recoverOperation: (operationId: string, body: DriverPackageOperationConfirmInput) =>
+      http.request<JsonObject>({
+        method: "POST",
+        path: `${base}/operations/${encodeURIComponent(operationId)}/recover`,
+        body,
       }),
     /** PUT /driver-packages/{name}/enabled —— 启停（下次启动生效）。 */
     setEnabled: (name: string, enabled: boolean) =>

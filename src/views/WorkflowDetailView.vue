@@ -18,7 +18,6 @@ import {
 } from "naive-ui";
 import { ArrowBackOutline } from "@vicons/ionicons5";
 import {
-  ApiError,
   BackendBusinessError,
   declaredWorkflowIo,
   type BackendWorkflowGraph,
@@ -26,6 +25,7 @@ import {
   type BackendWorkflowPublication,
   type BackendWorkflowTask,
   type RegistryPendingImpact,
+  isCapabilityUnavailable,
 } from "@openlab/protocol";
 import EntityRef from "../components/EntityRef.vue";
 import StatusPill from "../components/StatusPill.vue";
@@ -106,7 +106,7 @@ async function loadPublications() {
     publicationsState.value = "";
   } catch (err) {
     publications.value = [];
-    publicationsState.value = err instanceof ApiError && err.status === 404 ? "unsupported" : describeError(err);
+    publicationsState.value = isCapabilityUnavailable(err) ? "unsupported" : describeError(err);
   }
 }
 

@@ -4,7 +4,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { OPERATIONS } from "../src/catalog";
-import { OPENLAB_API_PREFIX, OPENLAB_PROTOCOL_VERSION } from "../src/common";
+import { OPENLAB_API_PREFIX, OPENLAB_PROCESS_MANAGEMENT_PREFIX, OPENLAB_PROTOCOL_VERSION } from "../src/common";
 
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
   version: string;
@@ -50,13 +50,17 @@ describe("@openlab/protocol 发包形态", () => {
 
   it("OpenAPI 快照是契约全集导出，且前缀 / SSE 与常量一致", () => {
     const snapshot = JSON.parse(readFileSync(new URL("../openapi/unilabos-openapi.json", import.meta.url), "utf8")) as {
-      info: { version: string; "x-openlab-protocol": { api_version: string; api_prefix: string; sse: string[] } };
+      info: {
+        version: string;
+        "x-openlab-protocol": { api_version: string; api_prefix: string; sse: string[]; process_management_prefix: string };
+      };
       paths: Record<string, Record<string, { "x-openlab-role"?: string }>>;
     };
     const meta = snapshot.info["x-openlab-protocol"];
     expect(meta.api_version).toBe("v1");
     expect(meta.api_prefix).toBe(OPENLAB_API_PREFIX);
     expect(meta.sse).toEqual(OPERATIONS.filter((op) => op.method === "SSE").map((op) => op.path));
+    expect(meta.process_management_prefix).toBe(OPENLAB_PROCESS_MANAGEMENT_PREFIX);
     for (const [path, item] of Object.entries(snapshot.paths)) {
       for (const [method, operation] of Object.entries(item)) {
         if (["get", "post", "put", "patch", "delete"].includes(method)) {
@@ -66,9 +70,10 @@ describe("@openlab/protocol 发包形态", () => {
     }
   });
 
-  it("目录全部落在 /api/v1 前缀下，id 按 <domain>.<resource>[.<action>] 命名", () => {
+  it("目录落在 /api/v1 前缀下（V1 进程管理按原样用 /v1），id 按 <domain>.<resource>[.<action>] 命名", () => {
     for (const operation of OPERATIONS) {
-      expect(operation.path.startsWith(`${OPENLAB_API_PREFIX}/`)).toBe(true);
+      const prefix = operation.domain === "process-management" ? OPENLAB_PROCESS_MANAGEMENT_PREFIX : OPENLAB_API_PREFIX;
+      expect(operation.path.startsWith(`${prefix}/`), operation.id).toBe(true);
       expect(operation.id).toMatch(/^[a-z0-9-]+(\.[a-z0-9-]+)+$/);
       expect(operation.id.startsWith(`${operation.domain}.`)).toBe(true);
     }
@@ -88,7 +93,7 @@ describe("@openlab/protocol 发包形态", () => {
     }
     // 权威分配的身份用 *_uuid；人可读键允许 id / name / 领域名词
     for (const name of paramNames) {
-      expect(name).toMatch(/(_uuid|_id|^name$|^identity$|^version$|^database$|^table$|^resource_id$|^graph_name$)$/);
+      expect(name).toMatch(/(_uuid|_id|^name$|^identity$|^version$|^database$|^table$|^resource_id$|^graph_name$|^component$)$/);
     }
   });
 });

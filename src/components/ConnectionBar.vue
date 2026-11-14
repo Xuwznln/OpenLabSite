@@ -254,7 +254,7 @@ async function apply(url = draft.value) {
         <a class="link-btn" href="https://github.com/Xuwznln/OpenLabSite/blob/main/docs/LOCAL_START.md" target="_blank" rel="noopener noreferrer">首次使用？查看本地启动教程</a>
         <div class="pop-foot">
           <span v-if="conn.online && conn.health" class="health mono">
-            scheduler {{ conn.health.scheduler }} · execution {{ conn.health.execution }} · registry
+            scheduler {{ conn.health.scheduler_mode ?? conn.health.scheduler }} · execution {{ conn.health.execution }} · registry
             {{ conn.registrySupport === "available" ? "yes" : conn.registrySupport === "unsupported" ? "no" : "…" }}
           </span>
           <span v-else class="health mono">未连接</span>

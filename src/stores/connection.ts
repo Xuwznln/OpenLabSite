@@ -1,19 +1,20 @@
 /**
  * 连接管理：后端地址（localStorage 持久化）+ 健康轮询 + 进程角色识别。
  *
- * `/api/v1/health` 同时给出两个维度，页面据此决定哪些能力可用：
- * - `scheduler`：local = 本进程持有 Workflow Authority；remote = 已接入云端，
- *   工作流写入口不在本进程；
- * - `execution`：ready = 本进程带设备执行面（HostNode、遥测、人工决策）；
- *   disabled = 纯调度权威进程（`unilab --role backend`）。
+ * `/api/v1/health`（V1 裸 JSON）同时给出两个维度，页面据此决定哪些能力可用：
+ * - `scheduler_mode`：local = 本进程持有 Workflow Authority；remote = 已接入远端调度权威，
+ *   工作流写入口不在本进程（V1 的 `scheduler` 字段是 ready / disabled）；
+ * - `execution`：ready = 本进程带设备执行面（HostNode、遥测、人工决策）；restarting = Host
+ *   子进程重启中；disabled = 纯调度权威进程（`unilab --role backend`）。
  *
  * Registry Authority 只在 backend 角色进程挂载，用一次 GET 探测并缓存结果。
  *
  * health 在线后再读 `/api/v1/readiness`（能否接收并执行任务：设备初始化 / Host 重启期间
- * not_ready）；旧后端 404 时记为不支持，之后不再探测（换地址时重置）。
+ * `starting`，HTTP 503）；旧后端 404 时记为不支持，之后不再探测（换地址时重置）。
  *
- * 控制令牌按后端地址分开保存；写请求经 `getToken` 现取，只发给令牌所属的那个地址。
- * 写请求被拒（401 + 4001）由 describeError 上报，`tokenRejected` 置位直到重新保存令牌或换地址。
+ * 控制令牌按后端地址分开保存；写请求经 `getToken` 现取，放在 `X-UniLab-Token` 请求头，只发给
+ * 令牌所属的那个地址。写请求被拒（401 + 1002）由 describeError 上报，`tokenRejected` 置位直到
+ * 重新保存令牌或换地址。
  */
 
 import { defineStore } from "pinia";
@@ -21,6 +22,8 @@ import { computed, onScopeDispose, ref, watch } from "vue";
 import {
   ApiError,
   createEdgeApi,
+  isCapabilityUnavailable,
+  MATERIALS_CHANGED_EVENT,
   RUNTIME_LOG_NOTICE_EVENT,
   type EdgeApi,
   type HealthResponse,
@@ -108,7 +111,7 @@ function createNoticeChannel(
   return { revision, state, start, stop, signal };
 }
 
-const MATERIALS_INVALIDATION_EVENT = "materials.changed";
+const MATERIALS_INVALIDATION_EVENT = MATERIALS_CHANGED_EVENT;
 
 function bindMaterialsInvalidations(
   source: NoticeSource,
@@ -204,7 +207,8 @@ export const useConnectionStore = defineStore("connection", () => {
   });
 
   /** 本进程是否持有 Workflow Authority（可创建/编辑/运行工作流）。 */
-  const schedulerLocal = computed(() => online.value && health.value?.scheduler !== "remote");
+  // V1 health：调度归属在 scheduler_mode（scheduler 是 ready / disabled）
+  const schedulerLocal = computed(() => online.value && (health.value?.scheduler_mode ?? health.value?.scheduler) !== "remote");
   /** 本进程是否带设备执行面（设备目录、遥测、人工决策）。 */
   const executionReady = computed(() => online.value && health.value?.execution === "ready");
   /** 进程角色文案。 */
@@ -307,7 +311,7 @@ export const useConnectionStore = defineStore("connection", () => {
       await api.value.domains.registry.entries();
       registrySupport.value = "available";
     } catch (error) {
-      if (error instanceof ApiError && error.isUnsupported) {
+      if (isCapabilityUnavailable(error)) {
         registrySupport.value = "unsupported";
       }
     } finally {

@@ -20,7 +20,6 @@ import {
 } from "naive-ui";
 import { RefreshOutline } from "@vicons/ionicons5";
 import {
-  ApiError,
   hostlinkPeerState,
   type RestartMode,
   type RestartScope,
@@ -31,6 +30,7 @@ import {
   type RuntimeCommand,
   type RuntimeExecutorEndpoint,
   type SchedulerResourceSnapshot,
+  isCapabilityUnavailable,
 } from "@openlab/protocol";
 import PageHeader from "../components/PageHeader.vue";
 import StatusPill from "../components/StatusPill.vue";
@@ -73,7 +73,7 @@ async function refresh() {
   if (resourceResult.status === "fulfilled") {
     resources.value = resourceResult.value;
     resourcesRemote.value = false;
-  } else if (resourceResult.reason instanceof ApiError && resourceResult.reason.status === 503) {
+  } else if (isCapabilityUnavailable(resourceResult.reason)) {
     resources.value = null;
     resourcesRemote.value = true;
   }
@@ -83,7 +83,7 @@ async function refresh() {
   if (adapterResult.status === "fulfilled") adapterCommands.value = [...adapterResult.value].sort((a, b) => (b.sequence ?? 0) - (a.sequence ?? 0));
   if (eventResult.status === "fulfilled") backendEvents.value = [...eventResult.value].sort((a, b) => (b.sequence ?? 0) - (a.sequence ?? 0));
   if (endpointResult.status === "fulfilled") endpoints.value = endpointResult.value;
-  const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected" && !(result.reason instanceof ApiError && result.reason.status === 503));
+  const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected" && !isCapabilityUnavailable(result.reason));
   lastError.value = failures.length ? failures.map((item) => String(item.reason?.message ?? item.reason)).join("；") : "";
   loading.value = false;
 }
@@ -214,7 +214,7 @@ onUnmounted(() => {
       <div class="page-grid page-grid-3">
         <NCard size="small" title="进程">
           <div class="kv"><span>健康</span><b>{{ conn.health?.status ?? "—" }}</b></div>
-          <div class="kv"><span>调度权威</span><b>{{ conn.health?.scheduler === "local" ? "本进程（local）" : "远端 Backend（remote）" }}</b></div>
+          <div class="kv"><span>调度权威</span><b>{{ conn.schedulerLocal ? "本进程（local）" : "远端 Backend（remote）" }}</b></div>
           <div class="kv"><span>执行面</span><b>{{ conn.health?.execution === "ready" ? "就绪（HostNode 在本进程）" : "无（纯调度权威）" }}</b></div>
           <div class="kv"><span>注册表域</span><b>{{ conn.registrySupport === "available" ? "已挂载" : conn.registrySupport === "unsupported" ? "未挂载（Host 进程）" : "探测中" }}</b></div>
           <div class="kv"><span>SSE</span><b>workflow {{ conn.workflowNoticeState }} · materials {{ conn.materialsNoticeState }}</b></div>

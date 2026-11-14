@@ -28,11 +28,11 @@ import {
 } from "naive-ui";
 import { RefreshOutline } from "@vicons/ionicons5";
 import {
-  ApiError,
   type DriverPackage,
   type DriverPackageInventory,
   type DriverPackageOperation,
   type RestartStatus,
+  isCapabilityUnavailable,
 } from "@openlab/protocol";
 import DeviceProcessesPanel from "../components/DeviceProcessesPanel.vue";
 import DriverPackageCatalog from "../components/DriverPackageCatalog.vue";
@@ -69,7 +69,7 @@ async function refresh() {
     unsupported.value = false;
     lastError.value = "";
   } catch (error) {
-    if (error instanceof ApiError && error.isUnsupported) {
+    if (isCapabilityUnavailable(error)) {
       unsupported.value = true;
     } else {
       lastError.value = describeError(error);
