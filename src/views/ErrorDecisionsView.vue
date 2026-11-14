@@ -24,7 +24,7 @@ import {
   useMessage,
 } from "naive-ui";
 import { CheckmarkDoneOutline, HandRightOutline, WarningOutline } from "@vicons/ionicons5";
-import type { BackendManualConfirmationDecisionInput, ErrorDecision, ErrorDecisionOption } from "@openlab/protocol";
+import type { BackendIntervention, BackendManualConfirmationDecisionInput, ErrorDecision, ErrorDecisionOption } from "@openlab/protocol";
 import EntityRef from "../components/EntityRef.vue";
 import PageHeader from "../components/PageHeader.vue";
 import { useDecisionsStore, type PendingManualConfirmation } from "../stores/decisions";
@@ -62,7 +62,7 @@ function confirmOverdue(item: PendingManualConfirmation): boolean {
   return Boolean(deadline) && deadline! / 1000 - nowS.value <= 0;
 }
 
-const CONFIRM_ACTION_LABELS: Record<string, string> = { approve: "确认放行", skip: "跳过", reject: "拒绝" };
+const CONFIRM_ACTION_LABELS: Record<string, string> = { approve: "确认放行", reject: "拒绝" };
 
 async function decideConfirmation(item: PendingManualConfirmation, action: BackendManualConfirmationDecisionInput["action"]) {
   const actor = actorFor(item).trim() || "operator";
@@ -73,12 +73,37 @@ async function decideConfirmation(item: PendingManualConfirmation, action: Backe
   }
   submitting.value = `${item.confirmation.uuid}:${action}`;
   try {
-    await decisions.decideManualConfirmation(item.confirmation.uuid, {
+    await decisions.decideManualConfirmation(item.confirmation, {
       action,
       confirmed_by: actor,
       decision_idempotency_key: `openlab-manual:${item.confirmation.uuid}:${action}`,
     });
     message.success(`已提交「${CONFIRM_ACTION_LABELS[action] ?? action}」`);
+  } catch (err) {
+    message.error(`提交失败：${describeError(err)}`);
+  } finally {
+    submitting.value = "";
+  }
+}
+
+/** V1 干预方案按 `option_id` 选择；设备给出的选项 id 字段可能叫 id 或 option_id。 */
+function interventionOptionId(option: unknown): string {
+  const record = (option ?? {}) as Record<string, unknown>;
+  const id = record.id ?? record.option_id ?? record.action;
+  return typeof id === "string" ? id : "";
+}
+
+function interventionOptionLabel(option: unknown, index: number): string {
+  const record = (option ?? {}) as Record<string, unknown>;
+  const id = interventionOptionId(option);
+  return String(record.label ?? (ACTION_LABELS[id] || id) ?? `选项 ${index + 1}`);
+}
+
+async function decideIntervention(item: BackendIntervention, optionId: string) {
+  submitting.value = `${item.uuid}:${optionId}`;
+  try {
+    await decisions.decideIntervention(item, optionId, `openlab-intervention:${item.uuid}:${item.revision}:${optionId}`);
+    message.success(`已提交「${interventionOptionLabel(item.options.find((option) => interventionOptionId(option) === optionId), 0)}」`);
   } catch (err) {
     message.error(`提交失败：${describeError(err)}`);
   } finally {
@@ -122,7 +147,7 @@ function remaining(decision: ErrorDecision): string {
 }
 
 function expired(decision: ErrorDecision): boolean {
-  return Boolean(decision.expires_at) && decision.expires_at - nowS.value <= 0;
+  return decision.expires_at !== undefined && decision.expires_at > 0 && decision.expires_at - nowS.value <= 0;
 }
 
 // ── 人工替换结果 ──
@@ -182,7 +207,7 @@ async function choose(
 
 const unsupported = computed(() => decisions.errorSupport === "unsupported");
 const empty = computed(
-  () => !decisions.errorDecisions.length && !decisions.interventions.length && !decisions.manualConfirmations.length,
+  () => !decisions.errorDecisions.length && !decisions.standaloneInterventions.length && !decisions.manualConfirmations.length,
 );
 
 let clock: ReturnType<typeof setInterval> | null = null;
@@ -279,7 +304,6 @@ onUnmounted(() => {
               >
                 确认放行
               </NButton>
-              <NButton size="small" secondary :disabled="!!submitting" @click="decideConfirmation(item, 'skip')">跳过</NButton>
               <NButton size="small" tertiary type="error" :disabled="!!submitting" @click="decideConfirmation(item, 'reject')">拒绝</NButton>
             </div>
           </div>
@@ -305,7 +329,8 @@ onUnmounted(() => {
               <span v-if="item.node_id">节点 <span class="mono">{{ item.node_id.slice(0, 8) }}</span></span>
               <span>重试 {{ item.retry_count }}/{{ item.max_retries }}</span>
               <span>发生于 {{ fmtTime(item.created_at) }}</span>
-              <span>超时默认：{{ ACTION_LABELS[item.default_on_decision_timeout] ?? item.default_on_decision_timeout }}</span>
+              <span v-if="item.category === 'preflight'">动作尚未派发（执行前预检）</span>
+              <span v-if="item.default_on_decision_timeout">超时默认：{{ ACTION_LABELS[item.default_on_decision_timeout] ?? item.default_on_decision_timeout }}</span>
             </div>
             <details v-if="item.traceback" class="trace">
               <summary>Traceback</summary>
@@ -330,10 +355,10 @@ onUnmounted(() => {
         </div>
       </section>
 
-      <section v-if="decisions.interventions.length">
-        <div class="section-title">工作流干预（{{ decisions.interventions.length }}）</div>
+      <section v-if="decisions.standaloneInterventions.length">
+        <div class="section-title">工作流干预（{{ decisions.standaloneInterventions.length }}）</div>
         <div class="cards">
-          <div v-for="item in decisions.interventions" :key="item.uuid" class="decision-card intervention">
+          <div v-for="item in decisions.standaloneInterventions" :key="item.uuid" class="decision-card intervention">
             <div class="card-head">
               <NTag type="warning" size="small" :bordered="false">revision {{ item.revision }}</NTag>
               <span class="title">作业 <EntityRef :uuid="item.workflow_node_job_uuid" mono /></span>
@@ -343,14 +368,26 @@ onUnmounted(() => {
               </NButton>
             </div>
             <div class="meta-row">
-              <span>执行端 <span class="mono">{{ item.edge_agent_uuid }}</span></span>
+              <span v-if="item.edge_command_uuid">决策 <span class="mono">{{ item.edge_command_uuid }}</span></span>
               <span>开启 {{ item.opened_at }}</span>
               <span>恢复控制态 {{ item.resume_control_status }}</span>
+              <span v-if="item.delivery_status && item.delivery_status !== 'none'">投递 {{ item.delivery_status }}</span>
             </div>
             <div class="options">
-              <NTag v-for="(option, index) in item.options" :key="index" size="small" :bordered="false">
-                {{ (option as Record<string, unknown>).label ?? (option as Record<string, unknown>).id ?? `选项 ${index + 1}` }}
-              </NTag>
+              <template v-for="(option, index) in item.options" :key="index">
+                <NButton
+                  v-if="interventionOptionId(option)"
+                  size="small"
+                  :type="ACTION_TYPES[interventionOptionId(option)] ?? 'default'"
+                  secondary
+                  :loading="submitting === `${item.uuid}:${interventionOptionId(option)}`"
+                  :disabled="!!submitting"
+                  @click="decideIntervention(item, interventionOptionId(option))"
+                >
+                  {{ interventionOptionLabel(option, index) }}
+                </NButton>
+                <NTag v-else size="small" :bordered="false">{{ interventionOptionLabel(option, index) }}</NTag>
+              </template>
             </div>
           </div>
         </div>

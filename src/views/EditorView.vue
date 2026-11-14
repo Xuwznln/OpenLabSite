@@ -132,7 +132,7 @@ import {
   setDragPayload,
   type SpecialKind,
 } from "../features/canvas-dnd";
-import { actionSchemaDetailFromCapability } from "@openlab/protocol";
+import { actionSchemaDetailFromCapability, type BackendWorkflowType } from "@openlab/protocol";
 import { useActionParamForm } from "../features/action-param-form";
 import {
   actionParamSummary,
@@ -251,6 +251,12 @@ const VARIABLE_STORE_KEY = "unilab-edge-ui:workflow-variable-profiles";
 // 内部 ID 自动生成（时间戳保证不重复），用户可编辑的是展示名 workflowName
 const workflowId = ref(`wf-${Date.now()}`);
 const workflowName = ref("");
+/** V1 工作流类型：只有「实验操作」能被其他工作流组合引用；权威定义创建后不能改。 */
+const workflowType = ref<BackendWorkflowType>("normal");
+const workflowTypeOptions = [
+  { label: "普通工作流", value: "normal" },
+  { label: "实验操作（可被引用）", value: "experiment_operation" },
+];
 const priority = ref("normal");
 /** 这份草稿已提交到 Workflow Authority 的定义 uuid；再提交即更新同一定义。 */
 const authorityWorkflowUuid = ref("");
@@ -1470,6 +1476,8 @@ function autoLayout() {
 type Draft = {
   workflowId: string;
   workflowName?: string;
+  /** V1 工作流类型（旧草稿缺省 normal）。 */
+  workflowType?: BackendWorkflowType;
   priority: string;
   /** 已提交到权威的定义 uuid（再提交即更新）。 */
   authorityWorkflowUuid?: string;
@@ -1521,6 +1529,7 @@ function snapshotDraft(): Draft {
   return {
     workflowId: workflowId.value,
     workflowName: workflowName.value,
+    workflowType: workflowType.value,
     priority: priority.value,
     authorityWorkflowUuid: authorityWorkflowUuid.value || undefined,
     variables: cloneJson(workflowVariables.value),
@@ -1574,7 +1583,7 @@ onUnmounted(() => {
 
 // 节点拖动 / 增删 / 连线都会反映在 getNodes/getEdges 上，深度监听统一触发
 watch([() => flow.getNodes.value, () => flow.getEdges.value], saveDraftSoon, { deep: true });
-watch([workflowId, workflowName, priority], saveDraftSoon);
+watch([workflowId, workflowName, workflowType, priority], saveDraftSoon);
 watch(workflowVariables, saveDraftSoon, { deep: true });
 
 // ── 撤销 / 重做 ──
@@ -3824,6 +3833,7 @@ function restoreDraft(draft: Draft) {
     draft.workflowName ??
     (draft.workflowId && !/^wf-\d+$/.test(draft.workflowId) ? draft.workflowId : "");
   priority.value = draft.priority || "normal";
+  workflowType.value = draft.workflowType === "experiment_operation" ? "experiment_operation" : "normal";
   workflowVariables.value = normalizeVariables(draft.variables);
   workflowIo.value = normalizeEditorIo(draft.io);
   ensurePriorityOption(priority.value);
@@ -3851,6 +3861,7 @@ function newWorkflow() {
   setEdges([]);
   workflowId.value = `wf-${Date.now()}`;
   workflowName.value = "";
+  workflowType.value = "normal";
   priority.value = "normal";
   authorityWorkflowUuid.value = "";
   workflowVariables.value = [];
@@ -4028,6 +4039,7 @@ async function cloneFrom(sourceId: string) {
     restoreDraft({
       workflowId: `wf-${Date.now()}`,
       workflowName: graph.workflow.name ? `${graph.workflow.name} 副本` : "",
+      workflowType: graph.workflow.workflow_type === "experiment_operation" ? "experiment_operation" : "normal",
       priority: "normal",
       variables: localVariables.length ? localVariables : storedVariables,
       ...(importedIo ? { io: importedIo.io } : {}),
@@ -4437,15 +4449,16 @@ async function insertPublishedWorkflow(payload: {
     }
     const anchorId = chainAnchorId();
     const position = insertPosition(anchorId);
-    const result = await conn.api.domains.workflowBackend.insertCompositeInvocation(saved.workflow.uuid, {
+    // V1：按发布合同（contract_uuid = 发布 uuid）插入实验操作，返回插入后的父图
+    const invocationUuid = newNodeUuid();
+    const graph = await conn.api.domains.workflowBackend.insertCompositeInvocation(saved.workflow.uuid, {
       revision: saved.workflow.revision,
-      child_workflow_uuid: payload.publication.workflow_uuid,
-      child_revision: payload.publication.revision,
-      invocation_uuid: newNodeUuid(),
-      arguments: payload.arguments,
+      contract_uuid: payload.publication.uuid,
+      invocation_uuid: invocationUuid,
+      param: payload.arguments,
       pose: { x: Math.round(position.x), y: Math.round(position.y) },
     });
-    const data = compositeDataFromGraph(result.graph, result.invocation_uuid);
+    const data = compositeDataFromGraph(graph, invocationUuid);
     if (!data) throw new Error("插入结果里找不到这次的组合调用节点");
     addNodes([{ id: data.uuid, type: COMPOSITE_NODE_TYPE, position, data: data as unknown as Record<string, unknown> }]);
     const anchor = anchorId ? nodeById(anchorId) : undefined;
@@ -4682,6 +4695,7 @@ async function performSubmit(
       workflowUuid: authorityWorkflowUuid.value || undefined,
       runMode: options.runMode ?? "normal",
       name,
+      workflowType: workflowType.value,
       description: transformed.notes.length ? `分支求值：${transformed.notes.join("；")}` : undefined,
       metaData: {
         priority: priority.value,
@@ -4778,6 +4792,14 @@ onUnmounted(() => {
         >
           <template #prefix><span class="wf-prefix">名称</span></template>
         </NInput>
+        <NSelect
+          v-model:value="workflowType"
+          :options="workflowTypeOptions"
+          size="small"
+          style="width: 170px"
+          :disabled="!!authorityWorkflowUuid"
+          :title="authorityWorkflowUuid ? '已保存到后端的工作流不能改类型（V1 合同）' : '只有「实验操作」发布后能作为子工作流插入其他工作流'"
+        />
         <NSelect
           v-model:value="priority"
           :options="priorityOptions"

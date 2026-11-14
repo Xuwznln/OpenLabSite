@@ -20,6 +20,7 @@ import type {
   BackendWorkflowNodeWrite,
   BackendWorkflowTask,
   BackendWorkflowTaskSubmitInput,
+  BackendWorkflowType,
   BackendWorkflowWriteInput,
   JsonObject,
 } from "@openlab/protocol";
@@ -526,6 +527,8 @@ export interface SubmitWorkflowInput {
   name: string;
   description?: string;
   metaData?: JsonObject;
+  /** V1：新建时的工作流类型（缺省 normal）；只有实验操作能被其他工作流组合引用，创建后不能改。 */
+  workflowType?: BackendWorkflowType;
   nodes: BackendWorkflowNodeWrite[];
   /** 画布本身没有边；只有原样保留的组合调用展开边需要回传（缺省空数组）。 */
   edges?: BackendGraphWriteInput["edges"];
@@ -570,14 +573,14 @@ export async function submitWorkflow(api: SubmitWorkflowApi, input: SubmitWorkfl
         (error instanceof BackendBusinessError && error.isNotFound) ||
         (error instanceof ApiError && error.status === 404)
       ) {
-        workflow = await api.createWorkflow(body);
+        workflow = await api.createWorkflow({ ...body, workflow_type: input.workflowType ?? "normal" });
         created = true;
       } else {
         throw error;
       }
     }
   } else {
-    workflow = await api.createWorkflow(body);
+    workflow = await api.createWorkflow({ ...body, workflow_type: input.workflowType ?? "normal" });
     created = true;
   }
 

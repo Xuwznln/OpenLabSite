@@ -2,7 +2,10 @@
 /**
  * 插入已发布的工作流（组合调用）：从每个工作流的最新发布里选一个，为它的每个入口参数给实参——
  * 固定值、绑定到当前流程自己的入口参数，或（可选参数）不传。插入由调用方完成（先保存当前画布，
- * 再 POST composite-invocations）。
+ * 再按发布合同 POST composite-invocations）。
+ *
+ * V1 合同：只有「实验操作」（workflow_type=experiment_operation）且当前修订已发布的工作流可以被
+ * 引用；其余发布在列表里置灰并说明原因。
  */
 import { computed, ref, shallowRef, watch } from "vue";
 import { NAlert, NButton, NEmpty, NModal, NSelect, NSpace, NSpin, NTag } from "naive-ui";
@@ -47,17 +50,30 @@ const staticValues = ref<EntryFormValues>({});
 const fieldErrors = ref<Record<string, string>>({});
 const formError = ref("");
 
+/** 可被引用的实验操作：workflow_uuid → 当前修订（status=published 时等于最新发布的修订）。 */
+const insertable = shallowRef<Map<string, number>>(new Map());
 const selected = computed(() => publications.value.find((item) => item.uuid === selectedUuid.value) ?? null);
-const candidates = computed(() => publications.value.filter((item) => item.workflow_uuid !== props.currentWorkflowUuid));
+const others = computed(() => publications.value.filter((item) => item.workflow_uuid !== props.currentWorkflowUuid));
+const candidates = computed(() =>
+  others.value.filter((item) => insertable.value.get(item.workflow_uuid) === (item.workflow_revision ?? item.revision)),
+);
+const blockedCount = computed(() => others.value.length - candidates.value.length);
 const staticInputs = computed(() => (selected.value?.inputs ?? []).filter((item) => modes.value[item.name] === "static"));
 
 async function load() {
   loading.value = true;
   loadError.value = "";
   try {
-    publications.value = await conn.api.domains.workflowBackend.latestPublications();
+    const api = conn.api.domains.workflowBackend;
+    const [latest, operations] = await Promise.all([
+      api.latestPublications(),
+      api.workflows({ workflow_type: "experiment_operation", status: "published", page: 1, page_size: 100 }),
+    ]);
+    publications.value = latest;
+    insertable.value = new Map(operations.items.map((item) => [item.uuid, item.revision]));
   } catch (error) {
     publications.value = [];
+    insertable.value = new Map();
     loadError.value = describeError(error);
   } finally {
     loading.value = false;
@@ -142,10 +158,17 @@ function fmtTime(iso: string): string {
   <NModal v-model:show="show" preset="card" title="插入已发布的工作流" style="width: min(860px, 96vw)" :mask-closable="!props.busy">
     <div class="insert-layout">
       <section class="pub-list">
-        <div class="col-title">已发布的工作流（各取最新发布）</div>
+        <div class="col-title">已发布的实验操作（各取最新发布）</div>
         <NSpin v-if="loading" size="small" />
         <NAlert v-else-if="loadError" type="warning" :bordered="false">读取发布目录失败：{{ loadError }}</NAlert>
-        <NEmpty v-else-if="!candidates.length" size="small" description="还没有可插入的工作流：先在流程详情页「发布当前版本」" />
+        <NEmpty
+          v-else-if="!candidates.length"
+          size="small"
+          description="还没有可插入的工作流：新建时类型选「实验操作」，保存后在流程详情页「发布当前版本」"
+        />
+        <div v-if="!loading && !loadError && blockedCount" class="dim small blocked-note">
+          另有 {{ blockedCount }} 个已发布工作流不能插入：只有「实验操作」类型、且当前版本已发布的才能被引用。
+        </div>
         <button
           v-for="item in candidates"
           :key="item.uuid"
@@ -283,5 +306,9 @@ function fmtTime(iso: string): string {
 
 .static-block {
   margin-top: 12px;
+}
+.blocked-note {
+  margin-top: 8px;
+  line-height: 1.5;
 }
 </style>
