@@ -41,6 +41,8 @@ import { useEntityCacheStore } from "./stores/entity-cache";
 import { useLabStore } from "./stores/lab";
 import { useSchedulerStore } from "./stores/scheduler";
 import { domainThemeOverrides } from "./theme";
+/** 在 setup 里只读一次 `:id` 的详情页（任务运行时、流程详情），换 uuid 时需要重新挂载。 */
+const DETAIL_ROUTES = new Set(["workflow-task-detail", "workflow-detail"]);
 
 const route = useRoute();
 const conn = useConnectionStore();
@@ -355,7 +357,10 @@ onUnmounted(() => {
                     </div>
                   </div>
                 </Transition>
-                <RouterView />
+                <!-- 详情页在 setup 里读一次路由参数：从一个任务 / 流程详情跳到另一个时按 uuid 重新挂载，避免显示上一条 -->
+                <RouterView v-slot="{ Component, route: current }">
+                  <component :is="Component" :key="DETAIL_ROUTES.has(String(current.name)) ? current.path : String(current.name)" />
+                </RouterView>
               </div>
             </div>
           </main>

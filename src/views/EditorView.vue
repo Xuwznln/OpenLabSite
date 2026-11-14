@@ -24,6 +24,7 @@ import { Background } from "@vue-flow/background";
 import { Controls } from "@vue-flow/controls";
 import { MiniMap } from "@vue-flow/minimap";
 import dagre from "@dagrejs/dagre";
+import { compoundLayoutEdges, type CompoundLayoutNode } from "../features/compound-layout";
 import {
   NAlert,
   NButton,
@@ -1418,13 +1419,11 @@ function autoLayout() {
   g.setGraph({ rankdir: "LR", nodesep: 46, ranksep: 92 });
   g.setDefaultEdgeLabel(() => ({}));
   for (const n of nodes) g.setNode(n.id, { width: 220, height: 72 });
-  for (const n of nodes) {
-    const loop = nearestLoopAncestor(n.id, byId);
-    if (loop) g.setParent(n.id, loop);
-  }
-  for (const e of liteEdges.value) {
-    if (g.hasNode(e.source) && g.hasNode(e.target)) g.setEdge(e.source, e.target);
-  }
+  const members: CompoundLayoutNode[] = nodes.map((n) => ({ id: n.id, parent: nearestLoopAncestor(n.id, byId) ?? null }));
+  for (const member of members) if (member.parent) g.setParent(member.id, member.parent);
+  // 连到循环框本身的线换成循环的入口 / 出口成员（dagre 复合节点不支持连线直连）
+  const layoutEdges = liteEdges.value.filter((e) => g.hasNode(e.source) && g.hasNode(e.target));
+  for (const e of compoundLayoutEdges(members, layoutEdges)) g.setEdge(e.source, e.target);
   dagre.layout(g);
   // 循环框：簇的外接框再向上留出标题栏；成员相对循环框左上角
   const loopFrames = new Map<string, { x: number; y: number; width: number; height: number }>();
@@ -2294,7 +2293,9 @@ function layoutExpansion(
   g.setDefaultEdgeLabel(() => ({}));
   for (const n of nodes) g.setNode(n.key, { width: 220, height: 72 });
   for (const n of nodes) if (n.parent) g.setParent(n.key, n.parent);
-  for (const e of edges) g.setEdge(e.source, e.target);
+  // 设备包模板的连线直接连在循环节点上：布局时换成循环的入口 / 出口成员
+  const members = nodes.map((n) => ({ id: n.key, parent: n.parent ?? null }));
+  for (const e of compoundLayoutEdges(members, edges)) g.setEdge(e.source, e.target);
   dagre.layout(g);
   const frames = new Map<string, ExpansionFrame>();
   for (const n of nodes) {

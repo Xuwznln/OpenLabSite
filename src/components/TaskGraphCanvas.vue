@@ -11,6 +11,7 @@ import { computed, ref, watch } from "vue";
 import { Handle, Position, VueFlow, useVueFlow, type Edge, type Node } from "@vue-flow/core";
 import { Background } from "@vue-flow/background";
 import dagre from "@dagrejs/dagre";
+import { compoundLayoutEdges } from "../features/compound-layout";
 import type {
   BackendLoopProgress,
   BackendManualConfirmation,
@@ -88,7 +89,6 @@ const graph = computed(() => {
     const key = `${source}->${target}`;
     if (edgeKeys.has(key)) return;
     edgeKeys.add(key);
-    g.setEdge(source, target);
     edges.push({ id: key, source, target, type: "smoothstep", style: { stroke: "#94a3b8", strokeWidth: 2 } });
   };
   for (const node of nodes) g.setNode(node.uuid, { width: NODE_W, height: NODE_H });
@@ -107,6 +107,9 @@ const graph = computed(() => {
     const dependsOn = asRecord(node.execution_policy)?.depends_on;
     if (Array.isArray(dependsOn)) for (const upstream of dependsOn) addEdge(String(upstream), node.uuid);
   }
+  // 连在循环节点本身的依赖：布局时换成循环的入口 / 出口成员（dagre 复合节点不支持连线直连），画面上的线不变
+  const members = nodes.map((node) => ({ id: node.uuid, parent: loopParentOf(node) ?? null }));
+  for (const edge of compoundLayoutEdges(members, edges)) g.setEdge(edge.source, edge.target);
   dagre.layout(g);
 
   // 循环框：簇外接框加内边距，并向上留出标题栏；成员坐标相对循环框
