@@ -530,7 +530,7 @@ export interface BackendWorkflowEdgeWrite {
 }
 
 export interface BackendGraphWriteInput {
-  /** 程序化导入默认 resolve；浏览器草稿必须 preserve，等待显式 Site 确认。 */
+  /** V1 缺省 preserve（普通保存）；程序化导入显式传 resolve。浏览器草稿用 preserve，等待显式 Site 确认。 */
   site_binding_mode?: "resolve" | "preserve";
   revision: number;
   nodes: BackendWorkflowNodeWrite[];
