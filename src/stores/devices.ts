@@ -190,7 +190,7 @@ export const useDevicesStore = defineStore("devices", () => {
     const api = conn.api.domains;
     const [endpointResult, rootsResult, telemetryResult, hostlinkResult] = await Promise.allSettled([
       api.runtimeV1.endpoints({ limit: 200 }),
-      api.materialsV1.instances(true),
+      api.inventory.instances({ rootsOnly: true }),
       api.telemetryV1.states(),
       api.system.hostlinkPeers(),
     ]);

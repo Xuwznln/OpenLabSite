@@ -65,14 +65,15 @@ export const useEntityCacheStore = defineStore("entity-cache", () => {
   const refresh = createRefreshQueue(async () => {
     if (!conn.online) return;
     try {
-      const api = conn.api.domains.materialsV1;
+      // 读走 V1 库存面 /inventory/*（物料聚合 / 模板目录 / 批次 / 账本）
+      const api = conn.api.domains.inventory;
       const [aggregates, templates, lots, changes] = await Promise.all([
         api.instances(),
         api.templates({ includeDefinition: false }).catch(() => []),
         api.lots().catch(() => []),
-        api.changes(0, 500).catch(() => []),
+        api.ledger(0, 500).catch(() => []),
       ]);
-      if (api !== conn.api.domains.materialsV1) return;
+      if (api !== conn.api.domains.inventory) return;
       const next = new Map<string, EntityInfo>();
       const templateName = new Map(templates.map((item) => [item.template_uuid, item.display_name || item.name]));
       for (const template of templates) {

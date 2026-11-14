@@ -40,7 +40,7 @@ import {
   type LabLayout,
   type PaintTool,
 } from "../features/lab-layout";
-import { ApiError } from "@openlab/protocol";
+import { ApiError, BackendBusinessError } from "@openlab/protocol";
 import { describeError } from "../features/errors";
 import { useConnectionStore } from "../stores/connection";
 import { useDevicesStore } from "../stores/devices";
@@ -156,6 +156,13 @@ async function loadServerLayout() {
   try {
     const doc = await conn.api.domains.labV1.layout();
     if (scope !== layoutScope.value) return;
+    if (!doc) {
+      // V1 lab 合同：进程没有布局网格服务时 grid 为 null（角色不支持），不能用空布局覆盖
+      layoutBacking.value = "error";
+      editing.value = false;
+      layoutError.value = "当前后端不提供实验室布局网格（GET /api/v1/lab/layout 的 grid 为空）";
+      return;
+    }
     applyServerLayout(doc);
   } catch (error) {
     if (scope !== layoutScope.value) return;
@@ -166,7 +173,7 @@ async function loadServerLayout() {
   }
 }
 
-function applyServerLayout(doc: Awaited<ReturnType<typeof conn.api.domains.labV1.layout>>) {
+function applyServerLayout(doc: NonNullable<Awaited<ReturnType<typeof conn.api.domains.labV1.layout>>>) {
   layout.value = fromServerLayout(doc);
   layoutRevision.value = doc.revision;
   layoutBacking.value = "server";
@@ -182,15 +189,17 @@ async function flushLayoutSave() {
   const scope = layoutScope.value;
   layoutSaving.value = true;
   try {
+    // V1：网格经 PUT /lab/profile 的 grid 整份替换（revision 乐观锁，过期 3003）
     const saved = await conn.api.domains.labV1.saveLayout(toServerLayout(next, layoutRevision.value));
     if (scope !== layoutScope.value) return;
+    if (!saved) throw new Error("后端没有返回布局网格");
     layoutRevision.value = saved.revision;
     layoutSyncedAt.value = Date.now();
     // 保存期间又有新改动：紧接着再存一轮
     if (pendingSave) scheduleLayoutSave();
   } catch (error) {
     if (scope !== layoutScope.value) return;
-    if (error instanceof ApiError && error.status === 409) {
+    if ((error instanceof BackendBusinessError && error.isConflict) || (error instanceof ApiError && error.status === 409)) {
       message.warning("布局刚被其他人修改，已刷新为服务端版本；你的这一笔改动请重新绘制");
       pendingSave = null;
       await loadServerLayout();
@@ -513,7 +522,7 @@ const refreshMaterials = createRefreshQueue(async () => {
   const api = conn.api;
   materialsLoading.value = true;
   try {
-    const snapshot = await api.domains.materialsV1.instances();
+    const snapshot = await api.domains.inventory.instances();
     if (api !== conn.api) return;
     allAggregates.value = snapshot;
     materialsError.value = "";

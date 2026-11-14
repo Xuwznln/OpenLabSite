@@ -181,14 +181,14 @@ const FIELD_HINTS: [RegExp, ChemicalField][] = [
 ];
 
 /**
- * 化学品写入失败 → 可读文案与字段：业务码 1000（校验）/ 3003（重复键或版本过期）/ 3002（已删除），
- * 以及 FastAPI 422 的字段校验（loc 指向 body 字段）。
+ * 化学品写入失败 → 可读文案与字段。V1 合同里化学品按资源口径：不存在 4001、冲突（重复键或版本过期）
+ * 4002，校验失败 1000（不再有 FastAPI 422）；dev 旧码 3002 / 3003 同样识别。
  */
 export function describeChemicalError(error: unknown): ChemicalErrorInfo | null {
   if (error instanceof BackendBusinessError) {
     const message = error.message;
-    if (error.code === BACKEND_BUSINESS_CODES.notFound) return { message: "化学品不存在或已被删除，已刷新列表", conflict: true };
-    if (error.code === BACKEND_BUSINESS_CODES.conflict) {
+    if (error.isNotFound) return { message: "化学品不存在或已被删除，已刷新列表", conflict: true };
+    if (error.isConflict) {
       if (/CAS/.test(message)) return { message: "已有相同 CAS 登记号的化学品（同一 CAS 只能登记一次）", field: "cas", conflict: true };
       if (/InChIKey/i.test(message)) return { message: "已有相同 InChIKey 的化学品", field: "inchi_key", conflict: true };
       return { message: "化学品已被别人修改或删除（版本已变化），已重新读取；请确认后再操作", conflict: true };

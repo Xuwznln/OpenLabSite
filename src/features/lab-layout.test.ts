@@ -83,8 +83,8 @@ describe("lab-layout", () => {
       cell_size: 50,
       zones: [{ id: "prep", name: "样品制备区", color: "#2e5bff", cells: ["0,0", "1,0"] }],
       walls: ["3,3"],
-      created_at_ms: 1_700_000_000_000,
-      updated_at_ms: 1_700_000_500_000,
+      create_time: "2023-11-14T22:13:20.000Z",
+      update_time: "2023-11-14T22:21:40.000Z",
     };
     const layout = fromServerLayout(doc);
     expect(layout).toEqual({
@@ -103,7 +103,7 @@ describe("lab-layout", () => {
     // 转出去的是副本：改 write 不影响画布模型
     write.walls.push("9,9");
     expect(layout.walls).toEqual(["3,3"]);
-    // 从未保存的文档：updated_at_ms 为 0 时给一个当前时间，避免显示 1970
-    expect(fromServerLayout({ ...doc, revision: 0, zones: [], walls: [], updated_at_ms: 0 }).updatedAt).toBeGreaterThan(0);
+    // 从未保存的文档：update_time 是 1970 纪元时给一个当前时间，避免显示 1970
+    expect(fromServerLayout({ ...doc, revision: 0, zones: [], walls: [], update_time: "1970-01-01T00:00:00.000Z" }).updatedAt).toBeGreaterThan(1_700_000_000_000);
   });
 });

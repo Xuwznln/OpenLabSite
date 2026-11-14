@@ -77,7 +77,10 @@ describe("后端错误指回字段", () => {
     expect(describeChemicalError(business(1000, "name 不能为空"))?.field).toBe("name");
   });
 
-  it("3003：重复 CAS / InChIKey 指向字段，版本过期提示刷新；3002 已删除", () => {
+  it("4002 / 3003：重复 CAS / InChIKey 指向字段，版本过期提示刷新；4001 / 3002 已删除", () => {
+    // V1 资源口径
+    expect(describeChemicalError(business(4002, "已有相同 CAS 登记号的化学品"))).toMatchObject({ field: "cas", conflict: true });
+    expect(describeChemicalError(business(4001, "化学品 x 不存在"))).toMatchObject({ conflict: true });
     expect(describeChemicalError(business(3003, "已有相同 CAS 登记号的化学品"))).toMatchObject({ field: "cas", conflict: true });
     expect(describeChemicalError(business(3003, "已有相同 InChIKey 的化学品"))).toMatchObject({ field: "inchi_key", conflict: true });
     const stale = describeChemicalError(business(3003, "化学品已被修改，请刷新后重试"));

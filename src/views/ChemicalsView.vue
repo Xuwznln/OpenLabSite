@@ -26,7 +26,7 @@ import {
   type DataTableColumns,
 } from "naive-ui";
 import { AddOutline, RefreshOutline } from "@vicons/ionicons5";
-import { ApiError, BackendBusinessError, type Chemical, type ChemicalPhysicalState } from "@openlab/protocol";
+import { BackendBusinessError, type Chemical, type ChemicalPhysicalState, isCapabilityUnavailable } from "@openlab/protocol";
 import PageHeader from "../components/PageHeader.vue";
 import ChemicalFormDialog from "../components/ChemicalFormDialog.vue";
 import { describeError } from "../features/errors";
@@ -79,7 +79,7 @@ async function load(resetPage = false) {
     lastError.value = "";
     loaded.value = true;
   } catch (error) {
-    if (error instanceof ApiError && error.status === 404) unsupported.value = true;
+    if (isCapabilityUnavailable(error)) unsupported.value = true;
     else lastError.value = describeError(error);
   } finally {
     loading.value = false;
@@ -124,7 +124,7 @@ async function loadReferences() {
   if (!id) return;
   referencesLoading.value = true;
   try {
-    const aggregates = await conn.api.domains.materialsV1.instances();
+    const aggregates = await conn.api.domains.inventory.instances();
     if (id === detailId.value) references.value = substanceReferences(aggregates, id);
   } catch (error) {
     message.error(`读取物料失败：${describeError(error)}`);

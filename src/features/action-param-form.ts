@@ -205,7 +205,7 @@ export function useActionParamForm(options: ActionParamFormOptions) {
   async function loadMaterials(seq: number): Promise<void> {
     materialOptionState.value = { ...emptyOptionState(), loading: true };
     try {
-      const data = await options.api().domains.materialsV1.instances();
+      const data = await options.api().domains.inventory.instances();
       if (seq !== loadSeq) return;
       const index = new Map<string, string>();
       const opts = data.map((item) => {
@@ -235,7 +235,7 @@ export function useActionParamForm(options: ActionParamFormOptions) {
     try {
       if (options.siteDirectory) await options.siteDirectory.refresh();
       else {
-        const data = await options.api().domains.materialsV1.instances();
+        const data = await options.api().domains.inventory.instances();
         if (seq !== loadSeq) return;
         localSiteIndex.value = new SiteIndex(data);
       }
@@ -276,7 +276,7 @@ export function useActionParamForm(options: ActionParamFormOptions) {
   async function loadClasses(seq: number): Promise<void> {
     classOptionState.value = { ...emptyOptionState(), loading: true };
     try {
-      const data = await options.api().domains.materialsV1.templates();
+      const data = await options.api().domains.inventory.templates();
       if (seq !== loadSeq) return;
       const opts = data.map((item) => ({
         label:
@@ -619,7 +619,7 @@ export function useActionParamForm(options: ActionParamFormOptions) {
         try {
           const result = await options
             .api()
-            .domains.materialsV1.instantiate(
+            .domains.inventory.instantiate(
               draft.registryClass,
               name,
               barcode || undefined,

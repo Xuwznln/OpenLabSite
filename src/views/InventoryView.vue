@@ -47,7 +47,6 @@ import {
   TrashOutline,
 } from "@vicons/ionicons5";
 import {
-  ApiError,
   type Chemical,
   type MaterialsV1Aggregate,
   type MaterialsV1Change,
@@ -57,6 +56,7 @@ import {
   type MaterialsV1RegistryClass,
   type MaterialsV1Site,
   type MaterialsV1Template,
+  BackendBusinessError,
 } from "@openlab/protocol";
 import EntityRef from "../components/EntityRef.vue";
 import PageHeader from "../components/PageHeader.vue";
@@ -258,14 +258,15 @@ const counts = computed(() => ({
 const refresh = createRefreshQueue(async () => {
   if (!conn.online) return;
   loading.value = true;
-  const api = conn.api.domains.materialsV1;
+  // V1：读走 /inventory/*；写入（出库 / 转运 / 移动 / 改标识 / 内容物 / 删除 / 批次入库）一律 POST /inventory/commands
+  const api = conn.api.domains.inventory;
   const [aggregateResult, lotResult, reservationResult, changeResult] = await Promise.allSettled([
     api.instances(),
     api.lots(),
     api.reservations(),
-    api.changes(0, 300),
+    api.ledger(0, 300),
   ]);
-  if (api !== conn.api.domains.materialsV1) {
+  if (api !== conn.api.domains.inventory) {
     loading.value = false;
     return;
   }
@@ -276,7 +277,7 @@ const refresh = createRefreshQueue(async () => {
     lastError.value = describeError(aggregateResult.reason);
   }
   if (lotResult.status === "fulfilled") lots.value = lotResult.value;
-  if (reservationResult.status === "fulfilled") reservations.value = reservationResult.value;
+  if (reservationResult.status === "fulfilled") reservations.value = reservationResult.value.reservations;
   if (changeResult.status === "fulfilled") changes.value = [...changeResult.value].reverse();
   loaded.value = true;
   loading.value = false;
@@ -287,7 +288,7 @@ async function ensureTemplates() {
   if (templates.value !== null || templatesLoading.value) return;
   templatesLoading.value = true;
   try {
-    templates.value = await conn.api.domains.materialsV1.templates({ includeDefinition: false });
+    templates.value = await conn.api.domains.inventory.templates();
   } catch (error) {
     message.error(`模板目录读取失败：${describeError(error)}`);
   } finally {
@@ -419,7 +420,7 @@ async function submitInstantiate() {
     for (let index = 0; index < quantity; index += 1) {
       const name = names[index]!;
       try {
-        const result = await conn.api.domains.materialsV1.instantiate(
+        const result = await conn.api.domains.inventory.instantiate(
           registryClass.registry_class,
           name,
           quantity === 1 ? form.barcode.trim() || undefined : undefined,
@@ -472,7 +473,7 @@ async function submitMove() {
   try {
     if (sourceDevice && targetDevice && sourceDevice.material.material_uuid !== targetDevice.material.material_uuid) {
       // 跨设备：走 transfer，由后端提交位置并同步两端设备。
-      await conn.api.domains.materialsV1.transfer({
+      await conn.api.domains.inventory.transfer({
         source_device_id: sourceDevice.material.resource_id,
         target_device_id: targetDevice.material.resource_id,
         items: [
@@ -485,7 +486,7 @@ async function submitMove() {
       });
       message.success(`已转运到 ${displayName(target.owner)} · ${target.site.label}`);
     } else {
-      await conn.api.domains.materialsV1.move({
+      await conn.api.domains.inventory.move({
         material_uuid: selected.value.material.material_uuid,
         destination_site_uuid: target.site.site_uuid,
         parent_material_uuid: target.owner.material.material_uuid,
@@ -524,7 +525,7 @@ async function submitEdit() {
   if (!selected.value) return;
   editing.value = true;
   try {
-    await conn.api.domains.materialsV1.patch(selected.value.material.material_uuid, {
+    await conn.api.domains.inventory.patch(selected.value.material.material_uuid, {
       display_name: editForm.value.display_name.trim() || undefined,
       barcode: editForm.value.barcode.trim(),
       description: editForm.value.description,
@@ -534,7 +535,8 @@ async function submitEdit() {
     editOpen.value = false;
     await refresh();
   } catch (error) {
-    if (error instanceof ApiError && error.status === 409) message.info("没有需要更新的字段");
+    // V1：库存命令被拒为业务错误，无变化是 no_change（4002）
+    if (error instanceof BackendBusinessError && error.symbol === "no_change") message.info("没有需要更新的字段");
     else message.error(`更新失败：${describeError(error)}`);
   } finally {
     editing.value = false;
@@ -567,7 +569,7 @@ async function writeSubstanceLink(index: number, chemicalUuid: string | null, ch
   linkBusy.value = true;
   linkError.value = "";
   try {
-    await conn.api.domains.materialsV1.putData(
+    await conn.api.domains.inventory.putData(
       aggregate.material.material_uuid,
       dataWriteWithLink(aggregate.data, index, chemicalUuid),
       { preconditions: [aggregatePrecondition(aggregate)] },
@@ -603,7 +605,7 @@ async function submitDelete() {
   if (!selected.value) return;
   deleting.value = true;
   try {
-    const result = await conn.api.domains.materialsV1.remove(selected.value.material.material_uuid, true);
+    const result = await conn.api.domains.inventory.remove(selected.value.material.material_uuid, true);
     message.success(`已删除 ${result.data.deleted_material_uuids.length} 个物料节点`);
     selectedUuid.value = "";
     await refresh();
@@ -842,7 +844,7 @@ async function submitLot() {
   }
   lotSubmitting.value = true;
   try {
-    await conn.api.domains.materialsV1.inboundLot({
+    await conn.api.domains.inventory.inboundLot({
       template_uuid: template.template_uuid,
       lot_uuid: lotMode.value === "topup" ? lotForm.value.lot_uuid : null,
       batch_no: lotForm.value.batch_no.trim(),

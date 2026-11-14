@@ -4156,8 +4156,8 @@ async function runDryRun(): Promise<void> {
     try {
       // 批次 + 模板名：台账用人话显示物料；隔离 / 过期批次由校验器排除
       const [lotRows, templateRows] = await Promise.all([
-        conn.api.domains.materialsV1.lots(),
-        conn.api.domains.materialsV1.templates().catch(() => []),
+        conn.api.domains.inventory.lots(),
+        conn.api.domains.inventory.templates().catch(() => []),
       ]);
       const templateNames = new Map(
         templateRows.map((template) => [template.template_uuid, template.display_name || template.name]),

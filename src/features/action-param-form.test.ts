@@ -47,7 +47,7 @@ function setup(instantiate: ReturnType<typeof vi.fn<InstantiateMock>>) {
   const form = useActionParamForm({
     api: () =>
       ({
-        domains: { materialsV1: { instantiate } },
+        domains: { inventory: { instantiate } },
       }) as unknown as EdgeApi,
     device: ref("dev-1"),
     action: ref("act"),

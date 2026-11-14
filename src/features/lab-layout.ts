@@ -212,14 +212,18 @@ export function isLayoutEmpty(layout: LabLayout): boolean {
 
 // ── 与 lab-v1 权威文档互转 ──
 
-/** 权威文档 → 画布模型（snake_case → camelCase；`updated_at_ms` 0 = 从未保存）。 */
+/**
+ * 权威文档 → 画布模型（snake_case → camelCase）。V1 字段约定下时间是 ISO 8601（`update_time`）；
+ * 从未保存的文档是 1970 纪元，给一个当前时间，避免显示 1970。
+ */
 export function fromServerLayout(doc: LabV1Layout): LabLayout {
+  const updated = Date.parse(doc.update_time ?? "");
   return {
     version: 1,
     cellSize: doc.cell_size,
     zones: doc.zones.map((zone) => ({ id: zone.id, name: zone.name, color: zone.color, cells: [...zone.cells] })),
     walls: [...doc.walls],
-    updatedAt: doc.updated_at_ms || Date.now(),
+    updatedAt: Number.isFinite(updated) && updated > 0 ? updated : Date.now(),
   };
 }
 

@@ -11,7 +11,7 @@
  * 省略键会让服务端按名称自动匹配，那只该发生在设备上报和不带这个键的旧客户端上：否则用户刚解除的
  * 内容物会在下一次改别的内容物时被重新自动关联。`chemical` 摘要从不回传（服务端忽略它）。
  */
-import { ApiError } from "@openlab/protocol";
+import { ApiError, BackendBusinessError } from "@openlab/protocol";
 import type {
   ChemicalSummary,
   MaterialsV1Aggregate,
@@ -112,15 +112,22 @@ export function substanceReferences(
   return result;
 }
 
-/** 关联写入失败的人话（物料接口直出 HTTP 状态 + detail）；不认识的返回 null。 */
+/**
+ * 关联写入失败的人话。V1 合同下物料写入走 `POST /inventory/commands`，被拒是业务错误
+ * （`error_code` 符号码 + 业务码：无变化 `no_change` / 4002，冲突 3003 / 4002 / 6xxx，不存在 4001 / 6000，
+ * 参数非法 1000）；不认识的返回 null。
+ */
 export function describeLinkError(error: unknown): { message: string; refresh: boolean } | null {
-  if (!(error instanceof ApiError)) return null;
-  if (error.status === 409) {
-    return /unchanged/i.test(error.message)
-      ? { message: "关联没有变化", refresh: false }
-      : { message: "物料在这期间被别处改过（设备上报或其他页面），已重新读取，请再操作一次", refresh: true };
+  if (error instanceof BackendBusinessError) {
+    if (/no_change|unchanged/i.test(`${error.symbol ?? ""} ${error.message}`)) return { message: "关联没有变化", refresh: false };
+    if (error.isNotFound) return { message: "物料已不存在，已重新读取", refresh: true };
+    if (error.isConflict) {
+      return { message: "物料在这期间被别处改过（设备上报或其他页面），已重新读取，请再操作一次", refresh: true };
+    }
+    if (error.isInvalidInput) return { message: `关联被拒绝：${error.message}`, refresh: false };
+    return null;
   }
-  if (error.status === 422) return { message: `关联被拒绝：${error.message}`, refresh: false };
-  if (error.status === 404) return { message: "物料已不存在，已重新读取", refresh: true };
+  if (!(error instanceof ApiError)) return null;
+  if (error.status === 404) return { message: "物料接口不存在：请确认后端是 V1.0 合同版本", refresh: false };
   return null;
 }

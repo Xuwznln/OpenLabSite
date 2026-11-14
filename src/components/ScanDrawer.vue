@@ -103,7 +103,7 @@ async function loadInstances() {
   if (!conn.online) return;
   instancesLoading.value = true;
   try {
-    instances.value = await conn.api.domains.materialsV1.instances();
+    instances.value = await conn.api.domains.inventory.instances();
   } catch (error) {
     queryError.value = describeError(error);
   } finally {
@@ -211,7 +211,7 @@ async function bind() {
   busy.value = true;
   resetResult();
   try {
-    const result = await conn.api.domains.materialsV1.patch(target.material.material_uuid, { barcode });
+    const result = await conn.api.domains.inventory.patch(target.material.material_uuid, { barcode });
     bound.value = result.data;
     recordScan("bind", barcode, result.data);
     await loadInstances();
