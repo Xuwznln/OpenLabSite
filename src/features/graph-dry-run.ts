@@ -28,6 +28,7 @@ import {
   missingParamEntries,
   type MissingParamEntry,
 } from "./param-completeness";
+import { MATERIAL_IO_NODE_TYPE, materialIoParamError } from "./material-io";
 
 export type DryRunLevel = "error" | "warning";
 
@@ -54,7 +55,7 @@ export interface DryRunNodeInput {
   siteBindings?: SiteBindings;
   siteOwners?: Record<string, string>;
   id: string;
-  /** "action" | "manual" | "branch" | "slot"（画布节点类型）。 */
+  /** "action" | "manual" | "branch" | "slot" | "material_io"（画布节点类型；material_io 的 paramJson 是其 param）。 */
   type: string;
   deviceId: string;
   actionName: string;
@@ -343,6 +344,20 @@ export function dryRunWorkflow(input: DryRunInput): DryRunReport {
         nodeLabel: "空位",
         message: "空位未填充：点击虚线空位节点补全",
       });
+      continue;
+    }
+    if (node.type === MATERIAL_IO_NODE_TYPE) {
+      // 人工物料：参数按核心规则校验（库位、物料、模式必填字段）；库存与库位占用由调度器起跑时试运行
+      let param: Record<string, unknown> = {};
+      try {
+        param = JSON.parse(node.paramJson || "{}") as Record<string, unknown>;
+      } catch {
+        /* 下面按空参数报错 */
+      }
+      const error = materialIoParamError(param);
+      if (error) {
+        issues.push({ level: "error", kind: "structure", nodeId: node.id, nodeLabel: "人工物料", message: `人工物料参数未完成：${error}` });
+      }
       continue;
     }
     if (node.type !== "action") continue;

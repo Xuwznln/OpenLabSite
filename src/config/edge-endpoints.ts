@@ -1,6 +1,6 @@
 export const DEFAULT_LOCAL_EDGE_URL = "http://127.0.0.1:8002";
 
-/** 后端地址归一：去首尾空白与末尾斜杠（地址持久化、控制令牌分后端存放共用同一口径）。 */
+/** 后端地址归一：去首尾空白与末尾斜杠（地址持久化、最近地址、链接导入共用同一口径）。 */
 export function normalizeBaseUrl(value: string): string {
   return value.trim().replace(/\/+$/, "");
 }

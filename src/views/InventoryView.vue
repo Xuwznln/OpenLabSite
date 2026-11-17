@@ -47,7 +47,6 @@ import {
   TrashOutline,
 } from "@vicons/ionicons5";
 import {
-  ApiError,
   type Chemical,
   type MaterialsV1Aggregate,
   type MaterialsV1Change,
@@ -57,6 +56,7 @@ import {
   type MaterialsV1RegistryClass,
   type MaterialsV1Site,
   type MaterialsV1Template,
+  BackendBusinessError,
 } from "@openlab/protocol";
 import EntityRef from "../components/EntityRef.vue";
 import PageHeader from "../components/PageHeader.vue";
@@ -66,6 +66,7 @@ import ChemicalPickerDialog from "../components/ChemicalPickerDialog.vue";
 import { aggregatePrecondition, dataWriteWithLink, describeLinkError } from "../features/substance-chemicals";
 import { actorTypeLabel } from "../features/actor-type";
 import { describeError } from "../features/errors";
+import { compareMaterialLabels, materialLabel, materialMatches } from "../features/material-label";
 import { createRefreshQueue } from "../features/refresh-queue";
 import { useConnectionStore } from "../stores/connection";
 import { useDomainThemeStore } from "../stores/domain-theme";
@@ -100,7 +101,7 @@ const childrenOf = computed(() => {
     (map.get(parent) ?? map.set(parent, []).get(parent)!).push(item);
   }
   for (const list of map.values()) {
-    list.sort((a, b) => a.material.ordinal - b.material.ordinal || a.material.name.localeCompare(b.material.name));
+    list.sort((a, b) => a.material.ordinal - b.material.ordinal || compareMaterialLabels(a.material, b.material));
   }
   return map;
 });
@@ -136,14 +137,13 @@ function siteOf(materialUuid: string): { site: MaterialsV1Site; owner: Materials
   return null;
 }
 
+/** 物料 name 是 uuid，人读标签是 display_name。 */
 function displayName(item: MaterialsV1Aggregate): string {
-  return item.material.display_name || item.material.name;
+  return materialLabel(item.material);
 }
 
 function matchesFilter(item: MaterialsV1Aggregate, keyword: string): boolean {
-  const m = item.material;
-  return [m.name, m.display_name ?? "", m.resource_id, m.class_name, m.barcode, m.material_uuid]
-    .some((value) => value.toLowerCase().includes(keyword));
+  return materialMatches(item.material, keyword);
 }
 
 function subtreeMatches(item: MaterialsV1Aggregate, keyword: string): boolean {
@@ -258,14 +258,15 @@ const counts = computed(() => ({
 const refresh = createRefreshQueue(async () => {
   if (!conn.online) return;
   loading.value = true;
-  const api = conn.api.domains.materialsV1;
+  // V1：读走 /inventory/*；写入（出库 / 转运 / 移动 / 改标识 / 内容物 / 删除 / 批次入库）一律 POST /inventory/commands
+  const api = conn.api.domains.inventory;
   const [aggregateResult, lotResult, reservationResult, changeResult] = await Promise.allSettled([
     api.instances(),
     api.lots(),
     api.reservations(),
-    api.changes(0, 300),
+    api.ledger(0, 300),
   ]);
-  if (api !== conn.api.domains.materialsV1) {
+  if (api !== conn.api.domains.inventory) {
     loading.value = false;
     return;
   }
@@ -276,7 +277,7 @@ const refresh = createRefreshQueue(async () => {
     lastError.value = describeError(aggregateResult.reason);
   }
   if (lotResult.status === "fulfilled") lots.value = lotResult.value;
-  if (reservationResult.status === "fulfilled") reservations.value = reservationResult.value;
+  if (reservationResult.status === "fulfilled") reservations.value = reservationResult.value.reservations;
   if (changeResult.status === "fulfilled") changes.value = [...changeResult.value].reverse();
   loaded.value = true;
   loading.value = false;
@@ -287,7 +288,7 @@ async function ensureTemplates() {
   if (templates.value !== null || templatesLoading.value) return;
   templatesLoading.value = true;
   try {
-    templates.value = await conn.api.domains.materialsV1.templates({ includeDefinition: false });
+    templates.value = await conn.api.domains.inventory.templates();
   } catch (error) {
     message.error(`模板目录读取失败：${describeError(error)}`);
   } finally {
@@ -357,8 +358,11 @@ function instantiableClass(template: MaterialsV1Template | null): MaterialsV1Reg
   return registryClasses.value.find((item) => item.registry_class === template.name) ?? null;
 }
 
-/** 已有实例名集合（去重、避免重复命名）。 */
-const existingNames = computed(() => new Set(aggregates.value.map((item) => item.material.name)));
+/**
+ * 已占用的名字（去重、避免重复命名）：显示名与 resource_id。出库时显示名同时作 PLR 根名、
+ * resource_id 由它派生且必须唯一（物料 name 是 uuid，不参与去重）。
+ */
+const existingNames = computed(() => new Set(aggregates.value.flatMap((item) => [materialLabel(item.material), item.material.resource_id])));
 
 /**
  * 缺省实例名 = 资源类名 + 两位序号，从该类现有实例数量往后编（tips_rack_03…），
@@ -419,7 +423,7 @@ async function submitInstantiate() {
     for (let index = 0; index < quantity; index += 1) {
       const name = names[index]!;
       try {
-        const result = await conn.api.domains.materialsV1.instantiate(
+        const result = await conn.api.domains.inventory.instantiate(
           registryClass.registry_class,
           name,
           quantity === 1 ? form.barcode.trim() || undefined : undefined,
@@ -472,7 +476,7 @@ async function submitMove() {
   try {
     if (sourceDevice && targetDevice && sourceDevice.material.material_uuid !== targetDevice.material.material_uuid) {
       // 跨设备：走 transfer，由后端提交位置并同步两端设备。
-      await conn.api.domains.materialsV1.transfer({
+      await conn.api.domains.inventory.transfer({
         source_device_id: sourceDevice.material.resource_id,
         target_device_id: targetDevice.material.resource_id,
         items: [
@@ -485,7 +489,7 @@ async function submitMove() {
       });
       message.success(`已转运到 ${displayName(target.owner)} · ${target.site.label}`);
     } else {
-      await conn.api.domains.materialsV1.move({
+      await conn.api.domains.inventory.move({
         material_uuid: selected.value.material.material_uuid,
         destination_site_uuid: target.site.site_uuid,
         parent_material_uuid: target.owner.material.material_uuid,
@@ -512,7 +516,7 @@ function openEdit() {
   if (!selected.value) return;
   const m = selected.value.material;
   editForm.value = {
-    display_name: m.display_name ?? m.name,
+    display_name: materialLabel(m),
     barcode: m.barcode,
     description: m.description,
     lifecycle_status: m.lifecycle_status,
@@ -524,7 +528,7 @@ async function submitEdit() {
   if (!selected.value) return;
   editing.value = true;
   try {
-    await conn.api.domains.materialsV1.patch(selected.value.material.material_uuid, {
+    await conn.api.domains.inventory.patch(selected.value.material.material_uuid, {
       display_name: editForm.value.display_name.trim() || undefined,
       barcode: editForm.value.barcode.trim(),
       description: editForm.value.description,
@@ -534,7 +538,8 @@ async function submitEdit() {
     editOpen.value = false;
     await refresh();
   } catch (error) {
-    if (error instanceof ApiError && error.status === 409) message.info("没有需要更新的字段");
+    // V1：库存命令被拒为业务错误，无变化是 no_change（4002）
+    if (error instanceof BackendBusinessError && error.symbol === "no_change") message.info("没有需要更新的字段");
     else message.error(`更新失败：${describeError(error)}`);
   } finally {
     editing.value = false;
@@ -567,7 +572,7 @@ async function writeSubstanceLink(index: number, chemicalUuid: string | null, ch
   linkBusy.value = true;
   linkError.value = "";
   try {
-    await conn.api.domains.materialsV1.putData(
+    await conn.api.domains.inventory.putData(
       aggregate.material.material_uuid,
       dataWriteWithLink(aggregate.data, index, chemicalUuid),
       { preconditions: [aggregatePrecondition(aggregate)] },
@@ -603,7 +608,7 @@ async function submitDelete() {
   if (!selected.value) return;
   deleting.value = true;
   try {
-    const result = await conn.api.domains.materialsV1.remove(selected.value.material.material_uuid, true);
+    const result = await conn.api.domains.inventory.remove(selected.value.material.material_uuid, true);
     message.success(`已删除 ${result.data.deleted_material_uuids.length} 个物料节点`);
     selectedUuid.value = "";
     await refresh();
@@ -842,7 +847,7 @@ async function submitLot() {
   }
   lotSubmitting.value = true;
   try {
-    await conn.api.domains.materialsV1.inboundLot({
+    await conn.api.domains.inventory.inboundLot({
       template_uuid: template.template_uuid,
       lot_uuid: lotMode.value === "topup" ? lotForm.value.lot_uuid : null,
       batch_no: lotForm.value.batch_no.trim(),
@@ -1326,7 +1331,7 @@ const selectedDevice = computed(() => rootDeviceOf(selected.value));
 
         <NForm v-if="inboundKind === 'instance'" label-placement="top" size="small" style="margin-top: 10px">
           <div class="form-row">
-            <NFormItem label="实例名（末尾序号会按件数顺延）" style="flex: 2">
+            <NFormItem label="显示名（末尾序号会按件数顺延）" style="flex: 2">
               <NInput v-model:value="instantiateForm.name" placeholder="例如 demo_tips_24_01" />
             </NFormItem>
             <NFormItem label="件数" style="flex: 1">

@@ -33,7 +33,6 @@ import {
 } from "naive-ui";
 import { ArrowBackOutline } from "@vicons/ionicons5";
 import {
-  ApiError,
   BackendBusinessError,
   type BackendIntervention,
   type BackendManualConfirmation,
@@ -43,6 +42,8 @@ import {
   type BackendWorkflowNodeJob,
   type BackendWorkflowNodeRun,
   type BackendWorkflowTask,
+  isCapabilityUnavailable,
+  TaskCommandRejectedError,
 } from "@openlab/protocol";
 import EntityRef from "../components/EntityRef.vue";
 import ActionResult from "../components/ActionResult.vue";
@@ -60,6 +61,7 @@ import {
   snapshotWorkflowName,
 } from "../features/task-jobs";
 import { describeLoopProgress } from "../features/workflow-loops";
+import { describeStructuralNode, resourceScopeLabels, structuralKind } from "../features/workflow-node-kinds";
 import type { BackendLoopProgress } from "@openlab/protocol";
 import { beginWorkflowPrint } from "../features/workflow-print";
 import EntryParamFields from "../components/EntryParamFields.vue";
@@ -123,12 +125,13 @@ function confirmCancel() {
   });
 }
 
-async function commandTask(type: "step" | "resume" | "pause" | "cancel") {
+async function commandTask(type: "step" | "resume" | "pause" | "switch_to_step" | "cancel") {
   const current = task.value;
   if (!current || current.control_revision === undefined || controlBusy.value || loading.value || !conn.schedulerLocal || controlBaseUrl.value !== conn.baseUrl) return;
   const allowed = {
     step: stepControl.value.canStep, resume: stepControl.value.canResume,
-    pause: stepControl.value.canPause, cancel: stepControl.value.canCancel,
+    pause: stepControl.value.canPause, switch_to_step: stepControl.value.canSwitchToStep,
+    cancel: stepControl.value.canCancel,
   };
   if (!allowed[type]) return;
   controlBusy.value = true;
@@ -140,8 +143,10 @@ async function commandTask(type: "step" | "resume" | "pause" | "cancel") {
   } catch (err) {
     const conflict = err instanceof BackendBusinessError && err.isConflict;
     controlErrorType.value = conflict ? "warning" : "error";
-    controlError.value = !conflict ? describeError(err)
-      : type === "pause" ? "任务状态已变化（可能已暂停或已结束），已重新读取状态。"
+    // V1 命令被拒（status=rejected）带具体原因；版本冲突（3003）按原文案提示重读
+    controlError.value = err instanceof TaskCommandRejectedError ? `${err.message}，已重新读取状态。`
+      : !conflict ? describeError(err)
+      : type === "pause" || type === "switch_to_step" ? "任务状态已变化（可能已暂停或已结束），已重新读取状态。"
       : type === "cancel" ? "任务状态已变化（可能已在取消或已结束），已重新读取状态。"
       : "任务状态已变化或已有单步在执行，已重新读取状态；本次没有额外放行动作。";
   } finally {
@@ -241,7 +246,7 @@ async function submitInputEdit() {
 }
 
 function classifyError(err: unknown): boolean {
-  if (err instanceof ApiError && err.status === 404) {
+  if (isCapabilityUnavailable(err)) {
     degraded.value = "unsupported";
     return true;
   }
@@ -263,15 +268,18 @@ async function refreshOnce() {
   degraded.value = "";
   lastError.value = "";
   try {
+    // V1 干预是全局列表（不分状态时含 open / selected / superseded），按本任务过滤
     const [nextTask, nextJobs, nextConfirmations, nextInterventions, nextRuns] = await Promise.all([
       api.task(taskUuid), api.taskJobs(taskUuid), api.taskManualConfirmations(taskUuid),
-      api.taskInterventions(taskUuid), api.taskNodeRuns(taskUuid),
+      api.interventions({ limit: 500 }), api.taskNodeRuns(taskUuid),
     ]);
     if (baseUrl !== conn.baseUrl) return;
     task.value = nextTask;
     jobs.value = nextJobs;
     confirmations.value = nextConfirmations;
-    interventions.value = nextInterventions;
+    interventions.value = nextInterventions
+      .filter((item) => item.workflow_task_uuid === taskUuid)
+      .sort((a, b) => a.opened_at.localeCompare(b.opened_at) || a.revision - b.revision);
     runs.value = nextRuns;
     controlBaseUrl.value = baseUrl;
   } catch (err) {
@@ -301,7 +309,7 @@ async function decideManualConfirmation(
   manualDecisionBusy[confirmation.uuid] = true;
   manualDecisionError[confirmation.uuid] = "";
   try {
-    await wb().decideManualConfirmation(confirmation.uuid, {
+    await wb().decideJobManualConfirmation(confirmation.workflow_node_job_uuid, {
       action,
       confirmed_by: actor,
       decision_idempotency_key: `openlab-manual:${confirmation.uuid}:${action}`,
@@ -369,6 +377,13 @@ function focusNode(nodeUuid: string) {
 
 // ── attempt 时间线：同 node 的 job 行按 attempt 分组（§6.3） ──
 
+/** `with ctx.lock(...)`：任务快照里的资源锁作用域（节点 uuid → 作用域文案）。 */
+const lockLabels = computed(() => {
+  const snapshot = task.value?.workflow_snapshot as Record<string, unknown> | undefined;
+  const workflow = snapshot?.workflow as Record<string, unknown> | undefined;
+  return resourceScopeLabels(workflow?.meta_data);
+});
+
 const nodeGroups = computed(() => {
   const groups = new Map<string, BackendWorkflowNodeJob[]>();
   for (const job of jobs.value) {
@@ -394,7 +409,11 @@ const nodeGroups = computed(() => {
               run.status,
             )
           : "";
-      return { nodeUuid, jobs: sorted, run, loopProgress, ...info };
+      const snapshot = snapshotNodes(task.value).find((node) => node.uuid === nodeUuid);
+      // 结构节点（人工物料 / 条件 / 循环）的摘要与所在的 ctx.lock 作用域
+      const structural = snapshot && structuralKind(snapshot.type) ? describeStructuralNode(snapshot) : "";
+      const locks = lockLabels.value.get(nodeUuid) ?? [];
+      return { nodeUuid, jobs: sorted, run, loopProgress, structural, locks, ...info };
     })
     .sort((a, b) => orderOf(a.nodeUuid) - orderOf(b.nodeUuid));
 });
@@ -484,7 +503,8 @@ async function toggleJob(jobUuid: string) {
   runtime[jobUuid] = idle;
   try {
     const rows = await wb().jobResults(jobUuid);
-    const feedback = await wb().jobFeedbackHistory(jobUuid);
+    // V1：反馈归档按 page / page_size 分页（单页上限 100，够渲染最近的反馈）
+    const feedback = (await wb().jobFeedback(jobUuid, { page: 1, page_size: 100 })).items;
     runtime[jobUuid] = {
       ...idle,
       loading: false,
@@ -495,7 +515,7 @@ async function toggleJob(jobUuid: string) {
     };
   } catch (err) {
     const failed = { ...idle, loading: false };
-    if (err instanceof ApiError && err.status === 404) failed.unsupported = true;
+    if (isCapabilityUnavailable(err)) failed.unsupported = true;
     else if (err instanceof BackendBusinessError && err.code === 3002)
       failed.error = "job 不存在或已删除";
     else failed.error = describeError(err);
@@ -605,7 +625,7 @@ watch(
         </div>
         <StatusPill v-if="task" :status="task.status" />
         <NTag v-if="task && task.control_status !== 'active'" size="small" type="warning" :bordered="false">
-          {{ task.control_status === 'paused' && task.run_mode === 'step' ? '等待下一步' : `控制态 ${task.control_status}` }}
+          {{ task.control_status === 'paused' && task.run_mode === 'step' ? '等待下一步' : task.control_status === 'paused' ? '已暂停派发' : `控制态 ${task.control_status}` }}
         </NTag>
         <NButton size="small" secondary style="margin-left: auto" @click="refresh()">
           刷新
@@ -614,16 +634,20 @@ watch(
           打印实验单
         </NButton>
         <NButton v-if="stepControl.canPause" size="small" type="warning" secondary :loading="controlBusy"
-          title="已下发的动作照常跑完，不再派发新动作；之后可逐步执行或切回自动"
+          title="暂停派发：已下发的动作照常跑完，不再派发新动作；之后可继续自动或逐步执行"
           :disabled="!conn.schedulerLocal || !conn.online || controlBaseUrl !== conn.baseUrl || loading || controlBusy"
           @click="commandTask('pause')">暂停</NButton>
+        <NButton v-if="stepControl.canSwitchToStep" size="small" secondary :loading="controlBusy"
+          title="转为逐步执行：在途动作跑完后停下，之后每次只放行一个动作"
+          :disabled="!conn.schedulerLocal || !conn.online || controlBaseUrl !== conn.baseUrl || loading || controlBusy"
+          @click="commandTask('switch_to_step')">转为逐步</NButton>
         <NButton v-if="stepControl.canCancel" size="small" type="error" secondary :loading="controlBusy"
           title="不再派发新动作，正在执行的动作收到取消请求"
           :disabled="!conn.schedulerLocal || !conn.online || controlBaseUrl !== conn.baseUrl || loading || controlBusy"
           @click="confirmCancel">取消运行</NButton>
       </div>
       <NAlert v-if="stepControl.canceling" type="warning" style="margin-top: 12px">{{ stepControl.cancelHint }}</NAlert>
-      <NAlert v-if="stepControl.visible" type="info" title="逐步执行" style="margin-top: 12px">
+      <NAlert v-if="stepControl.visible" type="info" :title="stepControl.normalPaused ? '已暂停派发' : '逐步执行'" style="margin-top: 12px">
         <p>{{ stepControl.hint }}</p>
         <div class="head-row">
           <NButton type="primary" size="small" :loading="controlBusy"
@@ -631,7 +655,7 @@ watch(
             @click="commandTask('step')">执行下一步</NButton>
           <NButton size="small"
             :disabled="!conn.schedulerLocal || !conn.online || controlBaseUrl !== conn.baseUrl || loading || controlBusy || !stepControl.canResume"
-            @click="commandTask('resume')">切换自动执行</NButton>
+            @click="commandTask('resume')">{{ stepControl.normalPaused ? "继续自动执行" : "切换自动执行" }}</NButton>
         </div>
       </NAlert>
       <NAlert v-if="controlError" :type="controlErrorType" style="margin-top: 8px">{{ controlError }}</NAlert>
@@ -787,6 +811,8 @@ watch(
           <div class="node-head">
             <span class="node-name">{{ group.nodeName }}</span>
             <span v-if="group.deviceId" class="node-meta mono">{{ group.deviceId }} · {{ group.actionName }}</span>
+            <span v-else-if="group.structural && group.run?.executor_kind !== 'loop'" class="node-meta">{{ group.structural }}</span>
+            <span v-if="group.locks.length" class="node-meta lock-chip" :title="`资源锁 ${group.locks.join('；')}`">锁 · {{ group.locks.join("；") }}</span>
             <span class="node-meta mono dim">node {{ shortId(group.nodeUuid) }}</span>
             <span v-if="group.run" class="node-meta mono dim">#{{ group.run.topological_index + 1 }}</span>
             <span v-if="group.run?.executor_kind === 'loop'" class="node-meta loop-chip">
@@ -942,14 +968,6 @@ watch(
                 @click.stop="decideManualConfirmation(c, 'approve')"
               >
                 确认放行
-              </NButton>
-              <NButton
-                size="small"
-                secondary
-                :disabled="manualDecisionBusy[c.uuid]"
-                @click.stop="decideManualConfirmation(c, 'skip')"
-              >
-                跳过
               </NButton>
               <NButton
                 size="small"
@@ -1279,6 +1297,13 @@ watch(
   color: #1e40af;
   background: #dbeafe;
   font-family: var(--font-mono);
+}
+
+.lock-chip {
+  color: #92400e;
+  background: #fef3c7;
+  border-radius: 4px;
+  padding: 0 6px;
 }
 
 .loop-chip {

@@ -398,7 +398,8 @@ function packRows(jobs: LaneJob[]): number {
 
 const lanes = computed<Lane[]>(() => {
   const map = new Map<string, LaneJob[]>();
-  const laneKey = (deviceId: string, key: string) => deviceId || key || "unknown";
+  // 结构节点（人工物料 / 条件）不在设备上：泳道用动作名（key 形如 ":人工物料 · 装入"）
+  const laneKey = (deviceId: string, key: string) => deviceId || key.replace(/^:/, "") || "unknown";
   for (const j of data.value?.completed ?? []) {
     const k = laneKey(j.device_id, j.device_action_key);
     (map.get(k) ?? map.set(k, []).get(k)!).push({ kind: "done", done: j, row: 0 });

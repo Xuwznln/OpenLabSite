@@ -11,7 +11,7 @@
  *  10.7 同一 policy×device 恢复后再告警是新 incident_id，不复用旧面板项
  */
 import { describe, expect, it } from "vitest";
-import { ApiError } from "../src/common";
+import { BackendBusinessError, isCapabilityUnavailable } from "../src/common";
 import {
   applyStatusMonitorEvent,
   createMockStatusIncidentState,
@@ -55,15 +55,12 @@ describe("decisions 协议客户端 ↔ catalog 契约", () => {
         return api.resolveIncident(DUMMY_ID, { action: "resume" });
       },
       errorDecisions: async () => {
-        mock.nextResponse = { status: 200, data: { items: [] } };
+        mock.nextResponse = { status: 200, data: { code: 0, data: { decisions: [] } } };
         return api.errorDecisions();
       },
       resolveErrorDecision: async () => {
-        mock.nextResponse = { status: 200, data: { decision_id: DUMMY_ID, status: "resolved" } };
-        return api.resolveErrorDecision(
-          { decision_id: DUMMY_ID, job_id: "job-1", device_id: "heater-1" },
-          { action: "retry", reason: "operator" },
-        );
+        mock.nextResponse = { status: 200, data: { code: 0, data: { decision_id: DUMMY_ID, status: "delivered" } } };
+        return api.resolveErrorDecision({ decision_id: DUMMY_ID }, { action: "retry", reason: "operator" });
       },
     });
     expect(called).toEqual(catalogOps("decisions"));
@@ -75,14 +72,23 @@ describe("decisions 协议客户端 ↔ catalog 契约", () => {
         "POST /api/v1/error-decisions/{}",
       ]),
     );
-    // error decision 提交必须回带 job_id/device_id 并声明 scheduler_updated=true（微后端放行前置条件）
-    expect(mock.calls[3]?.data).toEqual({
-      scheduler_updated: true,
-      job_id: "job-1",
-      device_id: "heater-1",
-      action: "retry",
-      reason: "operator",
-    });
+    // V1 ErrorDecisionIn：只提交 action / option / result / reason（dev 旧的 job_id / device_id / scheduler_updated 已删除）
+    expect(mock.calls[3]?.data).toEqual({ action: "retry", reason: "operator" });
+  });
+
+  it("error-decisions 走 V1 合同：列表键 decisions、成功 delivered、可选 Idempotency-Key", async () => {
+    const recorded: Array<Record<string, string> | undefined> = [];
+    const instance = {
+      request: async (config: { headers?: Record<string, string> }) => {
+        recorded.push(config.headers);
+        return { status: 200, data: { code: 0, data: { decision_id: "d1", status: "delivered" } } };
+      },
+    };
+    const { createHttpTransport } = await import("../src/common");
+    const api = createStatusApi(createHttpTransport("http://edge.local", { axios: instance as never }));
+    const ack = await api.resolveErrorDecision({ decision_id: "d1" }, { action: "abort" }, { idempotencyKey: "click-1" });
+    expect(ack).toEqual({ decision_id: "d1", status: "delivered" });
+    expect(recorded[0]).toEqual({ "Content-Type": "application/json", "Idempotency-Key": "click-1" });
   });
 
   it("GET query 参数：device_id 过滤与 include_terminal 环形缓冲", async () => {
@@ -128,28 +134,21 @@ describe("decisions 协议客户端 ↔ catalog 契约", () => {
     expect(ack.state).toBe("recovering");
   });
 
-  it("§2 Host 不可用语义：503 not enabled / 404 终态 / 409 recovering", async () => {
+  it("§2 Host 不可用语义（V1 信封）：5001 Host 不在线 / 4001 终态 / 3003 recovering", async () => {
     const mock = createMockHttp();
     const api = createStatusApi(mock.http);
 
-    mock.nextResponse = {
-      status: 503,
-      data: { detail: "edge execution backend not enabled" },
-    };
-    await expect(api.incidents()).rejects.toMatchObject({
-      status: 503,
-      message: "edge execution backend not enabled",
-    });
+    mock.nextResponse = { status: 200, data: { code: 5001, error: { msg: "Host 执行进程暂不可用（启动或重启中），请稍后重试" } } };
+    const offline = await api.resolveIncident("x", { action: "resume" }).catch((e: unknown) => e);
+    expect(offline).toBeInstanceOf(BackendBusinessError);
+    expect(isCapabilityUnavailable(offline)).toBe(true);
 
-    mock.nextResponse = { status: 404, data: { detail: "incident not found" } };
-    await expect(
-      api.resolveIncident("gone", { action: "resume" }),
-    ).rejects.toBeInstanceOf(ApiError);
+    mock.nextResponse = { status: 200, data: { code: 4001, error: { msg: "incident not found" } } };
+    const gone = await api.resolveIncident("gone", { action: "resume" }).catch((e: unknown) => e);
+    expect((gone as BackendBusinessError).isNotFound).toBe(true);
 
-    mock.nextResponse = { status: 409, data: { detail: "decision in flight" } };
-    await expect(
-      api.resolveIncident("busy", { action: "resume" }),
-    ).rejects.toMatchObject({ status: 409 });
+    mock.nextResponse = { status: 200, data: { code: 3003, error: { msg: "decision in flight" } } };
+    await expect(api.resolveIncident("busy", { action: "resume" })).rejects.toMatchObject({ code: 3003 });
   });
 
   it("host_ready=false 时 incidents/holds 必为空数组（§2）", async () => {

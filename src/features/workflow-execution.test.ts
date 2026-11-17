@@ -23,15 +23,30 @@ describe("逐步执行控制", () => {
     expect(controls.canStep).toBe(false);
     expect(controls.canResume).toBe(false);
   });
-  it("自动运行中可以暂停；已暂停、已结束或单点动作不能再暂停", () => {
-    expect(stepExecutionControl(task({ run_mode: "normal", control_status: "active", status: "running" }), [run("running"), run("pending")]).canPause).toBe(true);
-    // 逐步执行中那一步还没跑完：暂停在它完成时生效
-    expect(stepExecutionControl(task({ status: "running", control_status: "active" }), [run("running")]).canPause).toBe(true);
+  it("自动运行中可以暂停（V1 只停派发）或转逐步；逐步、已暂停、已结束或单点动作不能暂停", () => {
+    const auto = stepExecutionControl(task({ run_mode: "normal", control_status: "active", status: "running" }), [run("running"), run("pending")]);
+    expect(auto.canPause).toBe(true);
+    expect(auto.canSwitchToStep).toBe(true);
+    // V1：逐步模式不接受 pause（task_is_not_in_normal_mode）
+    expect(stepExecutionControl(task({ status: "running", control_status: "active" }), [run("running")]).canPause).toBe(false);
     expect(stepExecutionControl(task(), [run("pending")]).canPause).toBe(false);
     expect(stepExecutionControl(task({ run_mode: "normal", control_status: "active", status: "succeeded" }), [run("succeeded")]).canPause).toBe(false);
     expect(stepExecutionControl(task({ run_mode: "normal", control_status: "active", status: "running" }), [run("succeeded")]).canPause).toBe(false);
     expect(stepExecutionControl(task({ run_mode: "normal", control_status: "active", execution_kind: "ad_hoc_device_action" }), []).canPause).toBe(false);
     expect(stepExecutionControl(task({ run_mode: "normal", control_status: "waiting_reconciliation", status: "running" }), [run("execution_unknown")]).canPause).toBe(true);
+  });
+  it("自动模式暂停派发后：显示面板，可以继续自动或执行下一步，不能再暂停", () => {
+    const paused = stepExecutionControl(
+      task({ run_mode: "normal", control_status: "paused", dispatch_gate: "paused", status: "running" }),
+      [run("succeeded"), run("pending")],
+    );
+    expect(paused.visible).toBe(true);
+    expect(paused.normalPaused).toBe(true);
+    expect(paused.canResume).toBe(true);
+    expect(paused.canStep).toBe(true);
+    expect(paused.canPause).toBe(false);
+    expect(paused.canSwitchToStep).toBe(false);
+    expect(paused.hint).toContain("已暂停派发");
   });
   it("运行中（含暂停）可以取消；取消中与终态不能再取消", () => {
     expect(stepExecutionControl(task({ run_mode: "normal", control_status: "active", status: "running" }), [run("running")]).canCancel).toBe(true);
@@ -48,6 +63,6 @@ describe("逐步执行控制", () => {
     expect(stepExecutionControl(task({ control_revision: undefined }), []).canStep).toBe(false);
     expect(stepExecutionControl(task({ control_revision: -1 }), []).canStep).toBe(false);
     expect(stepExecutionControl(task({ status: "succeeded" }), []).canResume).toBe(false);
-    expect(stepExecutionControl(task({ run_mode: "normal" }), []).visible).toBe(false);
+    expect(stepExecutionControl(task({ run_mode: "normal", control_status: "active" }), []).visible).toBe(false);
   });
 });

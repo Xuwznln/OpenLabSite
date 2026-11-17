@@ -3,12 +3,16 @@
  *
  * 物料权威只在微后端：设备（resource_type=device）、台面、耗材、孔位都是
  * material 行，位点（site）归属其 owner material；库存批次 / 预留是同一事务边界
- * 内的计量视图。所有写请求共用 `InventoryMutation` 幂等信封
- * （command_uuid + effect_key），成功回执是 `MutationResult`。
+ * 内的计量视图。
  *
- * 浏览器写入口只保留人工操作需要的子集：模板维护、出库实例化、标识/内容物/
- * 位置修改、移动、跨设备转运、删除、拓扑边维护、批次入库；调度器专用的预留
- * 状态机与快照对齐不进前端。
+ * V1 合同之后的分工：
+ * - **读**模板 / 物料聚合 / 批次 / 预留 / 关系 / 账本走 inventory 域（`/api/v1/inventory/*`）；
+ * - **写**一律走 `POST /api/v1/inventory/commands`：本文件的 {@link materialsMutation} 构造
+ *   `materials.v1` 幂等信封（command_uuid + effect_key），inventory 域客户端负责提交与解包，
+ *   成功回执仍是 `MutationResult`；
+ * - 本域只保留 dev 独有的 `/api/v1/materials/*` 路由：物料树、按 resource_id 读取、registry
+ *   资源类目录、拓扑边维护、设备通知、按 Job 读预留、物理动作结算读与库存预演，以及
+ *   `materials.changed` SSE。调度器专用的预留状态机、快照对齐与执行结算写属于控制面。
  */
 import type { ChemicalSummary } from "./chemicals-v1.js";
 import type { HttpTransport, JsonObject, JsonValue } from "./common.js";
@@ -152,7 +156,12 @@ export interface MaterialsV1IdentityWrite {
   resource_id: string;
   parent_material_uuid?: string | null;
   lot_uuid?: string | null;
-  name: string;
+  /**
+   * 物料 `name` 恒等于 `material_uuid`，由权威写入：可以不给；给 UUID 即身份（须与 material_uuid 一致），
+   * 给旧式标签则迁到 `display_name`（为空时）与 PLR 键 `config.name`（缺失时）。
+   */
+  name?: string;
+  /** 人读标签；为空时权威依次回退旧名、PLR 键、resource_id。 */
   display_name?: string;
   description?: string;
   /** `device` 表示设备行；其余为 registry resource_type（plate / well / tip_rack …）。 */
@@ -175,8 +184,9 @@ export interface MaterialsV1Identity {
   resource_id: string;
   parent_material_uuid?: string | null;
   lot_uuid?: string | null;
+  /** 恒等于 `material_uuid`（所有物料，包括设备）；不是给人看的名字。 */
   name: string;
-  /** 展示名；权威保证非空（缺省与 name 一致）。 */
+  /** 人读标签（孔位是 ordering 标识如 "A1"）；显示 / 排序 / 搜索都用它，`?name=` 筛选也按它匹配。 */
   display_name?: string;
   description: string;
   resource_type: string;
@@ -275,8 +285,8 @@ export interface MaterialsV1TreeCreate {
   nodes: MaterialsV1NodeCreate[];
 }
 
+/** 标识字段局部更新；`name`（= uuid）不可修改，改人读标签用 `display_name`。 */
 export interface MaterialsV1Patch {
-  name?: string;
   display_name?: string;
   description?: string;
   machine_name?: string;
@@ -376,6 +386,10 @@ export interface MaterialsV1LotInbound {
   unit: string;
   quantity: number;
   expiry_at_ms?: number | null;
+  /** V1：批次所在库位（Site uuid）；补充入库时不改变既有位置。 */
+  location_site_uuid?: string | null;
+  /** V1：仓储分区 id。 */
+  warehouse_zone_id?: string;
 }
 
 export interface MaterialsV1InventoryLot {
@@ -388,6 +402,9 @@ export interface MaterialsV1InventoryLot {
   quantity_reserved: number;
   expiry_at_ms?: number | null;
   quarantined: boolean;
+  /** V1：批次所在库位与仓储分区。 */
+  location_site_uuid?: string | null;
+  warehouse_zone_id?: string;
   created_at_ms: number;
   updated_at_ms: number;
   version: number;
@@ -539,137 +556,27 @@ export function materialsMutation<TPayload>(
   };
 }
 
+/** `/api/v1/materials/events` 的失效通知事件名（不在 V1 合同里，保持原名）。 */
+export const MATERIALS_CHANGED_EVENT = "materials.changed" as const;
+
+/** 物理动作执行记录（materials.db material_execution）；字段随执行协议演进，前端只读展示。 */
+export type MaterialsV1Execution = JsonObject;
+
+/** 库存预演：按需求计算能否满足与候选分配，不落账。 */
+export interface MaterialsV1InventoryPreviewInput {
+  requirements: JsonObject[];
+}
+
 export function createMaterialsV1Api(http: HttpTransport) {
   const base = "/api/v1/materials";
   return {
-    // ── 模板 ──────────────────────────────────────────────────────
-    /**
-     * 模板目录。默认带 registry 全量 definition（全注册表可达十几 MB）；
-     * 选择器 / 列表场景传 `{ includeDefinition: false }` 只取目录字段（definition 为 {}）。
-     */
-    templates: (options: { includeDefinition?: boolean } = {}) =>
-      http.request<MaterialsV1Template[]>({
-        method: "GET",
-        path: `${base}/templates`,
-        params: options.includeDefinition === false ? { include_definition: "false" } : undefined,
-      }),
-    template: (templateUuid: string) =>
-      http.request<MaterialsV1Template>({ method: "GET", path: `${base}/templates/${encodeURIComponent(templateUuid)}` }),
-    createTemplate: (value: MaterialsV1TemplateWrite, options?: MaterialsV1MutationOptions) =>
-      http.request<MaterialsV1MutationResult<MaterialsV1Template>>({
-        method: "POST",
-        path: `${base}/templates`,
-        body: materialsMutation("put_template", { ...value, template_uuid: null }, options),
-      }),
-    putTemplate: (templateUuid: string, value: MaterialsV1TemplateWrite, options?: MaterialsV1MutationOptions) =>
-      http.request<MaterialsV1MutationResult<MaterialsV1Template>>({
-        method: "PUT",
-        path: `${base}/templates/${encodeURIComponent(templateUuid)}`,
-        body: materialsMutation("put_template", { ...value, template_uuid: templateUuid }, options),
-      }),
-    deleteTemplate: (templateUuid: string, options?: MaterialsV1MutationOptions) =>
-      http.request<MaterialsV1MutationResult<MaterialsV1Template>>({
-        method: "DELETE",
-        path: `${base}/templates/${encodeURIComponent(templateUuid)}`,
-        body: materialsMutation("delete_template", { template_uuid: templateUuid }, options),
-      }),
     /** registry 可实例化资源类目录（物料出库选择器数据源）。 */
     registryClasses: () =>
       http.request<MaterialsV1RegistryClass[]>({ method: "GET", path: `${base}/registry-classes` }),
-
-    // ── 物料聚合 ──────────────────────────────────────────────────
-    /** `rootsOnly` 只返回根物料（设备与独立台面）；`name` 精确搜索。 */
-    instances: (rootsOnly = false, name?: string) =>
-      http.request<MaterialsV1Aggregate[]>({
-        method: "GET",
-        path: `${base}/instances`,
-        params: { roots_only: rootsOnly ? "true" : "false", name },
-      }),
     byResourceId: (resourceId: string) =>
       http.request<MaterialsV1Aggregate>({ method: "GET", path: `${base}/instances/by-resource-id/${encodeURIComponent(resourceId)}` }),
-    instance: (materialUuid: string) =>
-      http.request<MaterialsV1Aggregate>({ method: "GET", path: `${base}/instances/${encodeURIComponent(materialUuid)}` }),
     tree: (materialUuid: string) =>
       http.request<MaterialsV1Tree>({ method: "GET", path: `${base}/instances/${encodeURIComponent(materialUuid)}/tree` }),
-    /**
-     * 物料出库/实例化：按 registry 资源类名在微后端实例化并权威登记（权威发 uuid）。
-     * 返回整棵权威树；根节点即 ResourceSlot 引用 {id: name, uuid} 的来源。
-     */
-    instantiate: (registryClass: string, name: string, barcode?: string, options?: MaterialsV1MutationOptions) =>
-      http.request<MaterialsV1MutationResult<MaterialsV1Tree>>({
-        method: "POST",
-        path: `${base}/instantiate`,
-        body: materialsMutation(
-          "instantiate_material",
-          { registry_class: registryClass, name, ...(barcode ? { barcode } : {}) },
-          options,
-        ),
-      }),
-    /** 直接提交一棵完整的创建树（本地已有草稿时使用；出库请用 instantiate）。 */
-    createTree: (value: MaterialsV1TreeCreate, options?: MaterialsV1MutationOptions) =>
-      http.request<MaterialsV1MutationResult<MaterialsV1Tree>>({
-        method: "POST",
-        path: `${base}/trees`,
-        body: materialsMutation("create_material_tree", value, options),
-      }),
-    /**
-     * 标识字段局部更新。服务端把 payload 与 MaterialPatch 的完整 dump 逐字段比对，
-     * 未设置的字段必须显式为 null，这里统一补齐（只传 {barcode} 也能通过）。
-     */
-    patch: (materialUuid: string, value: MaterialsV1Patch, options?: MaterialsV1MutationOptions) =>
-      http.request<MaterialsV1MutationResult<MaterialsV1Aggregate>>({
-        method: "PATCH",
-        path: `${base}/instances/${encodeURIComponent(materialUuid)}`,
-        body: materialsMutation(
-          "patch_material",
-          {
-            name: value.name ?? null,
-            display_name: value.display_name ?? null,
-            description: value.description ?? null,
-            machine_name: value.machine_name ?? null,
-            barcode: value.barcode ?? null,
-            barcode_symbology: value.barcode_symbology ?? null,
-            icon_uri: value.icon_uri ?? null,
-            config: value.config ?? null,
-            extra: value.extra ?? null,
-            meta_data: value.meta_data ?? null,
-            lifecycle_status: value.lifecycle_status ?? null,
-          },
-          options,
-        ),
-      }),
-    putData: (materialUuid: string, value: MaterialsV1DataWrite, options?: MaterialsV1MutationOptions) =>
-      http.request<MaterialsV1MutationResult<MaterialsV1Aggregate>>({
-        method: "PUT",
-        path: `${base}/instances/${encodeURIComponent(materialUuid)}/data`,
-        body: materialsMutation("put_data", value, options),
-      }),
-    putPosition: (materialUuid: string, value: MaterialsV1PositionWrite, options?: MaterialsV1MutationOptions) =>
-      http.request<MaterialsV1MutationResult<MaterialsV1Aggregate>>({
-        method: "PUT",
-        path: `${base}/instances/${encodeURIComponent(materialUuid)}/position`,
-        body: materialsMutation("put_position", value, options),
-      }),
-    remove: (materialUuid: string, recursive = true, options?: MaterialsV1MutationOptions) =>
-      http.request<MaterialsV1MutationResult<MaterialsV1DeleteResult>>({
-        method: "DELETE",
-        path: `${base}/instances/${encodeURIComponent(materialUuid)}`,
-        body: materialsMutation("delete_material", { material_uuid: materialUuid, recursive }, options),
-      }),
-    /** 同一权威内换位点/换父物料（不驱动设备同步）。 */
-    move: (value: MaterialsV1Move, options?: MaterialsV1MutationOptions) =>
-      http.request<MaterialsV1MutationResult<MaterialsV1Aggregate>>({
-        method: "POST",
-        path: `${base}/move`,
-        body: materialsMutation("move_material", value, options),
-      }),
-    /** 跨设备转运：权威位置提交 + 两端设备 resource service 同步，返回即两端已确认。 */
-    transfer: (value: MaterialsV1Transfer, options?: MaterialsV1MutationOptions) =>
-      http.request<MaterialsV1MutationResult<MaterialsV1TransferResult>>({
-        method: "POST",
-        path: `${base}/transfer`,
-        body: materialsMutation("transfer_material", value, options),
-      }),
     /** 把权威已完成的变更分发到目标设备；调用方应校验 notified 为 true。 */
     notifyDevice: (value: MaterialsV1NotifyDevice) =>
       http.request<MaterialsV1NotifyDeviceResult>({
@@ -678,61 +585,25 @@ export function createMaterialsV1Api(http: HttpTransport) {
         body: { action: "add", ...value },
       }),
 
-    // ── 拓扑边 ────────────────────────────────────────────────────
-    links: (params: { material_uuid?: string; source_material_uuid?: string; target_material_uuid?: string; link_type?: string } = {}) =>
-      http.request<MaterialsV1Link[]>({ method: "GET", path: `${base}/links`, params }),
+    // ── 拓扑边（读取见 inventory.relations） ──────────────────────
     upsertLink: (value: MaterialsV1LinkUpsert) =>
       http.request<MaterialsV1Link>({ method: "POST", path: `${base}/links`, body: value }),
     deleteLink: (linkUuid: string) =>
       http.request<{ deleted: boolean }>({ method: "DELETE", path: `${base}/links/${encodeURIComponent(linkUuid)}` }),
 
-    // ── 批次与预留 ────────────────────────────────────────────────
-    lots: (params: { template_uuid?: string; unit?: string; include_quarantined?: boolean } = {}) =>
-      http.request<MaterialsV1InventoryLot[]>({
-        method: "GET",
-        path: `${base}/lots`,
-        params: {
-          template_uuid: params.template_uuid,
-          unit: params.unit,
-          include_quarantined: params.include_quarantined === undefined ? undefined : params.include_quarantined ? "true" : "false",
-        },
-      }),
-    lot: (lotUuid: string) =>
-      http.request<MaterialsV1InventoryLot>({ method: "GET", path: `${base}/lots/${encodeURIComponent(lotUuid)}` }),
-    /**
-     * 批次入库 / 补充。服务端会把 payload 与 InventoryLotInbound 的完整 dump 逐字段比对，
-     * 因此可选字段必须显式带上（null / 空串），这里统一补齐。
-     */
-    inboundLot: (value: MaterialsV1LotInbound, options?: MaterialsV1MutationOptions) =>
-      http.request<MaterialsV1MutationResult<MaterialsV1InventoryLot>>({
-        method: "POST",
-        path: `${base}/lots/inbound`,
-        body: materialsMutation(
-          "inbound_inventory_lot",
-          {
-            lot_uuid: value.lot_uuid ?? null,
-            template_uuid: value.template_uuid,
-            batch_no: value.batch_no ?? "",
-            unit: value.unit,
-            quantity: value.quantity,
-            expiry_at_ms: value.expiry_at_ms ?? null,
-          },
-          options,
-        ),
-      }),
-    reservations: (params: { task_uuid?: string; status?: string } = {}) =>
-      http.request<MaterialsV1InventoryReservation[]>({ method: "GET", path: `${base}/reservations`, params }),
-    reservation: (reservationUuid: string) =>
-      http.request<MaterialsV1InventoryReservation>({ method: "GET", path: `${base}/reservations/${encodeURIComponent(reservationUuid)}` }),
+    // ── 预留与物理执行（只读） ────────────────────────────────────
     reservationByJob: (jobUuid: string) =>
       http.request<MaterialsV1InventoryReservation>({ method: "GET", path: `${base}/reservations/by-job/${encodeURIComponent(jobUuid)}` }),
+    executions: () => http.request<MaterialsV1Execution[]>({ method: "GET", path: `${base}/executions` }),
+    execution: (jobUuid: string) =>
+      http.request<MaterialsV1Execution>({ method: "GET", path: `${base}/executions/${encodeURIComponent(jobUuid)}` }),
+    /** 库存预演（不落账）。 */
+    previewInventory: (body: MaterialsV1InventoryPreviewInput) =>
+      http.request<JsonObject>({ method: "POST", path: `${base}/inventory/preview`, body }),
 
-    // ── 变更账本 ──────────────────────────────────────────────────
-    changes: (afterSequence = 0, limit = 100) =>
-      http.request<MaterialsV1Change[]>({ method: "GET", path: `${base}/changes`, params: { after_sequence: afterSequence, limit } }),
     /**
-     * SSE GET /api/v1/materials/events —— ledger sequence 游标流（Last-Event-ID 续传）。
-     * 事件仅作失效通知，正文始终重新经 HTTP 读取。
+     * SSE GET /api/v1/materials/events —— ledger sequence 游标流（Last-Event-ID 续传），
+     * 事件名 {@link MATERIALS_CHANGED_EVENT}。事件仅作失效通知，正文始终重新经 HTTP 读取。
      */
     eventsUrl: () => http.url(`${base}/events`),
   };

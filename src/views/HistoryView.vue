@@ -3,6 +3,9 @@
  * 执行历史：history.v1 统一 append-only 事件流（job 状态迁移、反馈、结果、
  * 日志、错误快照、决策审计）。支持按类型 / 设备 / 作业过滤，按全局序列分页，
  * 并可展开事件引用的 payload（inline Base64 解码为文本）。
+ *
+ * V1 合同：Host 的事件 / 载荷存储在 `/api/v1/edge/history/*`（Host 专有，Host 启动 / 重启中返回 5001）；
+ * `/api/v1/history/*` 是调度权威的 V1 运行历史视图，任务归档的统计取自 `GET /history/workflows`。
  */
 import { computed, h, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
@@ -22,11 +25,13 @@ import {
   type DataTableColumns,
 } from "naive-ui";
 import { RefreshOutline } from "@vicons/ionicons5";
-import type {
-  BackendWorkflowTask,
-  HistoryV1Event,
-  HistoryV1EventType,
-  HistoryV1Payload,
+import {
+  isCapabilityUnavailable,
+  type BackendWorkflowTask,
+  type HistoryV1Event,
+  type HistoryV1EventType,
+  type HistoryV1Payload,
+  type RunHistoryWorkflows,
 } from "@openlab/protocol";
 import PageHeader from "../components/PageHeader.vue";
 import StatusPill from "../components/StatusPill.vue";
@@ -116,6 +121,29 @@ const events = ref<HistoryV1Event[]>([]);
 const loading = ref(false);
 const loaded = ref(false);
 const lastError = ref("");
+/** Host 事件存储暂不可用（Host 启动 / 重启中，或 --role backend 纯调度权威没有 Host）。 */
+const edgeUnavailable = ref(false);
+/** V1 运行历史统计（GET /history/workflows 的 stats）；调度权威在远端时为 null。 */
+const runStats = ref<RunHistoryWorkflows["stats"] | null>(null);
+
+const runStatsText = computed(() => {
+  const stats = runStats.value as { total_runs?: number; total_jobs?: number; runs_by_state?: Record<string, number> } | null;
+  if (!stats) return "";
+  const states = Object.entries(stats.runs_by_state ?? {})
+    .map(([state, count]) => `${RUN_STATE_LABELS[state] ?? state} ${count}`)
+    .join(" · ");
+  return `运行历史：共 ${stats.total_runs ?? 0} 次运行、${stats.total_jobs ?? 0} 个作业${states ? `（${states}）` : ""}`;
+});
+
+const RUN_STATE_LABELS: Record<string, string> = { success: "成功", failed: "失败", canceled: "取消", timeout: "超时", running: "运行中" };
+
+async function loadRunStats() {
+  try {
+    runStats.value = (await conn.api.domains.runHistory.workflows({ limit: 1 })).stats;
+  } catch {
+    runStats.value = null;
+  }
+}
 const selectedTypes = ref<HistoryV1EventType[]>([]);
 const deviceFilter = ref<string | null>(null);
 const jobFilter = ref("");
@@ -148,9 +176,12 @@ async function load(reset = true) {
     cursor = rows.length ? rows[rows.length - 1]!.sequence ?? cursor : cursor;
     exhausted = rows.length < PAGE;
     lastError.value = "";
+    edgeUnavailable.value = false;
   } catch (error) {
-    lastError.value = describeError(error);
+    edgeUnavailable.value = isCapabilityUnavailable(error);
+    lastError.value = edgeUnavailable.value ? "" : describeError(error);
   } finally {
+    if (reset) void loadRunStats();
     loading.value = false;
     loaded.value = true;
   }
@@ -298,7 +329,7 @@ onMounted(() => {
   <div class="page">
     <PageHeader
       title="执行历史"
-      :subtitle="`history.v1 统一事件流 · 已载入 ${events.length} 条${exhausted ? '' : '（可继续加载）'}`"
+      :subtitle="`history.v1 统一事件流（/edge/history）· 已载入 ${events.length} 条${exhausted ? '' : '（可继续加载）'}`"
     >
       <template #actions>
         <NButton size="small" :loading="loading" @click="load(true)">
@@ -315,6 +346,11 @@ onMounted(() => {
 
     <template v-else>
       <NAlert v-if="lastError" type="error" closable @close="lastError = ''">{{ lastError }}</NAlert>
+      <div v-if="edgeUnavailable" class="degraded">
+        <span class="degraded-title">设备事件流暂不可用</span>
+        Host 执行进程正在启动或重启（或当前是 --role backend 纯调度权威，没有 Host），history.v1 事件存储读不到；
+        下方任务归档来自 Workflow Authority，仍然可用。
+      </div>
 
       <div class="toolbar">
         <div class="chips">
@@ -336,7 +372,7 @@ onMounted(() => {
         </NSpace>
       </div>
 
-      <div v-if="loaded && !events.length" class="empty-note">
+      <div v-if="loaded && !events.length && !edgeUnavailable" class="empty-note">
         <span class="empty-title">history.v1 事件流暂无记录</span>
         <span class="dim">设备执行动作后，状态迁移、反馈、结果与错误快照会在这里逐条归档；下方「任务归档」来自 Workflow Authority，始终可用。</span>
       </div>
@@ -365,6 +401,7 @@ onMounted(() => {
           </div>
           <span class="dim mono">{{ finishedTasks.length }} 条</span>
         </div>
+        <div v-if="runStatsText" class="dim small run-stats">{{ runStatsText }}</div>
         <NEmpty v-if="!finishedTasks.length" description="还没有已结束的任务" style="padding: 28px 0" />
         <NDataTable
           v-else
@@ -607,5 +644,8 @@ onMounted(() => {
 .dim {
   color: #8b929c;
   font-weight: 400;
+}
+.run-stats {
+  margin: -4px 0 8px;
 }
 </style>

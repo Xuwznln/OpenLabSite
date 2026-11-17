@@ -9,7 +9,6 @@
 import { defineStore } from "pinia";
 import { computed, ref, shallowRef } from "vue";
 import {
-  ApiError,
   type BackendIntervention,
   type BackendManualConfirmation,
   type BackendManualConfirmationDecisionInput,
@@ -19,6 +18,7 @@ import {
   type SchedulerHold,
   type StatusIncident,
   type StatusIncidentDecisionIn,
+  isCapabilityUnavailable,
 } from "@openlab/protocol";
 import { useConnectionStore } from "./connection";
 import { describeError } from "../features/errors";
@@ -54,9 +54,17 @@ export const useDecisionsStore = defineStore("decisions", () => {
   const interventions = shallowRef<BackendIntervention[]>([]);
   const manualConfirmations = shallowRef<PendingManualConfirmation[]>([]);
 
+  /**
+   * V1 里同一个待决动作失败既在 /error-decisions（执行面的决策台）也开出一条干预（edge_command_uuid =
+   * decision_id）；两边投递同一个放行通道。页面只展示一次：已在动作异常里的干预不再单列。
+   */
+  const standaloneInterventions = computed(() => {
+    const decisionIds = new Set(errorDecisions.value.map((item) => item.decision_id));
+    return interventions.value.filter((item) => !item.edge_command_uuid || !decisionIds.has(item.edge_command_uuid));
+  });
   const pendingErrorCount = computed(() => errorDecisions.value.length);
   const activeIncidentCount = computed(() => incidents.value.length);
-  const openInterventionCount = computed(() => interventions.value.length);
+  const openInterventionCount = computed(() => standaloneInterventions.value.length);
   const pendingConfirmationCount = computed(() => manualConfirmations.value.length);
   /** 需要人介入的总数（侧栏角标）。 */
   const attentionCount = computed(
@@ -68,7 +76,7 @@ export const useDecisionsStore = defineStore("decisions", () => {
   );
 
   function classify(error: unknown, support: typeof errorSupport, lastError: typeof errorLastError) {
-    if (error instanceof ApiError && error.isUnsupported) {
+    if (isCapabilityUnavailable(error)) {
       support.value = "unsupported";
       lastError.value = "";
       return;
@@ -80,7 +88,7 @@ export const useDecisionsStore = defineStore("decisions", () => {
     if (!conn.online) return;
     try {
       const resp = await conn.api.domains.decisions.errorDecisions();
-      errorDecisions.value = resp.items;
+      errorDecisions.value = resp.decisions;
       errorSupport.value = "available";
       errorLastError.value = "";
     } catch (error) {
@@ -106,8 +114,8 @@ export const useDecisionsStore = defineStore("decisions", () => {
   }
 
   /**
-   * Workflow Authority 侧需要人介入的两类事实：干预记录（waiting_intervention 的任务）与
-   * 待处理的人工确认单（活跃任务上挂着的 pending 确认）。没有全局列表端点，按活跃任务逐个取。
+   * Workflow Authority 侧需要人介入的两类事实：干预记录（V1 全局列表 `status=open`）与
+   * 待处理的人工确认单（活跃任务上挂着的 pending 确认；没有全局列表端点，按活跃任务逐个取）。
    */
   async function refreshInterventions() {
     if (!conn.online || !conn.schedulerLocal) {
@@ -117,11 +125,10 @@ export const useDecisionsStore = defineStore("decisions", () => {
     }
     try {
       const api = conn.api.domains.workflowBackend;
-      const page = await api.tasks({ page: 1, page_size: 200 });
-      const waiting = page.items.filter((task) => task.control_status === "waiting_intervention");
+      const page = await api.tasks({ page: 1, page_size: 100 });
       const active = page.items.filter((task) => ACTIVE_TASK_STATUSES.has(task.status));
       const [interventionRows, confirmationRows] = await Promise.all([
-        Promise.all(waiting.map((task) => api.taskInterventions(task.uuid))),
+        api.interventions({ status: "open", limit: 200 }),
         Promise.all(
           active.map(async (task) => {
             const rows = await api.taskManualConfirmations(task.uuid).catch(() => [] as BackendManualConfirmation[]);
@@ -138,7 +145,7 @@ export const useDecisionsStore = defineStore("decisions", () => {
           }),
         ),
       ]);
-      interventions.value = interventionRows.flat().filter((item) => item.status === "open");
+      interventions.value = interventionRows.filter((item) => item.status === "open");
       manualConfirmations.value = confirmationRows
         .flat()
         .sort((a, b) => (a.confirmation.deadline_at ?? "").localeCompare(b.confirmation.deadline_at ?? ""));
@@ -152,10 +159,29 @@ export const useDecisionsStore = defineStore("decisions", () => {
     await Promise.all([refreshErrorDecisions(), refreshIncidents(), refreshInterventions()]);
   }
 
-  /** 提交人工确认决策；后端校验指派名单（不在名单 → 具体错误码），提交后重拉收敛。 */
-  async function decideManualConfirmation(confirmationUuid: string, body: BackendManualConfirmationDecisionInput) {
+  /**
+   * 提交人工确认决策（V1 按作业：确认单的 workflow_node_job_uuid 即 job_uuid）；后端校验指派名单
+   * （不在名单 → 具体错误码），提交后重拉收敛。
+   */
+  async function decideManualConfirmation(
+    confirmation: Pick<BackendManualConfirmation, "workflow_node_job_uuid">,
+    body: BackendManualConfirmationDecisionInput,
+  ) {
     try {
-      return await conn.api.domains.workflowBackend.decideManualConfirmation(confirmationUuid, body);
+      return await conn.api.domains.workflowBackend.decideJobManualConfirmation(confirmation.workflow_node_job_uuid, body);
+    } finally {
+      void refreshInterventions();
+    }
+  }
+
+  /** 按修订选择设备提供的干预方案（V1）；同一次点击的重试复用同一幂等键，提交后重拉收敛。 */
+  async function decideIntervention(intervention: BackendIntervention, optionId: string, idempotencyKey: string) {
+    try {
+      return await conn.api.domains.workflowBackend.decideIntervention(
+        intervention.uuid,
+        { revision: intervention.revision, option_id: optionId },
+        idempotencyKey,
+      );
     } finally {
       void refreshInterventions();
     }
@@ -170,12 +196,11 @@ export const useDecisionsStore = defineStore("decisions", () => {
     }
   }
 
-  async function resolveErrorDecision(
-    decision: Pick<ErrorDecision, "decision_id" | "job_id" | "device_id">,
-    body: ErrorDecisionInput,
-  ) {
+  async function resolveErrorDecision(decision: Pick<ErrorDecision, "decision_id">, body: ErrorDecisionInput) {
     try {
-      return await conn.api.domains.decisions.resolveErrorDecision(decision, body);
+      // 同一 decision 同一提交内容复用幂等键：网络重试不会重复投递
+      const idempotencyKey = `openlab-decision:${decision.decision_id}:${body.action ?? body.option?.action ?? "abort"}`;
+      return await conn.api.domains.decisions.resolveErrorDecision(decision, body, { idempotencyKey });
     } finally {
       void refreshErrorDecisions();
     }
@@ -212,6 +237,7 @@ export const useDecisionsStore = defineStore("decisions", () => {
     incidentSupport,
     incidentLastError,
     interventions,
+    standaloneInterventions,
     manualConfirmations,
     pendingErrorCount,
     activeIncidentCount,
@@ -225,6 +251,7 @@ export const useDecisionsStore = defineStore("decisions", () => {
     resolveIncident,
     resolveErrorDecision,
     decideManualConfirmation,
+    decideIntervention,
     startPolling,
     stopPolling,
   };

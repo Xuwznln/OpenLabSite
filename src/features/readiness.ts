@@ -2,8 +2,9 @@
  * 就绪探针（GET /api/v1/readiness）在连接状态里的口径。
  *
  * `/health` 只说明进程活着；readiness 说明「现在能不能接收并执行任务」：Host 子进程启动 /
- * 安静点重启期间、执行适配器尚未注册时是 not_ready（HTTP 503，SDK 照常返回正文）。
- * 旧后端没有这个路由（404）时记为不支持，连接状态退回只看 health，不报错、不再反复探测。
+ * 安静点重启期间、执行适配器尚未注册时是 V1 `starting`（HTTP 503，SDK 照常返回正文；`phase`
+ * 给出 execution_starting / host_restarting / dispatch_paused）。旧后端没有这个路由（404）时记为
+ * 不支持，连接状态退回只看 health，不报错、不再反复探测。
  */
 import type { ReadinessResponse } from "@openlab/protocol";
 
@@ -49,6 +50,9 @@ export function readinessView(
   }
   if (readiness.execution === "restarting") {
     return { tone: "restarting", badge: "重启中", detail: `未就绪：${execution}`, reasons, pillStatus: "paused" };
+  }
+  if (readiness.phase === "dispatch_paused") {
+    return { tone: "not_ready", badge: "派发暂停", detail: "未就绪：调度派发已暂停（排空、重启或维护中）", reasons, pillStatus: "paused" };
   }
   return { tone: "not_ready", badge: "未就绪", detail: `未就绪：${execution}`, reasons, pillStatus: "paused" };
 }

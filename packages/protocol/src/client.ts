@@ -1,22 +1,29 @@
 /**
  * OpenLab Edge 客户端门面：按「单协议域单文件」组装各域客户端。
  *
- * - 传输层：axios（common.ts createHttpTransport），非 2xx 归一为 ApiError。
+ * - 传输层：axios（common.ts createHttpTransport）。V1 信封统一解包：业务失败抛
+ *   BackendBusinessError，非 2xx 抛 ApiError；管理 API 不鉴权，请求不带任何令牌；GET 遇 5001
+ *   （Host 启动 / 重启中）按 Retry-After 有限退避重试。
  * - 每个域的类型与客户端实现内聚在各自文件，与微后端路由模块一一对应：
- *     common.ts           ↔ server/api/runtime/diagnostics.py（system 域）
- *     runtime-v1.ts       ↔ server/api/runtime/data.py
- *     workflow-backend.ts ↔ server/api/runtime/workflow.py
- *     registry.ts         ↔ server/api/runtime/registry.py
- *     materials-v1.ts     ↔ server/api/materials/core.py
- *     graphs-v1.ts        ↔ server/api/materials/graph.py
- *     chemicals-v1.ts     ↔ server/api/materials/chemicals.py
- *     telemetry-v1.ts     ↔ server/api/telemetry.py
- *     history-v1.ts       ↔ server/api/history.py
- *     status.ts           ↔ server/api/runtime/diagnostics.py（decisions 域）
- *     driver-packages.ts  ↔ server/api/driver_packages.py
- *     device-processes.ts ↔ server/api/device_processes.py
- *     lab-v1.ts           ↔ server/api/runtime/lab.py
- *     debug.ts            ↔ server/api/debug.py
+ *     common.ts             ↔ server/api/runtime/diagnostics.py（system 域）
+ *     runtime-v1.ts         ↔ server/api/runtime/data.py
+ *     workflow-backend.ts   ↔ server/api/runtime/workflow.py、workflow_definition.py、tasks_v1.py、interventions_v1.py
+ *     run-history.ts        ↔ server/api/runtime/run_history.py
+ *     scheduler.ts          ↔ server/api/runtime/scheduling_v1.py、lifecycle.py
+ *     registry.ts           ↔ server/api/runtime/registry.py
+ *     inventory.ts          ↔ server/api/materials/inventory.py
+ *     materials-v1.ts       ↔ server/api/materials/core.py、execution.py
+ *     graphs-v1.ts          ↔ server/api/materials/graph.py
+ *     chemicals-v1.ts       ↔ server/api/materials/chemicals.py
+ *     telemetry-v1.ts       ↔ server/api/telemetry.py
+ *     device-state.ts       ↔ server/api/runtime/device_state.py
+ *     history-v1.ts         ↔ server/api/history.py（`/edge/history/*`）
+ *     status.ts             ↔ server/api/runtime/diagnostics.py（decisions 域）
+ *     driver-packages.ts    ↔ server/api/driver_packages.py
+ *     device-processes.ts   ↔ server/api/device_processes.py
+ *     lab-v1.ts             ↔ server/api/materials/lab.py
+ *     process-management.ts ↔ server/api/process_management.py（`/v1/*`）
+ *     debug.ts              ↔ server/api/debug.py
  * - 应用代码经 `api.domains.<domain>` 访问；不再提供扁平别名。
  */
 import {
@@ -28,34 +35,49 @@ import {
 import { createChemicalsV1Api } from "./chemicals-v1.js";
 import { createDebugApi } from "./debug.js";
 import { createDeviceProcessesApi } from "./device-processes.js";
+import { createDeviceStateApi } from "./device-state.js";
 import { createDriverPackagesApi } from "./driver-packages.js";
 import { createGraphsV1Api } from "./graphs-v1.js";
 import { createHistoryV1Api } from "./history-v1.js";
+import { createInventoryApi } from "./inventory.js";
 import { createLabV1Api } from "./lab-v1.js";
 import { createMaterialsV1Api } from "./materials-v1.js";
+import { createProcessManagementApi } from "./process-management.js";
 import { createRegistryApi } from "./registry.js";
+import { createRunHistoryApi } from "./run-history.js";
 import { createRuntimeV1Api } from "./runtime-v1.js";
+import { createSchedulerApi } from "./scheduler.js";
 import { createDecisionsApi } from "./status.js";
 import { createTelemetryV1Api } from "./telemetry-v1.js";
 import { createWorkflowBackendApi } from "./workflow-backend.js";
 
 export { ApiError, BackendBusinessError } from "./common.js";
 
-/** 传输层选项：超时、默认 headers、自定义 axios，以及写请求控制令牌 `getToken`。 */
+/** 传输层选项：超时、默认 headers、自定义 axios、5001 退避 `unavailableRetry`。 */
 export type EdgeApiOptions = HttpTransportOptions;
 
 export interface EdgeApiDomains {
   system: ReturnType<typeof createSystemApi>;
   runtimeV1: ReturnType<typeof createRuntimeV1Api>;
-  /** Workflow Authority：定义 / Graph / Task / Node Job / Authoring。 */
+  /** Workflow Authority：定义 / Graph / 增量编辑 / Task / Node Job / 干预 / Authoring。 */
   workflowBackend: ReturnType<typeof createWorkflowBackendApi>;
+  /** V1 工作流运行历史（`/history/workflows|jobs`）。 */
+  runHistory: ReturnType<typeof createRunHistoryApi>;
+  /** V1 调度观测与运维（monitor / timeline / reschedule / 排空 / 恢复）。 */
+  scheduler: ReturnType<typeof createSchedulerApi>;
   /** Registry Authority：默认本机调度 Host 与 `--role backend` 调度权威进程均提供；接入远端调度权威的受控 Edge 不挂载本域并返回 404。 */
   registry: ReturnType<typeof createRegistryApi>;
+  /** V1 Edge 库存操作面：读 `/inventory/*`，写一律 `POST /inventory/commands`。 */
+  inventory: ReturnType<typeof createInventoryApi>;
+  /** dev 独有物料路由（物料树、registry 资源类、拓扑边、设备通知、执行结算读、materials SSE）。 */
   materialsV1: ReturnType<typeof createMaterialsV1Api>;
   graphsV1: ReturnType<typeof createGraphsV1Api>;
   /** 化学品定义（CAS / InChIKey 可空唯一键，materials.db）。 */
   chemicalsV1: ReturnType<typeof createChemicalsV1Api>;
   telemetryV1: ReturnType<typeof createTelemetryV1Api>;
+  /** V1 设备状态视图（Host telemetry.db）。 */
+  deviceState: ReturnType<typeof createDeviceStateApi>;
+  /** Host 事件 / 载荷存储（`/edge/history/*`）。 */
   historyV1: ReturnType<typeof createHistoryV1Api>;
   /** 人工决策：status-incidents / error-decisions（仅带执行面的 Host）。 */
   decisions: ReturnType<typeof createDecisionsApi>;
@@ -63,8 +85,10 @@ export interface EdgeApiDomains {
   driverPackages: ReturnType<typeof createDriverPackagesApi>;
   /** 受管设备进程：本机 Slave 子进程的配置与生命周期（仅 Host）。 */
   deviceProcesses: ReturnType<typeof createDeviceProcessesApi>;
-  /** 实验室布局（区域 / 围墙像素格），一个 Host 一份，所有浏览器共享。 */
+  /** 实验室档案 / 布局网格 / 分区 / 摆放（V1 lab 合同），所有浏览器共享。 */
   labV1: ReturnType<typeof createLabV1Api>;
+  /** V1 进程管理（`/v1/*`，裸 JSON）。 */
+  processManagement: ReturnType<typeof createProcessManagementApi>;
   debug: ReturnType<typeof createDebugApi>;
 }
 
@@ -74,21 +98,26 @@ export function createEdgeApi(baseUrl: string, options: EdgeApiOptions = {}) {
     system: createSystemApi(http),
     runtimeV1: createRuntimeV1Api(http),
     workflowBackend: createWorkflowBackendApi(http),
+    runHistory: createRunHistoryApi(http),
+    scheduler: createSchedulerApi(http),
     registry: createRegistryApi(http),
+    inventory: createInventoryApi(http),
     materialsV1: createMaterialsV1Api(http),
     graphsV1: createGraphsV1Api(http),
     chemicalsV1: createChemicalsV1Api(http),
     telemetryV1: createTelemetryV1Api(http),
+    deviceState: createDeviceStateApi(http),
     historyV1: createHistoryV1Api(http),
     decisions: createDecisionsApi(http),
     driverPackages: createDriverPackagesApi(http),
     deviceProcesses: createDeviceProcessesApi(http),
     labV1: createLabV1Api(http),
+    processManagement: createProcessManagementApi(http),
     debug: createDebugApi(http),
   };
 
   return {
-    /** 分域命名空间：api.domains.materialsV1.instances() 等。 */
+    /** 分域命名空间：api.domains.inventory.instances() 等。 */
     domains,
     /** 传输层（构造 SSE URL、注入拦截器等场景）。 */
     http,

@@ -1,19 +1,19 @@
 /**
  * 连接管理：后端地址（localStorage 持久化）+ 健康轮询 + 进程角色识别。
  *
- * `/api/v1/health` 同时给出两个维度，页面据此决定哪些能力可用：
- * - `scheduler`：local = 本进程持有 Workflow Authority；remote = 已接入云端，
- *   工作流写入口不在本进程；
- * - `execution`：ready = 本进程带设备执行面（HostNode、遥测、人工决策）；
- *   disabled = 纯调度权威进程（`unilab --role backend`）。
+ * `/api/v1/health`（V1 信封）同时给出两个维度，页面据此决定哪些能力可用：
+ * - `scheduler_mode`：local = 本进程持有 Workflow Authority；remote = 已接入远端调度权威，
+ *   工作流写入口不在本进程（V1 的 `scheduler` 字段是 ready / disabled）；
+ * - `execution`：ready = 本进程带设备执行面（HostNode、遥测、人工决策）；restarting = Host
+ *   子进程重启中；disabled = 纯调度权威进程（`unilab --role backend`）。
  *
- * Registry Authority 只在 backend 角色进程挂载，用一次 GET 探测并缓存结果。
+ * Registry Authority 跟随调度权威挂载，用一次 GET 探测并缓存结果；可用时每 30 秒读一次
+ * `/registry/status` 的挂起数（跨机器部署时注册表变更要人工确认），侧栏据此显示角标。
  *
  * health 在线后再读 `/api/v1/readiness`（能否接收并执行任务：设备初始化 / Host 重启期间
- * not_ready）；旧后端 404 时记为不支持，之后不再探测（换地址时重置）。
+ * `starting`，HTTP 503）；旧后端 404 时记为不支持，之后不再探测（换地址时重置）。
  *
- * 控制令牌按后端地址分开保存；写请求经 `getToken` 现取，只发给令牌所属的那个地址。
- * 写请求被拒（401 + 4001）由 describeError 上报，`tokenRejected` 置位直到重新保存令牌或换地址。
+ * 管理 API 不鉴权：请求不带任何令牌，连接设置只有后端地址。
  */
 
 import { defineStore } from "pinia";
@@ -21,6 +21,8 @@ import { computed, onScopeDispose, ref, watch } from "vue";
 import {
   ApiError,
   createEdgeApi,
+  isCapabilityUnavailable,
+  MATERIALS_CHANGED_EVENT,
   RUNTIME_LOG_NOTICE_EVENT,
   type EdgeApi,
   type HealthResponse,
@@ -32,14 +34,7 @@ import { bindWorkflowInvalidations, WORKFLOW_INVALIDATION_EVENT_TYPES } from "..
 import { openNoticeSource, type NoticeSource } from "../features/shared-notice";
 import { describeError, isOfflineError } from "../features/errors";
 import { classifyTarget } from "../features/insecure-target";
-import {
-  CONTROL_TOKEN_STORAGE_PREFIX,
-  isValidControlToken,
-  onControlTokenRejected,
-  readControlToken,
-  writeControlToken,
-  type ConnectionLink,
-} from "../features/control-token";
+import type { ConnectionLink } from "../features/connection-link";
 import { DEFAULT_LOCAL_EDGE_URL, initialBackendUrl, normalizeBaseUrl } from "../config/edge-endpoints";
 
 const STORAGE_KEY = "openlab:base-url";
@@ -108,7 +103,7 @@ function createNoticeChannel(
   return { revision, state, start, stop, signal };
 }
 
-const MATERIALS_INVALIDATION_EVENT = "materials.changed";
+const MATERIALS_INVALIDATION_EVENT = MATERIALS_CHANGED_EVENT;
 
 function bindMaterialsInvalidations(
   source: NoticeSource,
@@ -179,32 +174,22 @@ export const useConnectionStore = defineStore("connection", () => {
   const checking = ref(false);
   const lastCheckedAt = ref(0);
   const registrySupport = ref<CapabilityState>("unknown");
+  /** 注册表挂起待确认的变更数（注册表页确认后也会就地更新）。 */
+  const registryPendingCount = ref(0);
+  let registryStatusAt = 0;
   const readiness = ref<ReadinessResponse | null>(null);
   const readinessSupport = ref<ReadinessSupport>("unknown");
   /** 连接状态里的就绪口径（胶囊文案 / 颜色 / 原因）。 */
   const readinessState = computed(() => readinessView(readiness.value, readinessSupport.value, online.value));
 
-  // ── 控制令牌 ──────────────────────────────────────────────
-  /** 令牌变更计数：localStorage 本身不是响应式，保存 / 清除 / 其他标签页改动时自增。 */
-  const tokenRevision = ref(0);
-  /** 当前后端已保存的令牌（空串 = 未设置）。 */
-  const token = computed(() => {
-    void tokenRevision.value;
-    return readControlToken(localStorage, baseUrl.value);
-  });
-  /** 最近一次写请求因令牌缺失 / 不正确被拒；重新保存令牌或换地址时清除。 */
-  const tokenRejected = ref(false);
   /** 由外部链接（?backend=）指定了地址：同源探测不再覆盖它。 */
   let linkedUrl = false;
 
-  // getToken 绑定创建时的地址：即使旧实例上还有在途写请求，也不会把令牌带给别的后端。
-  const api = computed<EdgeApi>(() => {
-    const url = baseUrl.value;
-    return createEdgeApi(url, { getToken: () => readControlToken(localStorage, url) });
-  });
+  const api = computed<EdgeApi>(() => createEdgeApi(baseUrl.value));
 
   /** 本进程是否持有 Workflow Authority（可创建/编辑/运行工作流）。 */
-  const schedulerLocal = computed(() => online.value && health.value?.scheduler !== "remote");
+  // V1 health：调度归属在 scheduler_mode（scheduler 是 ready / disabled）
+  const schedulerLocal = computed(() => online.value && (health.value?.scheduler_mode ?? health.value?.scheduler) !== "remote");
   /** 本进程是否带设备执行面（设备目录、遥测、人工决策）。 */
   const executionReady = computed(() => online.value && health.value?.execution === "ready");
   /** 进程角色文案。 */
@@ -263,42 +248,28 @@ export const useConnectionStore = defineStore("connection", () => {
     rememberRecent(next);
   }
 
-  /** 为当前后端保存令牌；格式不合法（含空白 / 非 ASCII）时不保存并返回 false。 */
-  function setToken(value: string): boolean {
-    const next = value.trim();
-    if (!isValidControlToken(next)) return false;
-    writeControlToken(localStorage, baseUrl.value, next);
-    tokenRevision.value += 1;
-    tokenRejected.value = false;
-    return true;
-  }
-
-  function clearToken() {
-    writeControlToken(localStorage, baseUrl.value, "");
-    tokenRevision.value += 1;
-  }
-
-  /** 外部链接导入：先切地址，再把令牌存到该地址名下。 */
+  /** 外部链接导入：切到链接给出的后端地址。 */
   function applyConnectionLink(link: ConnectionLink) {
-    if (link.backend) {
-      linkedUrl = true;
-      setBaseUrl(link.backend);
-    }
-    if (link.token) setToken(link.token);
+    if (!link.backend) return;
+    linkedUrl = true;
+    setBaseUrl(link.backend);
   }
-
-  onScopeDispose(onControlTokenRejected(() => {
-    tokenRejected.value = true;
-  }));
-
-  /** 其他标签页保存 / 清除令牌时同步展示（请求本身每次现取，不依赖这里）。 */
-  function onStorage(event: StorageEvent) {
-    if (event.key === null || event.key.startsWith(CONTROL_TOKEN_STORAGE_PREFIX)) tokenRevision.value += 1;
-  }
-  window.addEventListener("storage", onStorage);
-  onScopeDispose(() => window.removeEventListener("storage", onStorage));
 
   let registryProbePending = false;
+
+  /** 挂起数节流读取（30 秒一次）；读不到时保留上次值。 */
+  async function refreshRegistryPending(force = false) {
+    if (registrySupport.value !== "available") return;
+    if (!force && Date.now() - registryStatusAt < 30_000) return;
+    registryStatusAt = Date.now();
+    const url = baseUrl.value;
+    try {
+      const status = await api.value.domains.registry.status();
+      if (url === baseUrl.value) registryPendingCount.value = status.pending_count;
+    } catch {
+      /* 旧后端没有 /registry/status 或暂不可用：不显示角标 */
+    }
+  }
 
   async function probeRegistry() {
     if (registryProbePending || registrySupport.value !== "unknown") return;
@@ -306,8 +277,9 @@ export const useConnectionStore = defineStore("connection", () => {
     try {
       await api.value.domains.registry.entries();
       registrySupport.value = "available";
+      void refreshRegistryPending(true);
     } catch (error) {
-      if (error instanceof ApiError && error.isUnsupported) {
+      if (isCapabilityUnavailable(error)) {
         registrySupport.value = "unsupported";
       }
     } finally {
@@ -341,6 +313,7 @@ export const useConnectionStore = defineStore("connection", () => {
       if (online.value) {
         rememberRecent(baseUrl.value);
         void probeRegistry();
+        void refreshRegistryPending();
         await checkReadiness();
       } else {
         readiness.value = null;
@@ -406,8 +379,9 @@ export const useConnectionStore = defineStore("connection", () => {
   watch(baseUrl, () => {
     health.value = null;
     online.value = false;
-    tokenRejected.value = false;
     registrySupport.value = "unknown";
+    registryPendingCount.value = 0;
+    registryStatusAt = 0;
     readiness.value = null;
     readinessSupport.value = "unknown";
     if (pollTimer === null) return;
@@ -430,6 +404,7 @@ export const useConnectionStore = defineStore("connection", () => {
     schedulerLocal,
     executionReady,
     registrySupport,
+    registryPendingCount,
     readiness,
     readinessSupport,
     readinessState,
@@ -445,10 +420,6 @@ export const useConnectionStore = defineStore("connection", () => {
     onLogNotice,
     api,
     setBaseUrl,
-    token,
-    tokenRejected,
-    setToken,
-    clearToken,
     applyConnectionLink,
     checkHealth,
     startPolling,

@@ -1,7 +1,8 @@
 # 驱动包与受管设备进程
 
 「管设备」在协议里拆成两层，都由带执行面的 Host 进程持有（`health.execution=ready`），
-FastAPI 直出 DTO；`--role backend` 进程不挂载这两组路由（404），页面整页降级。
+V1 信封（传输层解包，业务失败抛 `BackendBusinessError`：不存在 4001、冲突 3003、参数非法 1000）。默认拓扑里是 Host 专有路由，
+经调度权威转交，Host 启动 / 重启期间返回 5001；`--role backend` 进程不挂载这两组路由（404），页面整页降级。
 
 | 层 | 解决什么 | 域 | 路径前缀 | 客户端 |
 | --- | --- | --- | --- | --- |
@@ -36,9 +37,12 @@ FastAPI 直出 DTO；`--role backend` 进程不挂载这两组路由（404），
 | --- | --- | --- |
 | GET | `` | 台账与运行态：`{python, working_dir, packages_root, ledger_path, scan_dirs, external_only, restart_required, packages[], operations[]}` |
 | GET | `/catalog` | Edge 侧补充目录：`{sources[], packages[]}`（见 1.2） |
-| POST | `/install` | `{spec, enable=true, upgrade=false, name=""}` → 202，返回 `running` 的 operation；来源非法（不是 GitHub / 归档地址 / 存在的目录）直接 422 |
+| POST | `/install` | `{spec, enable=true, upgrade=false, name=""}` → 202，返回 `running` 的 operation；来源非法（不是 GitHub / 归档地址 / 存在的目录）直接 1000 |
 | GET | `/operations` | 最近 30 条操作，新的在前 |
 | GET | `/operations/{operation_id}` | 轮询单条操作（下载 / 依赖 / 扫描日志、结果、错误） |
+| POST | `/operations/{operation_id}/confirm` | `{expected_version, reason}`：人工确认一个待确认的操作（`confirmOperation()`） |
+| POST | `/operations/{operation_id}/recover` | `{expected_version, reason}`：重试中断操作的恢复步骤（`recoverOperation()`） |
+| GET | `/changes` | 源码变更、需重启的 Host / Slave 及连带影响；只读，不执行或确认重启（`changes()`） |
 | PUT | `/{name}/enabled` | `{enabled}`；只改台账，下次启动生效 |
 | DELETE | `/{name}` | 删除 `unilabos_data` 里的源码树并移出台账（本机目录只移出台账，不删文件；已装依赖保留）→ 202，返回 operation |
 
@@ -127,7 +131,7 @@ restart_required ──▶ POST /api/v1/restart {mode:"quiescent", scope:"proces
 | GET | `/{name}/graphs/{graph}` | 图的 node-link 载荷 |
 | POST | `/{name}/graphs/{graph}/launch` | 以受管设备进程拉起 → `{created, process: DeviceProcess}`；进程名固定为 `<包>/<图>`，已存在则更新规格后重启（幂等） |
 
-只有 `device_only` 的图能 launch（demo 图都是）；含物料节点的图 422，应作为 `unilab -g`
+只有 `device_only` 的图能 launch（demo 图都是）；含物料节点的图被拒（1000），应作为 `unilab -g`
 启动图加载。页面上的「启动」= `graphs(name)` 后对每张 `device_only` 图调 `launchGraph`
 （host/slave 双进程 demo 有两张图，各成一条进程）。启动不需要重启 Host；包里的 `@workflow`
 模板仍要等 Host 重启（`restart_required`）后才出现在工作流页。
@@ -152,8 +156,8 @@ python -m unilabos --backend hostlink --is_slave --skip_env_check --disable_brow
 | GET | `` | `{hostlink: {host, port}, processes: DeviceProcess[]}` |
 | GET | `/device-classes` | 可配的设备类：注册表已加载的 + 台账里驱动包扫出的（`{id, source: registry|package, display_name, package}`） |
 | POST | `` | 创建 → 201；正文见下 |
-| GET / PUT / DELETE | `/{process_id}` | 读 / 改（运行中的改完要手动重启才生效）/ 删（先停进程）→ 204 |
-| POST | `/{process_id}/start` `/stop` `/restart` | 409 = 已在运行 |
+| GET / PUT / DELETE | `/{process_id}` | 读 / 改（运行中的改完要手动重启才生效）/ 删（先停进程）→ `{code: 0}` |
+| POST | `/{process_id}/start` `/stop` `/restart` | 3003 = 已在运行 |
 
 创建 / 更新正文（`DeviceProcessWriteInput`）：
 
@@ -174,7 +178,7 @@ python -m unilabos --backend hostlink --is_slave --skip_env_check --disable_brow
 - `devices[]` 由服务端展开成 node-link 节点写进 `graph_nodes`；节点 `uuid` 是设备身份：
   物料权威里已有同 `id` 的设备就沿用其 uuid，否则新发号并固定在规格里（Graph Authority
   按 uuid 校验，换 uuid 会以 `identity_conflict` 拒绝启动图）。更新时保留原 uuid。
-- `package_names` 按驱动包台账解析成 `--devices` 目录，不认识的名字 422；
+- `package_names` 按驱动包台账解析成 `--devices` 目录，不认识的名字 1000；
   `external_only` 对应 `--external_devices_only`（只加载外部包，启动更快）。
 - `restart_policy`：`never` / `on-failure`（非 0 退出才拉起）/ `always`；退避
   2/4/8/15/30 s，超过 `max_restarts` 次后状态停在 `crashed`，`last_error` 说明原因；
@@ -215,7 +219,8 @@ pnpm --filter @openlab/protocol smoke -- http://127.0.0.1:8002   # 读路径：i
 `GET /api/v1/reset` 返回 `supported / pending / confirmation_token / backup_path / detail`。
 仅默认本机分离部署配置重置控制器，其它形态返回 `supported=false`。非默认库路径不支持。
 `POST /api/v1/reset` 必须携带预览的 `confirmation_token` 和 `confirmation="清空全部数据"`。
-确认无效、活跃作业、重启中、在线 Slave、驱动包操作未完成均拒绝（409）。
+确认无效、活跃作业、重启中、在线 Slave、驱动包操作未完成均拒绝（业务码 3003）。重置进行中其它业务请求返回
+HTTP 503 + 信封 5001（维护闸门）。
 202 仅表示接受停机请求，不是清空成功：权威暂停派发、关闭管理服务及 Host，关闭 writer 后
 归档权威和 Host 的四库及受管进程配置。驱动包源码/台账保留。备份 `manifest.json` 的
 `state=completed` 和控制台「重置完成」才是完成凭据。之后手动不带旧 `-g` 启动 `unilab`。

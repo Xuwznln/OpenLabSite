@@ -20,7 +20,6 @@ import {
   HardwareChipOutline,
   LayersOutline,
   LogoGithub,
-  MapOutline,
   PauseCircleOutline,
   PulseOutline,
   ScanOutline,
@@ -41,6 +40,8 @@ import { useEntityCacheStore } from "./stores/entity-cache";
 import { useLabStore } from "./stores/lab";
 import { useSchedulerStore } from "./stores/scheduler";
 import { domainThemeOverrides } from "./theme";
+/** 在 setup 里只读一次 `:id` 的详情页（任务运行时、流程详情），换 uuid 时需要重新挂载。 */
+const DETAIL_ROUTES = new Set(["workflow-task-detail", "workflow-detail"]);
 
 const route = useRoute();
 const conn = useConnectionStore();
@@ -79,7 +80,6 @@ const NAV_GROUPS_BASE = [
       { key: "devices", to: "/devices", icon: HardwareChipOutline },
       { key: "inventory", to: "/inventory", icon: CubeOutline },
       { key: "chemicals", to: "/chemicals", icon: FlaskOutline },
-      { key: "lab", to: "/lab", icon: MapOutline },
       { key: "monitor", to: "/monitor", icon: EyeOutline },
     ],
   },
@@ -127,7 +127,8 @@ const navGroups = computed<NavGroup[]>(() =>
 );
 
 const ROUTE_KEYS: Array<[prefix: string, key: string]> = [
-  ["/lab", "lab"],
+  // 组合视图从物料页 / 扫码进入，归在物料导航下
+  ["/lab/assembly", "inventory"],
   ["/workflow-tasks", "workflows"],
   ["/workflows", "workflows"],
   ["/timeline", "timeline"],
@@ -294,6 +295,13 @@ onUnmounted(() => {
                     {{ alertBadge }}
                   </span>
                   <span
+                    v-if="item.key === 'registry' && conn.registryPendingCount"
+                    class="nav-badge"
+                    :title="`${conn.registryPendingCount} 个注册表变更等待确认`"
+                  >
+                    {{ conn.registryPendingCount }}
+                  </span>
+                  <span
                     v-if="item.key === 'status-incidents' && decisions.activeIncidentCount"
                     class="nav-badge nav-badge-hold"
                   >
@@ -355,7 +363,10 @@ onUnmounted(() => {
                     </div>
                   </div>
                 </Transition>
-                <RouterView />
+                <!-- 详情页在 setup 里读一次路由参数：从一个任务 / 流程详情跳到另一个时按 uuid 重新挂载，避免显示上一条 -->
+                <RouterView v-slot="{ Component, route: current }">
+                  <component :is="Component" :key="DETAIL_ROUTES.has(String(current.name)) ? current.path : String(current.name)" />
+                </RouterView>
               </div>
             </div>
           </main>

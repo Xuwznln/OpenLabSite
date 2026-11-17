@@ -26,7 +26,7 @@ export const useSiteBindingsStore = defineStore("site-bindings", () => {
     loading.value = true;
     pending = (async () => {
       try {
-        const items = await conn.api.domains.materialsV1.instances();
+        const items = await conn.api.domains.inventory.instances();
         if (current === generation) index.value = new SiteIndex(items);
       } catch {
         if (current === generation) error.value = "Site 目录获取失败，参数待校验；请重试";

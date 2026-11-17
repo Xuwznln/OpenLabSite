@@ -13,6 +13,7 @@ import { computed, ref, shallowRef, watch } from "vue";
 import { describeNodeJob, describeTask } from "../features/task-jobs";
 import { createRefreshQueue } from "../features/refresh-queue";
 import { useConnectionStore } from "./connection";
+import { materialLabel } from "../features/material-label";
 import { useDevicesStore } from "./devices";
 import { useSchedulerStore } from "./scheduler";
 
@@ -65,14 +66,15 @@ export const useEntityCacheStore = defineStore("entity-cache", () => {
   const refresh = createRefreshQueue(async () => {
     if (!conn.online) return;
     try {
-      const api = conn.api.domains.materialsV1;
+      // 读走 V1 库存面 /inventory/*（物料聚合 / 模板目录 / 批次 / 账本）
+      const api = conn.api.domains.inventory;
       const [aggregates, templates, lots, changes] = await Promise.all([
         api.instances(),
         api.templates({ includeDefinition: false }).catch(() => []),
         api.lots().catch(() => []),
-        api.changes(0, 500).catch(() => []),
+        api.ledger(0, 500).catch(() => []),
       ]);
-      if (api !== conn.api.domains.materialsV1) return;
+      if (api !== conn.api.domains.inventory) return;
       const next = new Map<string, EntityInfo>();
       const templateName = new Map(templates.map((item) => [item.template_uuid, item.display_name || item.name]));
       for (const template of templates) {
@@ -97,7 +99,7 @@ export const useEntityCacheStore = defineStore("entity-cache", () => {
         }
         next.set(material.material_uuid, {
           uuid: material.material_uuid,
-          name: material.display_name || material.name,
+          name: materialLabel(material),
           kind: "material",
           category: material.resource_type,
           templateName: templateName.get(material.template_uuid) ?? material.template_name,

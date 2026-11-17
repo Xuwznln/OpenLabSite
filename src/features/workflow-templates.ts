@@ -4,16 +4,24 @@
  * - **设备包模板**（驱动包里 `@workflow` 声明，随注册表上报到 Registry Authority，
  *   `GET /api/v1/registry/workflow-templates`，见 templateFromRegistry）与
  *   用户模板（"存为模板"，localStorage）。站点自身不再内置任何模板。
- * - 模板由四种节点组成：action（设备动作，设备用**角色**占位）、
- *   slot（空位，插入后留在画布上等用户填充）、template（嵌套引用另一个模板）、
- *   loop（循环容器：`parent` 指向它的节点是循环体，运行时逐轮执行）。
+ * - 模板节点：action（设备动作，设备用**角色**占位）、slot（空位，插入后留在画布上等用户填充）、
+ *   template（嵌套引用另一个模板）、loop（循环容器：`parent` 指向它的节点是循环体，运行时逐轮执行）、
+ *   material_io（人工装入 / 取走 / 补量，插入后在画布上改参数）、group（`ctx.group` / `ctx.parallel`
+ *   的展示分组，展开时拍平，成员挂到分组自己的父级）、condition（源码 `if`）。
+ * - 设备包模板用了画布不能无损编辑的源码写法（条件分支、表达式 / 携带变量的 while、按入口参数定轮数、
+ *   步骤结果引用、`ctx.lock`）时记在 `sourceOnly`：不展开进画布（抛 TemplateSourceOnlyError），
+ *   由调用方改走「从模板创建」让核心按源码实例化。
  * - 插入画布时递归**展开成真实节点/边**：嵌套模板的入边接到子图入口、
  *   出边接自子图出口；slot 保留为画布上的占位节点，可用设备动作或
  *   另一个模板继续填充（因此空位天然支持再嵌套）；循环体成员带 parent。
  * - 提交前画布不允许残留 slot 节点，提交体是平铺 DAG + 循环容器的 parent_uuid。
  */
 import type { RegistryWorkflowTemplate } from "@openlab/protocol";
-import { loopSpecFromNodeData, type LoopNodeData } from "./workflow-loops";
+import { describeMaterialIo, MATERIAL_IO_NODE_TYPE } from "./material-io";
+import { describeLoopSpec, loopSpecFromNodeData, type LoopNodeData } from "./workflow-loops";
+import { describeCondition, sourceOnlyFeatures } from "./workflow-node-kinds";
+
+export { describeLoopSpec };
 
 export type TemplateParamMapping = { sourceKey: string; targetKey: string };
 
@@ -43,7 +51,30 @@ export type TemplateNodeSpec =
       /** LoopSpec（后端契约）；node_output 条件里用 `node_key` 引用模板步骤 */
       param: Record<string, unknown>;
       parent?: string;
-    };
+    }
+  | {
+      key: string;
+      kind: "material_io";
+      name?: string;
+      description?: string;
+      /** 人工物料节点参数（mode / mount / site / …，见 material-io.ts） */
+      param: Record<string, unknown>;
+      parent?: string;
+    }
+  | { key: string; kind: "group"; name?: string; parent?: string }
+  | { key: string; kind: "condition"; name?: string; description?: string; param: Record<string, unknown>; parent?: string };
+
+/** 模板用了画布不能无损编辑的源码写法：不展开，改由核心按源码实例化（`createWorkflowFromTemplate`）。 */
+export class TemplateSourceOnlyError extends Error {
+  readonly templateId: string;
+  readonly reasons: string[];
+  constructor(templateId: string, templateName: string, reasons: string[]) {
+    super(`模板「${templateName}」用了画布不能编辑的写法（${reasons.join("、")}），请用「从模板创建」直接生成工作流`);
+    this.name = "TemplateSourceOnlyError";
+    this.templateId = templateId;
+    this.reasons = reasons;
+  }
+}
 
 /** 操作指引：运行前准备 / 预期效果 / 注意事项（`@workflow(guide=...)`）。 */
 export interface TemplateGuide {
@@ -86,6 +117,10 @@ export interface WorkflowTemplate {
   roles: TemplateRole[];
   nodes: TemplateNodeSpec[];
   edges: TemplateEdgeSpec[];
+  /** 设备包模板的注册表身份（`createWorkflowFromTemplate` 用） */
+  registryUuid?: string;
+  /** 画布不能无损编辑的源码写法（非空时不展开进画布） */
+  sourceOnly?: string[];
 }
 
 export function templateSource(tpl: WorkflowTemplate): TemplateSource {
@@ -99,24 +134,9 @@ export interface TemplateProcedureStep {
   roleLabel: string;
   actionName: string;
   description: string;
-  kind: "action" | "slot" | "loop";
+  kind: "action" | "slot" | "loop" | "material_io" | "condition";
   /** 循环嵌套深度（0 = 顶层），全流程说明按它缩进 */
   depth: number;
-}
-
-/** 循环节点的一句话摘要（模板卡片 / 画布标题）。 */
-export function describeLoopSpec(param: Record<string, unknown> | undefined): string {
-  const mode = String(param?.mode ?? "");
-  if (mode === "for") return `重复 ×${Number(param?.count ?? 0) || "?"}`;
-  if (mode !== "while") return "循环";
-  const condition = (param?.condition ?? {}) as Record<string, unknown>;
-  const op = String(condition.op ?? "==");
-  const rhs = op === "exists" ? "" : ` ${JSON.stringify(condition.value ?? null)}`;
-  const subject =
-    condition.source === "device_state"
-      ? `${String(condition.device_id ?? "")}.${String(condition.field ?? "")}`
-      : `步骤输出${condition.data_key ? `.${String(condition.data_key)}` : ""}`;
-  return `当 ${subject} ${op === "exists" ? "存在" : op}${rhs} 时重复`;
 }
 
 /**
@@ -138,8 +158,21 @@ export function templateProcedure(tpl: WorkflowTemplate): TemplateProcedureStep[
   };
   const steps: TemplateProcedureStep[] = [];
   for (const node of tpl.nodes) {
-    if (node.kind === "template") continue;
+    if (node.kind === "template" || node.kind === "group") continue;
     const depth = depthOf(node.key);
+    if (node.kind === "material_io" || node.kind === "condition") {
+      const summary = node.kind === "material_io" ? describeMaterialIo(node.param) : describeCondition(node.param);
+      steps.push({
+        index: steps.length + 1,
+        title: node.name || summary,
+        roleLabel: "",
+        actionName: summary,
+        description: node.description ?? "",
+        kind: node.kind,
+        depth,
+      });
+      continue;
+    }
     if (node.kind === "slot") {
       steps.push({
         index: steps.length + 1,
@@ -180,19 +213,21 @@ export function templateProcedure(tpl: WorkflowTemplate): TemplateProcedureStep[
 export function hasTemplateGuide(tpl: WorkflowTemplate): boolean {
   const guide = tpl.guide;
   if (guide && (guide.preparation.length || guide.expected.length || guide.notes.length)) return true;
-  return tpl.nodes.some((node) => (node.kind === "action" || node.kind === "loop") && Boolean(node.description));
+  return tpl.nodes.some(
+    (node) => (node.kind === "action" || node.kind === "loop" || node.kind === "material_io") && Boolean(node.description),
+  );
 }
 
 export interface ExpandedNode {
   key: string;
-  type: "action" | "slot" | "loop";
+  type: "action" | "slot" | "loop" | "material_io";
   role?: string;
   actionName?: string;
   param?: Record<string, unknown>;
   inventoryRequirements?: Record<string, unknown>[];
   slotLabel?: string;
   slotHint?: string;
-  /** loop：显示名与 LoopSpec */
+  /** loop / material_io：显示名；loop 的 LoopSpec */
   name?: string;
   loopSpec?: Record<string, unknown>;
   /** 所在循环容器（展开后的 key） */
@@ -242,8 +277,14 @@ export function registryTemplatePackage(entry: Pick<RegistryWorkflowTemplate, "i
 
 export function templateFromRegistry(entry: RegistryWorkflowTemplate): WorkflowTemplate {
   const packageName = registryTemplatePackage(entry);
+  const sourceOnly = sourceOnlyFeatures(
+    entry.nodes.map((node) => ({ type: node.kind, param: node.param, condition_guards: node.condition_guards })),
+    entry.resource_scopes ?? [],
+  );
   return {
     id: `${REGISTRY_TEMPLATE_ID_PREFIX}${entry.uuid}`,
+    registryUuid: entry.uuid,
+    ...(sourceOnly.length ? { sourceOnly } : {}),
     name: entry.display_name,
     description: entry.description || `设备包模板 · ${entry.id}`,
     source: "registry",
@@ -272,6 +313,19 @@ export function templateFromRegistry(entry: RegistryWorkflowTemplate): WorkflowT
           param: { ...(node.param ?? {}) },
           parent,
         };
+      }
+      if (node.kind === "material_io" || node.kind === "condition") {
+        return {
+          key: node.key,
+          kind: node.kind,
+          name: node.name || undefined,
+          description: node.description || undefined,
+          param: { ...(node.param ?? {}) },
+          parent,
+        };
+      }
+      if (node.kind === "group") {
+        return { key: node.key, kind: "group", name: node.name || undefined, parent };
       }
       const param = node.param && Object.keys(node.param).length ? { ...node.param } : undefined;
       const inventoryRequirements = node.inventory_requirements?.length
@@ -325,25 +379,40 @@ export function expandTemplate(
     }
     const tpl = registry.get(tid);
     if (!tpl) throw new Error(`模板不存在：${tid}`);
+    if (tpl.sourceOnly?.length) throw new TemplateSourceOnlyError(tid, tpl.name, tpl.sourceOnly);
     expanding.push(tid);
 
     const keyOf = (spec: TemplateNodeSpec) => (prefix ? `${prefix}.${spec.key}` : spec.key);
-    // 循环体成员的父级：本模板里的 loop 节点（展开后的 key）；模板自身在别的循环体里时继承
-    const parentOf = (spec: TemplateNodeSpec): string | undefined => {
+    // 循环体成员的父级：本模板里的 loop 节点（展开后的 key）；分组只是展示，跳过它取分组自己的父级；
+    // 模板自身在别的循环体里时继承
+    const parentOf = (spec: TemplateNodeSpec, seen = new Set<string>()): string | undefined => {
       if (!spec.parent) return inheritedParent;
       const container = tpl.nodes.find((n) => n.key === spec.parent);
+      if (container?.kind === "group" && !seen.has(container.key)) {
+        seen.add(container.key);
+        return parentOf(container, seen);
+      }
       if (!container || container.kind !== "loop") {
         throw new Error(`模板 ${tid} 的节点 ${spec.key} 的 parent ${spec.parent} 不是循环节点`);
       }
       return keyOf(container);
     };
+    /** 拍平分组后是否在顶层（分组本身不算节点）。 */
+    const isTopLevel = (spec: TemplateNodeSpec) => spec.kind !== "group" && parentOf(spec) === inheritedParent;
 
     const members = new Map<string, { entries: string[]; exits: string[] }>();
     for (const spec of tpl.nodes) {
       const key = keyOf(spec);
       const parent = parentOf(spec);
-      if (spec.kind === "template") {
+      if (spec.kind === "group") {
+        continue;
+      } else if (spec.kind === "condition") {
+        throw new TemplateSourceOnlyError(tid, tpl.name, ["条件分支（if）"]);
+      } else if (spec.kind === "template") {
         members.set(spec.key, walk(spec.templateId, key, parent));
+      } else if (spec.kind === "material_io") {
+        nodes.push({ key, type: MATERIAL_IO_NODE_TYPE, name: spec.name, param: spec.param, parent });
+        members.set(spec.key, { entries: [key], exits: [key] });
       } else if (spec.kind === "action") {
         nodes.push({
           key,
@@ -387,10 +456,10 @@ export function expandTemplate(
       }
     }
 
-    // 模板的入口/出口只看顶层成员（循环体成员的顺序由循环容器代表）
+    // 模板的入口/出口只看顶层成员（循环体成员的顺序由循环容器代表；分组拍平）
     const targeted = new Set(tpl.edges.map((e) => e.target));
     const sourced = new Set(tpl.edges.map((e) => e.source));
-    const topLevel = tpl.nodes.filter((n) => !n.parent);
+    const topLevel = tpl.nodes.filter(isTopLevel);
     const entries = topLevel
       .filter((n) => !targeted.has(n.key))
       .flatMap((n) => members.get(n.key)!.entries);
@@ -533,6 +602,10 @@ export function templateFromCanvas(
         hint: String(n.data.slotHint ?? ""),
         parent,
       };
+    }
+    if (n.type === MATERIAL_IO_NODE_TYPE) {
+      const param = n.data.param && typeof n.data.param === "object" ? { ...(n.data.param as Record<string, unknown>) } : {};
+      return { key: n.id, kind: "material_io", name: String(n.data.label ?? "") || undefined, param, parent };
     }
     if (n.type === "loop") {
       // 模板里 node_output 条件用步骤 key（= 节点 id）引用；表单 data 里的 conditionNodeId 就是节点 id

@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { BackendBusinessError } from "../src/common";
 import {
+  TaskCommandRejectedError,
+  WORKFLOW_EVENT_NAMES,
   createWorkflowBackendApi,
   createWorkflowBackendClient,
   type BackendIntervention,
@@ -45,7 +47,7 @@ describe("workflow 协议客户端（Backend 信封）", () => {
       () => api.publishWorkflow(DUMMY_ID, { revision: 1 }),
       () => api.workflowPublications(DUMMY_ID),
       () => api.latestPublications(),
-      () => api.insertCompositeInvocation(DUMMY_ID, { revision: 1, child_workflow_uuid: DUMMY_ID }),
+      () => api.insertCompositeInvocation(DUMMY_ID, { revision: 1, contract_uuid: DUMMY_ID }),
       () => api.createTask({ workflow_uuid: DUMMY_ID }),
       () => api.editTaskInput(DUMMY_ID, { expected_revision: 0, input: {} }),
       () => api.commandTask(DUMMY_ID, { type: "step", expected_revision: 0, idempotency_key: "step-1" }),
@@ -57,11 +59,9 @@ describe("workflow 协议客户端（Backend 信封）", () => {
       () => api.nodeRun(DUMMY_ID),
       () => api.taskManualConfirmations(DUMMY_ID),
       () => api.manualConfirmation(DUMMY_ID),
-      () => api.decideManualConfirmation(DUMMY_ID, { action: "approve" } satisfies BackendManualConfirmationDecisionInput),
-      () => api.decideTaskManualConfirmation(DUMMY_ID, DUMMY_ID, { action: "approve" } satisfies BackendManualConfirmationDecisionInput),
-      () => api.taskInterventions(DUMMY_ID),
+      () => api.decideJobManualConfirmation(DUMMY_ID, { action: "approve" } satisfies BackendManualConfirmationDecisionInput),
       () => api.jobResults(DUMMY_ID),
-      () => api.jobFeedbackHistory(DUMMY_ID),
+      () => api.jobFeedback(DUMMY_ID),
       () => api.authoring(DUMMY_ID),
       () =>
         api.saveDraft(DUMMY_ID, {
@@ -69,12 +69,65 @@ describe("workflow 协议客户端（Backend 信封）", () => {
           expected_draft_hash: null,
           expected_workflow_revision: 1,
         }),
-      () =>
-        api.applyAuthoring(DUMMY_ID, {
-          expected_draft_hash: "h",
-          expected_workflow_revision: 1,
-          expected_candidate_hash: "c",
-        }),
+      () => api.applyAuthoring(DUMMY_ID, { candidate_hash: "c" }),
+      // ── V1 新增 ──
+      () => api.operationCategories(),
+      () => api.operationCategory(DUMMY_ID),
+      () => api.createOperationCategory({ name: "合成" }),
+      () => api.updateOperationCategory(DUMMY_ID, { sort_order: 1 }),
+      () => api.deleteOperationCategory(DUMMY_ID),
+      () => api.importWorkflow({} as never),
+      () => api.importPythonWorkflow("@workflow\ndef demo(ctx): ...\n", "demo.py"),
+      () => api.duplicateWorkflow(DUMMY_ID),
+      () => api.referencedBy(DUMMY_ID),
+      () => api.templateCatalog(),
+      () => api.createTemplateInstance({} as never),
+      () => api.workflowNodes(DUMMY_ID),
+      () => api.addWorkflowNode(DUMMY_ID, {} as never),
+      () => api.addWorkflowEdge(DUMMY_ID, {} as never),
+      () => api.batchDelete(DUMMY_ID, { node_uuids: [], edge_uuids: [] }),
+      () => api.workflowNode(DUMMY_ID),
+      () => api.patchWorkflowNode(DUMMY_ID, {} as never),
+      () => api.deleteWorkflowNode(DUMMY_ID),
+      () => api.duplicateWorkflowNode(DUMMY_ID),
+      () => api.deleteWorkflowEdge(DUMMY_ID),
+      () => api.nodeTemplates(),
+      () => api.nodeTemplate(DUMMY_ID),
+      () => api.putResourceScopes(DUMMY_ID, {} as never),
+      () => api.runPreflight(DUMMY_ID),
+      () => api.submitRunPreflight(DUMMY_ID, {} as never),
+      () => api.compileAuthoring({} as never),
+      () => api.generatePython({} as never),
+      () => api.validateAuthoring({} as never),
+      () => api.taskPresentations({ view: "matrix" }),
+      () => api.taskDeleteEligibility(DUMMY_ID),
+      () => api.deleteTask(DUMMY_ID),
+      () => api.taskEvents(DUMMY_ID),
+      () => api.taskStepState(DUMMY_ID),
+      () => api.patchTaskJobParam(DUMMY_ID, DUMMY_ID, { param: {} }),
+      () => api.taskExecutionLocks(DUMMY_ID),
+      () => api.forceReleaseExecutionLock(DUMMY_ID, DUMMY_ID, {} as never),
+      () => api.taskMaterialEvents(DUMMY_ID),
+      () => api.taskInventoryConsumptions(DUMMY_ID),
+      () => api.jobInventoryConsumptions(DUMMY_ID),
+      () => api.reagentInventoryConsumptions(DUMMY_ID),
+      () => api.interventions({ status: "open" }),
+      () => api.intervention(DUMMY_ID),
+      () => api.decideIntervention(DUMMY_ID, { revision: 1, option_id: "retry" }, "click-1"),
+      () => api.taskHumanInteractions(DUMMY_ID),
+      () => api.replyHumanInteraction(DUMMY_ID, { choice: "ok" }),
+      () => api.reconcileJobQuantity(DUMMY_ID, {} as never),
+      () => api.resolveUncertainJob(DUMMY_ID, { resolution: "canceled", reason: "现场确认未执行" }),
+      () => api.settleMaterialTransfer(DUMMY_ID, {} as never),
+      () => api.createDeviceActionRun({} as never),
+      () => api.resourceIntervals(),
+      () => api.releaseResourceInterval(DUMMY_ID, { expected_version: 1, reason: "x" }),
+      () => api.lendResourceInterval(DUMMY_ID, {} as never),
+      () => api.resourceLoans(),
+      () => api.returnResourceLoan(DUMMY_ID, { expected_version: 1, reason: "x" }),
+      () => api.deviceTenancies(),
+      () => api.releaseDeviceTenancy(DUMMY_ID, { expected_version: 1, reason: "x" }),
+      () => api.waitGraph(),
     ];
     for (const run of invocations) {
       mock.nextResponse = { status: 200, data: { code: 0, data: {} } };
@@ -84,8 +137,28 @@ describe("workflow 协议客户端（Backend 信封）", () => {
       mock.calls.map(({ method, url }) => `${method} ${normalizeRecordedPath(url)}`),
     );
     expect(called).toEqual(catalogOps("workflow"));
-    // SSE 端点不走 axios，仅提供 URL 构造
+    // SSE 端点不走 axios，仅提供 URL 构造；事件名按 V1
     expect(api.eventsUrl()).toBe("http://edge.local/api/v1/events");
+    expect(WORKFLOW_EVENT_NAMES).toEqual([
+      "workflow.runtime.changed",
+      "workflow.authoring.changed",
+      "station.error_handling.changed",
+      "stream.reset",
+    ]);
+  });
+
+  it("V1 请求体：组合调用按 contract_uuid（device_bindings 缺省 {}），Apply 只带 candidate_hash，Python 导入是原始源码", async () => {
+    const mock = createMockHttp();
+    const api = createWorkflowBackendApi(mock.http);
+    mock.nextResponse = { status: 200, data: { code: 0, data: { workflow: {}, nodes: [], edges: [] } } };
+    await api.insertCompositeInvocation(DUMMY_ID, { revision: 2, contract_uuid: "pub-1", param: { volume: 5 } });
+    expect(mock.calls[0]?.data).toEqual({ device_bindings: {}, revision: 2, contract_uuid: "pub-1", param: { volume: 5 } });
+    mock.nextResponse = { status: 200, data: { code: 0, data: {} } };
+    await api.applyAuthoring(DUMMY_ID, { candidate_hash: "sha256:c" });
+    expect(mock.calls[1]?.data).toEqual({ candidate_hash: "sha256:c" });
+    mock.nextResponse = { status: 201, data: { code: 0, data: {} } };
+    await api.importPythonWorkflow("print(1)\n", "demo.py");
+    expect(mock.calls[2]?.data).toBe("print(1)\n");
   });
 
   it("ad-hoc 设备动作与整图运行共用 POST /workflow-tasks", async () => {
@@ -107,32 +180,40 @@ describe("workflow 协议客户端（Backend 信封）", () => {
     });
   });
 
-  it("单点控制保留版本和幂等键，业务冲突不会被当成功", async () => {
+  it("任务命令返回命令投影（HTTP 201）；status=rejected 与版本冲突都不会被当成功", async () => {
     const mock = createMockHttp();
     const api = createWorkflowBackendApi(mock.http);
     const body = { type: "step" as const, expected_revision: 3, idempotency_key: "click-4" };
-    mock.nextResponse = { status: 200, data: { code: 0, data: { control_revision: 4 } } };
-    expect((await api.commandTask(DUMMY_ID, body)).control_revision).toBe(4);
+    mock.nextResponse = { status: 201, data: { code: 0, data: { uuid: "cmd", type: "step", status: "pending", result: {} } } };
+    expect((await api.commandTask(DUMMY_ID, body)).status).toBe("pending");
     expect(mock.calls[0]?.data).toEqual(body);
-    mock.nextResponse = { status: 200, data: { code: 3003, error: { msg: "stale control revision" } } };
+    mock.nextResponse = {
+      status: 201,
+      data: { code: 0, data: { uuid: "cmd2", type: "pause", status: "rejected", result: { reason: "task_is_not_in_normal_mode" } } },
+    };
+    const rejected = await api.commandTask(DUMMY_ID, { type: "pause", idempotency_key: "click-5" }).catch((e: unknown) => e);
+    expect(rejected).toBeInstanceOf(TaskCommandRejectedError);
+    expect(rejected).toMatchObject({ code: 3003, reason: "task_is_not_in_normal_mode", symbol: "task_is_not_in_normal_mode" });
+    expect((rejected as Error).message).toContain("任务不在自动执行模式");
+    mock.nextResponse = { status: 200, data: { code: 3003, error: { msg: "任务控制版本已变化，请刷新后重试" } } };
     await expect(api.commandTask(DUMMY_ID, body)).rejects.toBeInstanceOf(BackendBusinessError);
   });
 
-  it("人工确认决策走 canonical POST，并保留幂等键与显式确认人", async () => {
+  it("人工确认按作业提交（V1 POST /workflow-node-jobs/{job}/manual-confirmation），保留幂等键与显式确认人", async () => {
     const mock = createMockHttp();
     const api = createWorkflowBackendApi(mock.http);
     mock.nextResponse = {
       status: 200,
       data: { code: 0, data: { uuid: DUMMY_ID, status: "approved" } },
     };
-    await api.decideManualConfirmation(DUMMY_ID, {
+    await api.decideJobManualConfirmation(DUMMY_ID, {
       action: "approve",
       confirmed_by: "alice",
       decision_idempotency_key: "manual-1",
     });
     expect(mock.calls[0]).toMatchObject({
       method: "POST",
-      url: `http://edge.local/api/v1/workflow-manual-confirmations/${DUMMY_ID}/decision`,
+      url: `http://edge.local/api/v1/workflow-node-jobs/${DUMMY_ID}/manual-confirmation`,
       data: {
         action: "approve",
         confirmed_by: "alice",
@@ -247,7 +328,6 @@ describe("workflow-backend 运行时读取端点（spec §6 契约）", () => {
       uuid: "i1",
       workflow_task_uuid: TASK,
       workflow_node_job_uuid: JOB,
-      edge_agent_uuid: "edge-1",
       revision: 1,
       status: "selected",
       options: [{ id: "retry", label: "重试" }, { id: "skip", label: "跳过" }],
@@ -255,8 +335,8 @@ describe("workflow-backend 运行时读取端点（spec §6 契约）", () => {
       selected_option: { id: "retry", label: "重试" },
       opened_at: "2026-08-13T12:00:00Z",
       selected_option_id: "retry",
-      decision_idempotency_key: "idem-2",
       edge_command_uuid: "cmd-1",
+      delivery_status: "delivered",
       decided_at: "2026-08-13T12:03:00Z",
     },
     {
@@ -264,7 +344,6 @@ describe("workflow-backend 运行时读取端点（spec §6 契约）", () => {
       uuid: "i2",
       workflow_task_uuid: TASK,
       workflow_node_job_uuid: JOB,
-      edge_agent_uuid: "edge-1",
       revision: 2,
       status: "open",
       options: [{ id: "retry", label: "重试" }],
@@ -325,13 +404,7 @@ describe("workflow-backend 运行时读取端点（spec §6 契约）", () => {
       invoke: (api: ReturnType<typeof createWorkflowBackendApi>, params?: { limit?: number; offset?: number }) =>
         api.taskManualConfirmations(TASK, params),
     },
-    {
-      name: "interventions",
-      path: `/api/v1/workflow-tasks/${TASK}/interventions`,
-      rows: interventions,
-      invoke: (api: ReturnType<typeof createWorkflowBackendApi>, params?: { limit?: number; offset?: number }) =>
-        api.taskInterventions(TASK, params),
-    },
+
     {
       name: "results",
       path: `/api/v1/workflow-node-jobs/${JOB}/results`,
@@ -339,16 +412,21 @@ describe("workflow-backend 运行时读取端点（spec §6 契约）", () => {
       invoke: (api: ReturnType<typeof createWorkflowBackendApi>, params?: { limit?: number; offset?: number }) =>
         api.jobResults(JOB, params),
     },
-    {
-      name: "feedback-history",
-      path: `/api/v1/workflow-node-jobs/${JOB}/feedback-history`,
-      rows: feedback,
-      invoke: (api: ReturnType<typeof createWorkflowBackendApi>, params?: { limit?: number; offset?: number }) =>
-        api.jobFeedbackHistory(JOB, params),
-    },
   ] as const;
 
-  it("四端点：正常列表解包 + 命中冻结路径", async () => {
+  it("V1 干预是全局列表（status / limit），反馈归档按 page / page_size 分页", async () => {
+    const mock = createMockHttp();
+    const api = createWorkflowBackendApi(mock.http);
+    mock.nextResponse = { status: 200, data: { code: 0, data: interventions } };
+    await expect(api.interventions({ status: "open", limit: 50 })).resolves.toEqual(interventions);
+    expect(mock.calls[0]).toMatchObject({ url: "http://edge.local/api/v1/workflow-interventions", params: { status: "open", limit: 50 } });
+    const page = { items: feedback, has_more: false, page: 1, page_size: 50 };
+    mock.nextResponse = { status: 200, data: { code: 0, data: page } };
+    await expect(api.jobFeedback(JOB, { page: 1, page_size: 50 })).resolves.toEqual(page);
+    expect(mock.calls[1]).toMatchObject({ url: `http://edge.local/api/v1/workflow-node-jobs/${JOB}/feedback`, params: { page: 1, page_size: 50 } });
+  });
+
+  it("两端点：正常列表解包 + 命中冻结路径", async () => {
     for (const ep of endpoints) {
       const mock = createMockHttp();
       const api = createWorkflowBackendApi(mock.http);
@@ -400,7 +478,7 @@ describe("workflow-backend 运行时读取端点（spec §6 契约）", () => {
     }
     // §6.2：open 行决策键缺席，但 selected_option 必在且为空对象 {}
     const open = interventions[1]!;
-    for (const key of ["selected_option_id", "decision_idempotency_key", "edge_command_uuid", "decided_at"]) {
+    for (const key of ["selected_option_id", "edge_command_uuid", "delivery_status", "decided_at"]) {
       expect(key in open, `intervention.${key} 应缺席`).toBe(false);
     }
     expect(open.selected_option).toEqual({});

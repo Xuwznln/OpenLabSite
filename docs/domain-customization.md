@@ -46,7 +46,7 @@ parameter at startup, so one build can appear in the index once per domain theme
 ## Scanner-gun recording
 
 The global shell recognizes a keyboard-wedge scan outside text fields and opens the scanner
-drawer. A scan queries the canonical `GET /api/v1/materials/instances` projection and matches the
+drawer. A scan queries the canonical `GET /api/v1/inventory/instances` projection and matches the
 aggregate's `material.barcode`. Every event is also kept in a browser-local, 100-row operator
 ledger that can be exported as CSV. This ledger is deliberately not a material mutation: OpenLab
 does not invent a write endpoint or bypass command UUID, effect-key, and aggregate-version rules.
@@ -55,8 +55,9 @@ does not invent a write endpoint or bypass command UUID, effect-key, and aggrega
 
 There is no browser-side "reset library" operation. Demo devices and labware come from the
 device graph a Host starts with (`unilab -g graph.json`) and from the materials authority:
-the 物料 page can instantiate labware by registry class (`POST /api/v1/materials/instantiate`),
-move it onto a device site, and delete it, all through the materials.v1 idempotency envelope.
+the 物料 page can instantiate labware by registry class, move it onto a device site, and delete it,
+all as materials.v1 idempotency envelopes submitted to `POST /api/v1/inventory/commands` (the single
+material write entry point of the V1.0 contract).
 The Uni-Lab-OS demo repositories (site / workstation / LAN / exception demos) provide
 reproducible graphs and `@workflow` templates that appear in the workflow list at startup.
 

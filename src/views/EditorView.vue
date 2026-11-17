@@ -24,6 +24,7 @@ import { Background } from "@vue-flow/background";
 import { Controls } from "@vue-flow/controls";
 import { MiniMap } from "@vue-flow/minimap";
 import dagre from "@dagrejs/dagre";
+import { compoundLayoutEdges, type CompoundLayoutNode } from "../features/compound-layout";
 import {
   NAlert,
   NButton,
@@ -49,6 +50,7 @@ import {
   ArrowBackOutline,
   ArrowForwardOutline,
   CloseOutline,
+  CubeOutline,
   GitBranchOutline,
   HandRightOutline,
   HelpCircleOutline,
@@ -66,6 +68,15 @@ import { WORKFLOW_RUN_OPTIONS, type WorkflowExecutionMode } from "../features/wo
 import SlotNode from "../components/SlotNode.vue";
 import { TERMS } from "../features/terminology";
 import ManualNode from "../components/ManualNode.vue";
+import MaterialIoNode from "../components/MaterialIoNode.vue";
+import MaterialIoEditor from "../components/MaterialIoEditor.vue";
+import {
+  defaultMaterialIoData,
+  MATERIAL_IO_DEFAULT_NAMES,
+  MATERIAL_IO_NODE_TYPE,
+  type MaterialIoNodeData,
+} from "../features/material-io";
+import { resourceScopes, sourceOnlyFeatures, structuralKind } from "../features/workflow-node-kinds";
 import BranchNode from "../components/BranchNode.vue";
 import NodePickerPanel from "../components/NodePickerPanel.vue";
 import GroupNode from "../components/GroupNode.vue";
@@ -105,6 +116,7 @@ import {
   suggestDeviceForRole,
   templateFromCanvas,
   templateFromRegistry,
+  TemplateSourceOnlyError,
   type ExpandedEdge,
   type ExpandedNode,
   type RoleDeviceCandidate,
@@ -132,7 +144,7 @@ import {
   setDragPayload,
   type SpecialKind,
 } from "../features/canvas-dnd";
-import { actionSchemaDetailFromCapability } from "@openlab/protocol";
+import { actionSchemaDetailFromCapability, type BackendWorkflowType } from "@openlab/protocol";
 import { useActionParamForm } from "../features/action-param-form";
 import {
   actionParamSummary,
@@ -239,6 +251,7 @@ const nodeTypes: NodeTypesObject = {
   action: markRaw(ActionNode) as unknown as NodeTypesObject[string],
   slot: markRaw(SlotNode) as unknown as NodeTypesObject[string],
   manual: markRaw(ManualNode) as unknown as NodeTypesObject[string],
+  [MATERIAL_IO_NODE_TYPE]: markRaw(MaterialIoNode) as unknown as NodeTypesObject[string],
   branch: markRaw(BranchNode) as unknown as NodeTypesObject[string],
   [GROUP_NODE_TYPE]: markRaw(GroupNode) as unknown as NodeTypesObject[string],
   [LOOP_NODE_TYPE]: markRaw(LoopNode) as unknown as NodeTypesObject[string],
@@ -251,6 +264,12 @@ const VARIABLE_STORE_KEY = "unilab-edge-ui:workflow-variable-profiles";
 // 内部 ID 自动生成（时间戳保证不重复），用户可编辑的是展示名 workflowName
 const workflowId = ref(`wf-${Date.now()}`);
 const workflowName = ref("");
+/** V1 工作流类型：只有「实验操作」能被其他工作流组合引用；权威定义创建后不能改。 */
+const workflowType = ref<BackendWorkflowType>("normal");
+const workflowTypeOptions = [
+  { label: "普通工作流", value: "normal" },
+  { label: "实验操作（可被引用）", value: "experiment_operation" },
+];
 const priority = ref("normal");
 /** 这份草稿已提交到 Workflow Authority 的定义 uuid；再提交即更新同一定义。 */
 const authorityWorkflowUuid = ref("");
@@ -931,6 +950,10 @@ onNodeClick(({ node }) => {
     openSpecialEditor(String(node.id));
     return;
   }
+  if (node.type === MATERIAL_IO_NODE_TYPE) {
+    openMaterialIoEditor(String(node.id));
+    return;
+  }
   if (node.type === COMPOSITE_NODE_TYPE) {
     compositeDetailId.value = String(node.id);
     return;
@@ -1412,13 +1435,11 @@ function autoLayout() {
   g.setGraph({ rankdir: "LR", nodesep: 46, ranksep: 92 });
   g.setDefaultEdgeLabel(() => ({}));
   for (const n of nodes) g.setNode(n.id, { width: 220, height: 72 });
-  for (const n of nodes) {
-    const loop = nearestLoopAncestor(n.id, byId);
-    if (loop) g.setParent(n.id, loop);
-  }
-  for (const e of liteEdges.value) {
-    if (g.hasNode(e.source) && g.hasNode(e.target)) g.setEdge(e.source, e.target);
-  }
+  const members: CompoundLayoutNode[] = nodes.map((n) => ({ id: n.id, parent: nearestLoopAncestor(n.id, byId) ?? null }));
+  for (const member of members) if (member.parent) g.setParent(member.id, member.parent);
+  // 连到循环框本身的线换成循环的入口 / 出口成员（dagre 复合节点不支持连线直连）
+  const layoutEdges = liteEdges.value.filter((e) => g.hasNode(e.source) && g.hasNode(e.target));
+  for (const e of compoundLayoutEdges(members, layoutEdges)) g.setEdge(e.source, e.target);
   dagre.layout(g);
   // 循环框：簇的外接框再向上留出标题栏；成员相对循环框左上角
   const loopFrames = new Map<string, { x: number; y: number; width: number; height: number }>();
@@ -1470,6 +1491,8 @@ function autoLayout() {
 type Draft = {
   workflowId: string;
   workflowName?: string;
+  /** V1 工作流类型（旧草稿缺省 normal）。 */
+  workflowType?: BackendWorkflowType;
   priority: string;
   /** 已提交到权威的定义 uuid（再提交即更新）。 */
   authorityWorkflowUuid?: string;
@@ -1521,6 +1544,7 @@ function snapshotDraft(): Draft {
   return {
     workflowId: workflowId.value,
     workflowName: workflowName.value,
+    workflowType: workflowType.value,
     priority: priority.value,
     authorityWorkflowUuid: authorityWorkflowUuid.value || undefined,
     variables: cloneJson(workflowVariables.value),
@@ -1574,7 +1598,7 @@ onUnmounted(() => {
 
 // 节点拖动 / 增删 / 连线都会反映在 getNodes/getEdges 上，深度监听统一触发
 watch([() => flow.getNodes.value, () => flow.getEdges.value], saveDraftSoon, { deep: true });
-watch([workflowId, workflowName, priority], saveDraftSoon);
+watch([workflowId, workflowName, workflowType, priority], saveDraftSoon);
 watch(workflowVariables, saveDraftSoon, { deep: true });
 
 // ── 撤销 / 重做 ──
@@ -1971,6 +1995,7 @@ function onCtxSelect(key: string) {
     case "node-edit": {
       const nodeType = liteNodes.value.find((n) => n.id === id)?.type ?? "action";
       if (nodeType === "manual" || nodeType === "branch") openSpecialEditor(id);
+      else if (nodeType === MATERIAL_IO_NODE_TYPE) openMaterialIoEditor(id);
       else openNodeInspector(id);
       break;
     }
@@ -2221,6 +2246,33 @@ async function loadRoleDeviceOptions(): Promise<void> {
   }
 }
 
+/**
+ * 模板用了画布不能编辑的源码写法（条件分支、表达式 while、ctx.lock …）：不展开，改由核心按源码实例化成
+ * 已保存的工作流（默认设备绑定），在流程详情里运行。
+ */
+function offerTemplateInstance(error: TemplateSourceOnlyError) {
+  const template = templateRegistry.value.get(error.templateId);
+  if (!template?.registryUuid) {
+    message.error(error.message);
+    return;
+  }
+  dialog.info({
+    title: "这个模板不能放进画布",
+    content: `「${template.name}」用了画布不能编辑的写法：${error.reasons.join("、")}。可以让后端按设备包源码直接生成一个工作流（按模板默认的设备绑定），在流程详情里运行。`,
+    positiveText: "从模板创建工作流",
+    negativeText: "取消",
+    onPositiveClick: async () => {
+      try {
+        const created = await conn.api.domains.workflowBackend.createWorkflowFromTemplate({ template_uuid: template.registryUuid! });
+        message.success(`已创建工作流「${created.workflow.name}」`);
+        void router.push(`/workflows/${encodeURIComponent(created.workflow.uuid)}`);
+      } catch (err) {
+        message.error(`从模板创建失败：${describeError(err)}`);
+      }
+    },
+  });
+}
+
 /** 拖放插入模板时的落点（beginTemplateUse → materializeTemplate 间传递）。 */
 let pendingTemplateOrigin: { x: number; y: number } | null = null;
 
@@ -2236,7 +2288,8 @@ function beginTemplateUse(
     expandTemplate(templateId, templateRegistry.value);
     roles = collectRoles(templateId, templateRegistry.value);
   } catch (err) {
-    message.error(describeError(err));
+    if (err instanceof TemplateSourceOnlyError) offerTemplateInstance(err);
+    else message.error(describeError(err));
     return;
   }
   pendingTemplateId.value = templateId;
@@ -2285,7 +2338,9 @@ function layoutExpansion(
   g.setDefaultEdgeLabel(() => ({}));
   for (const n of nodes) g.setNode(n.key, { width: 220, height: 72 });
   for (const n of nodes) if (n.parent) g.setParent(n.key, n.parent);
-  for (const e of edges) g.setEdge(e.source, e.target);
+  // 设备包模板的连线直接连在循环节点上：布局时换成循环的入口 / 出口成员
+  const members = nodes.map((n) => ({ id: n.key, parent: n.parent ?? null }));
+  for (const e of compoundLayoutEdges(members, edges)) g.setEdge(e.source, e.target);
   dagre.layout(g);
   const frames = new Map<string, ExpansionFrame>();
   for (const n of nodes) {
@@ -2321,6 +2376,12 @@ function expandedNodeData(
   }
   if (node.type === "loop") {
     return loopNodeDataFromSpec(node.loopSpec, node.name ?? "", resolveNodeId) as unknown as Record<string, unknown>;
+  }
+  if (node.type === MATERIAL_IO_NODE_TYPE) {
+    const param = { ...(node.param ?? {}) };
+    const mode = String(param.mode ?? "load") as keyof typeof MATERIAL_IO_DEFAULT_NAMES;
+    const data: MaterialIoNodeData = { label: node.name || MATERIAL_IO_DEFAULT_NAMES[mode] || "人工物料", param };
+    return data as unknown as Record<string, unknown>;
   }
   return {
     deviceId: mapping[node.role ?? ""] ?? "",
@@ -3247,6 +3308,12 @@ const SPECIAL_ITEMS: {
     title: "循环 for / while",
     desc: "框住一段步骤反复执行：固定次数，或按设备状态 / 节点返回值判定",
   },
+  {
+    kind: MATERIAL_IO_NODE_TYPE,
+    icon: markRaw(CubeOutline),
+    title: "人工物料",
+    desc: "人工装入 / 取走 / 补量：锁定库位等人确认，确认后改库存",
+  },
 ];
 
 /**
@@ -3290,6 +3357,7 @@ function specialNodeData(kind: SpecialKind): Record<string, unknown> {
   }
   if (kind === "branch") return { variableId: "", op: "==", value: "" };
   if (kind === "loop") return defaultLoopNodeData("for") as unknown as Record<string, unknown>;
+  if (kind === MATERIAL_IO_NODE_TYPE) return defaultMaterialIoData("load") as unknown as Record<string, unknown>;
   return { slotLabel: "空位", slotHint: "" };
 }
 
@@ -3348,7 +3416,9 @@ function insertSpecial(kind: SpecialKind) {
     }
     return;
   }
-  placeNode(kind, specialNodeData(kind), insertPosition(anchorId), anchorId);
+  const id = placeNode(kind, specialNodeData(kind), insertPosition(anchorId), anchorId);
+  // 人工物料必须填库位与物料才能保存：放下就打开表单
+  if (kind === MATERIAL_IO_NODE_TYPE) openMaterialIoEditor(id);
 }
 
 function setDragPayloadForSpecial(event: DragEvent, kind: SpecialKind) {
@@ -3458,7 +3528,8 @@ function onCanvasDrop(event: DragEvent) {
     openLoopEditor({ kind: "insert", position, chainFrom: "" });
     return;
   }
-  placeNode(payload.special, specialNodeData(payload.special), position);
+  const id = placeNode(payload.special, specialNodeData(payload.special), position);
+  if (payload.special === MATERIAL_IO_NODE_TYPE) openMaterialIoEditor(id);
 }
 
 // ── 特殊节点编辑（人工确认 / 条件分支） ──
@@ -3494,6 +3565,29 @@ const BRANCH_OPS = ["==", "!=", ">", ">=", "<", "<=", "contains"].map((op) => ({
   label: op,
   value: op,
 }));
+
+// ── 人工物料（material_io）节点：参数表单 ──
+
+const materialIoEditId = ref("");
+const materialIoEditOpen = ref(false);
+const materialIoEditData = computed<Partial<MaterialIoNodeData> | null>(() => {
+  const node = liteNodes.value.find((n) => n.id === materialIoEditId.value);
+  return node ? (node.data as Partial<MaterialIoNodeData>) : null;
+});
+
+function openMaterialIoEditor(nodeId: string) {
+  if (!liteNodes.value.some((n) => n.id === nodeId)) return;
+  materialIoEditId.value = nodeId;
+  materialIoEditOpen.value = true;
+}
+
+function saveMaterialIoEditor(value: MaterialIoNodeData) {
+  const node = liteNodes.value.find((n) => n.id === materialIoEditId.value);
+  if (!node) return;
+  node.data.label = value.label;
+  node.data.param = value.param;
+  commitHistory();
+}
 
 function openSpecialEditor(nodeId: string) {
   const node = liteNodes.value.find((n) => n.id === nodeId);
@@ -3824,6 +3918,7 @@ function restoreDraft(draft: Draft) {
     draft.workflowName ??
     (draft.workflowId && !/^wf-\d+$/.test(draft.workflowId) ? draft.workflowId : "");
   priority.value = draft.priority || "normal";
+  workflowType.value = draft.workflowType === "experiment_operation" ? "experiment_operation" : "normal";
   workflowVariables.value = normalizeVariables(draft.variables);
   workflowIo.value = normalizeEditorIo(draft.io);
   ensurePriorityOption(priority.value);
@@ -3851,6 +3946,7 @@ function newWorkflow() {
   setEdges([]);
   workflowId.value = `wf-${Date.now()}`;
   workflowName.value = "";
+  workflowType.value = "normal";
   priority.value = "normal";
   authorityWorkflowUuid.value = "";
   workflowVariables.value = [];
@@ -3939,6 +4035,17 @@ async function cloneFrom(sourceId: string) {
       message.warning(`Workflow ${sourceId} 没有可克隆的 Graph`);
       return;
     }
+    // 源码写法（条件分支、表达式 while、步骤结果引用、ctx.lock …）画布不能无损编辑：不复制，免得存回去变了语义
+    const sourceOnly = sourceOnlyFeatures(graph.nodes, resourceScopes(graph.workflow.meta_data));
+    if (sourceOnly.length) {
+      message.error(
+        `「${graph.workflow.name || sourceId}」用了画布不能编辑的写法（${sourceOnly.join("、")}），不能复制到画布；请在流程详情里直接运行，或在源码里修改`,
+        { duration: 10_000 },
+      );
+      return;
+    }
+    // 展示分组（ctx.group / ctx.parallel）不是执行节点：拍平，成员留在原处
+    graph.nodes = graph.nodes.filter((n) => structuralKind(n.type) !== "group");
     sourceWorkflow.value = graph.workflow;
     // 参数表恢复：本地变量草稿（最近编辑）优先，其次定义 meta_data.parameter_table
     const localVariables = loadVariableProfile(sourceId);
@@ -4028,6 +4135,7 @@ async function cloneFrom(sourceId: string) {
     restoreDraft({
       workflowId: `wf-${Date.now()}`,
       workflowName: graph.workflow.name ? `${graph.workflow.name} 副本` : "",
+      workflowType: graph.workflow.workflow_type === "experiment_operation" ? "experiment_operation" : "normal",
       priority: "normal",
       variables: localVariables.length ? localVariables : storedVariables,
       ...(importedIo ? { io: importedIo.io } : {}),
@@ -4042,6 +4150,17 @@ async function cloneFrom(sourceId: string) {
         const loopParent = loopParentOf(n);
         const parentAbsolute = loopParent ? absoluteByUuid.get(loopParent)! : { x: 0, y: 0 };
         const relative = { x: absolute.x - parentAbsolute.x, y: absolute.y - parentAbsolute.y };
+        if (String(n.type).toLowerCase() === MATERIAL_IO_NODE_TYPE) {
+          const data: MaterialIoNodeData = { label: String(n.name ?? "") || "人工物料", param: { ...((n.param ?? {}) as Record<string, unknown>) } };
+          return {
+            id: n.uuid,
+            type: MATERIAL_IO_NODE_TYPE,
+            x: loopParent ? relative.x : absolute.x,
+            y: loopParent ? relative.y : absolute.y,
+            ...(loopParent ? { parentNode: loopParent } : {}),
+            data: data as unknown as Record<string, unknown>,
+          };
+        }
         if (loopUuids.has(n.uuid)) {
           const size = loopFrameSize(n.uuid);
           return {
@@ -4129,7 +4248,7 @@ function collectDryRunNodes(): DryRunNodeInput[] {
     type: node.type ?? "action",
     deviceId: String(node.data.deviceId ?? ""),
     actionName: String(node.data.actionName ?? ""),
-    paramJson: String(node.data.paramJson ?? "{}"),
+    paramJson: node.type === MATERIAL_IO_NODE_TYPE ? JSON.stringify(node.data.param ?? {}) : String(node.data.paramJson ?? "{}"),
     requirementsJson: String(node.data.requirementsJson ?? "[]"),
     siteBindings: (node.data.siteBindings ?? {}) as SiteBindings,
     siteOwners: (node.data.siteBindingOwners ?? {}) as Record<string, string>,
@@ -4156,8 +4275,8 @@ async function runDryRun(): Promise<void> {
     try {
       // 批次 + 模板名：台账用人话显示物料；隔离 / 过期批次由校验器排除
       const [lotRows, templateRows] = await Promise.all([
-        conn.api.domains.materialsV1.lots(),
-        conn.api.domains.materialsV1.templates().catch(() => []),
+        conn.api.domains.inventory.lots(),
+        conn.api.domains.inventory.templates().catch(() => []),
       ]);
       const templateNames = new Map(
         templateRows.map((template) => [template.template_uuid, template.display_name || template.name]),
@@ -4233,6 +4352,7 @@ async function locateIssue(issue: DryRunIssue): Promise<void> {
   if (type === "action") openNodePanel(issue.nodeId);
   else if (type === "slot") openSlotFill(issue.nodeId);
   else if (type === "manual" || type === "branch") openSpecialEditor(issue.nodeId);
+  else if (type === MATERIAL_IO_NODE_TYPE) openMaterialIoEditor(issue.nodeId);
 }
 
 // ── 提交 ──
@@ -4437,15 +4557,16 @@ async function insertPublishedWorkflow(payload: {
     }
     const anchorId = chainAnchorId();
     const position = insertPosition(anchorId);
-    const result = await conn.api.domains.workflowBackend.insertCompositeInvocation(saved.workflow.uuid, {
+    // V1：按发布合同（contract_uuid = 发布 uuid）插入实验操作，返回插入后的父图
+    const invocationUuid = newNodeUuid();
+    const graph = await conn.api.domains.workflowBackend.insertCompositeInvocation(saved.workflow.uuid, {
       revision: saved.workflow.revision,
-      child_workflow_uuid: payload.publication.workflow_uuid,
-      child_revision: payload.publication.revision,
-      invocation_uuid: newNodeUuid(),
-      arguments: payload.arguments,
+      contract_uuid: payload.publication.uuid,
+      invocation_uuid: invocationUuid,
+      param: payload.arguments,
       pose: { x: Math.round(position.x), y: Math.round(position.y) },
     });
-    const data = compositeDataFromGraph(result.graph, result.invocation_uuid);
+    const data = compositeDataFromGraph(graph, invocationUuid);
     if (!data) throw new Error("插入结果里找不到这次的组合调用节点");
     addNodes([{ id: data.uuid, type: COMPOSITE_NODE_TYPE, position, data: data as unknown as Record<string, unknown> }]);
     const anchor = anchorId ? nodeById(anchorId) : undefined;
@@ -4682,6 +4803,7 @@ async function performSubmit(
       workflowUuid: authorityWorkflowUuid.value || undefined,
       runMode: options.runMode ?? "normal",
       name,
+      workflowType: workflowType.value,
       description: transformed.notes.length ? `分支求值：${transformed.notes.join("；")}` : undefined,
       metaData: {
         priority: priority.value,
@@ -4778,6 +4900,14 @@ onUnmounted(() => {
         >
           <template #prefix><span class="wf-prefix">名称</span></template>
         </NInput>
+        <NSelect
+          v-model:value="workflowType"
+          :options="workflowTypeOptions"
+          size="small"
+          style="width: 170px"
+          :disabled="!!authorityWorkflowUuid"
+          :title="authorityWorkflowUuid ? '已保存到后端的工作流不能改类型（V1 合同）' : '只有「实验操作」发布后能作为子工作流插入其他工作流'"
+        />
         <NSelect
           v-model:value="priority"
           :options="priorityOptions"
@@ -5523,6 +5653,9 @@ onUnmounted(() => {
     >
       <TemplateGuide v-if="guideTemplate" :template="guideTemplate" />
     </NModal>
+
+    <!-- 人工物料（material_io）参数 -->
+    <MaterialIoEditor v-model:show="materialIoEditOpen" :data="materialIoEditData" @save="saveMaterialIoEditor" />
 
     <!-- 模板角色映射 -->
     <NModal
@@ -6594,6 +6727,15 @@ onUnmounted(() => {
   background: #cffafe;
   color: #0e7490;
   font-weight: 700;
+}
+
+.special-material_io:hover {
+  border-color: #16a34a;
+}
+
+.special-material_io .special-icon {
+  background: #dcfce7;
+  color: #15803d;
 }
 
 .special-text {

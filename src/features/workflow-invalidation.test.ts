@@ -74,7 +74,8 @@ describe("Workflow 轻通知与 HTTP 正文边界", () => {
       snapshotPromise = loadWorkflowHttpSnapshot(api, Date.parse("2026-08-24T00:00:00Z"));
     });
 
-    source.emit("workflow.task.changed");
+    // V1：运行态变化统一是 workflow.runtime.changed（data.kind=task 等，listener 不读 data）
+    source.emit("workflow.runtime.changed");
     await snapshotPromise;
 
     expect(calls).toEqual([

@@ -1,46 +1,35 @@
-# 实验室布局（lab-v1）
+# 实验室视图（lab-v1，V1 lab 合同）
 
-区域 / 围墙的像素格布局叠在物料权威的设备位置之上，是"这台 Host 的实验室"的人工标注：
-所有连接同一微后端的浏览器看到同一份，因此权威在服务端（runtime.db 的 `lab_layout` 单行文档），
-不再存 localStorage。直出 DTO，两种进程角色都挂载（`role = any`）。
+`/api/v1/lab/*` 现在只剩三个**只依赖物料权威（materials.db）**的视图，V1 信封，由调度权威回答，两种进程角色都挂载
+（`role = any`）。后端实现：路由 `unilabos/server/api/materials/lab.py`，服务 `unilabos/server/services/materials/lab.py`
+（`LabViews`）。
 
-后端实现：`unilabos/server/services/runtime/lab.py`（与 RuntimeService 共用 runtime.db 连接与写锁），
-路由 `unilabos/server/api/runtime/lab.py`，协议模型 `unilabos/protocol/runtime/lab.py`。
+## 1. 已删除的部分
 
-## 1. 模型
+按核心负责人 2026-11-17 的决定，实验室档案 / 分区 / 摆放与网格布局连同它们的表一起删除（materials.db
+`lab_meta` / `lab_zone` / `lab_placement`、runtime.db `lab_layout`）：
 
-```jsonc
-{
-  "layout_key": "default",          // 预留多布局；当前只有 default
-  "revision": 3,                    // 0 = 从未保存；每次 PUT 成功 +1
-  "cell_size": 100,                 // 格子边长，与物料权威 position 同单位（mm 时 100 = 10 cm）
-  "zones": [
-    { "id": "prep", "name": "样品制备区", "color": "#2e5bff", "cells": ["0,0", "1,0"] }
-  ],
-  "walls": ["5,5", "5,6"],
-  "created_at_ms": 1788469175524,
-  "updated_at_ms": 1788469175524
-}
-```
+| 删除的路由 | 原来是什么 |
+| --- | --- |
+| `GET` / `PUT /lab/profile` | 实验室档案（名称、领域包）与网格布局 `grid`（revision 乐观锁） |
+| `GET /lab/layout` | V1 已放置实例视图 + 同一份 `grid` |
+| `POST /lab/zones`、`DELETE /lab/zones/{zone_id}` | V1 二维矩形分区 |
+| `POST /lab/placements`、`DELETE /lab/placements/{subject_id}` | 分区里的在台摆放 |
 
-- 格子键 `"col,row"`（整数，允许负数），格子左上角 = `(col * cell_size, row * cell_size)`；
-- 不变量由服务端校验（422）：区域 `id` 唯一；一个格子至多属于一个区域；区域格子与围墙互斥；
-  颜色 `#rrggbb`（归一为小写）；区域 ≤ 200、格子总数 ≤ 100 000；重复格子键去重不报错。
+这些路径现在由应用级兜底返回 **HTTP 404 + 信封 4001**。协议包 `lab-v1` 域同步删除了 `profile` / `updateProfile` /
+`layoutView` / `layout` / `saveLayout` / `resetLayout` / `upsertZone` / `deleteZone` / `upsertPlacement` /
+`deletePlacement` 与对应类型；OpenLab 下线了实验室地图页（`LabMapView`、`features/lab-layout.ts`）。
+设备与物料的位置仍在物料权威的 `position` 里（[materials.md](./materials.md)），装配视图照常使用。
+
+保留不动的：`lab_graph`（命名设备图快照）、`material_link`（拓扑边）、`site`（库位）、批次上的 `warehouse_zone_id`。
 
 ## 2. 端点
 
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| GET | `/api/v1/lab/layout` | 当前布局；从未保存时 `revision = 0`、区域 / 围墙为空、`cell_size` 取默认 100，**不是 404** |
-| PUT | `/api/v1/lab/layout` | `{revision, cell_size, zones, walls}` 整份替换；`revision` 必须等于当前读到的版本，否则 **409**（`detail` 里带当前版本） |
-| DELETE | `/api/v1/lab/layout` | 重置为未保存状态 → 204 |
+| 方法 | 路径 | SDK | 说明 |
+| --- | --- | --- | --- |
+| GET | `/api/v1/lab/warehouse` | `labV1.warehouse()` | 按品类（模板）聚合批次 / 数量 / 在库实例 / 库位分布（`warehouse_zone_id` 分组） |
+| GET | `/api/v1/lab/assembly/{subject_id}` | `labV1.assembly()` | 物料组合树（父子 / 库位链）；V1 的 `placement` 键保留、**恒为 null** |
+| POST | `/api/v1/lab/demo` | `labV1.seedDemo()` | 幂等写入仓储演示模板与批次，返回 `{seeded: {zones, templates, instances, placements, lots}}`，`zones` / `placements` 恒为 0 |
 
-## 3. 前端行为（`features/lab-layout.ts`、`views/LabMapView.vue`）
-
-- 进页面读一次；每次绘制 600 ms 防抖后 `PUT`，成功用返回的 `revision` 覆盖本地版本；
-- 409 → 提示"布局刚被其他人修改"，重读服务端版本，这一笔改动作废；
-- 布局接口读取失败明确报错并禁止编辑，不退回 localStorage，不自动导入开发期浏览器存储；
-- 导出 / 导入 JSON 仍保留，用于在不同 Host 之间搬运布局。
-
-客户端：`api.domains.labV1.layout()` / `saveLayout(input)` / `resetLayout()`；类型 `LabV1Layout`、
-`LabV1Zone`、`LabV1LayoutWrite`。
+OpenLab 目前没有页面直接调用这三个端点：装配视图（`/lab/assembly/:id`，`AssemblyView`）从 `/inventory/*` 与
+`materialsV1.tree()` 读同一棵物料树。

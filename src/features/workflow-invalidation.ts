@@ -3,18 +3,24 @@
  * 本模块不解析 EventSource.data，也不认识 control.v1 特权 WebSocket。
  */
 
-import type {
-  BackendWorkflow,
-  BackendWorkflowNodeJob,
-  BackendWorkflowTask,
+import {
+  STREAM_RESET_EVENT,
+  WORKFLOW_AUTHORING_CHANGED_EVENT,
+  WORKFLOW_RUNTIME_CHANGED_EVENT,
+  type BackendWorkflow,
+  type BackendWorkflowNodeJob,
+  type BackendWorkflowTask,
 } from "@openlab/protocol";
 
+/**
+ * V1 事件名：运行态（task / node_run / node_job / manual_confirmation / resource，种类在 data.kind）
+ * 统一是 `workflow.runtime.changed`，定义 / 作者态是 `workflow.authoring.changed`。
+ */
 export const WORKFLOW_INVALIDATION_EVENT_TYPES = [
-  "workflow.task.changed",
-  "workflow.node_job.changed",
-  "workflow.authoring.changed",
+  WORKFLOW_RUNTIME_CHANGED_EVENT,
+  WORKFLOW_AUTHORING_CHANGED_EVENT,
   // 游标过期或超前时服务端发 stream.reset（id 为新水位，可能回退）：同样只触发 HTTP 重读。
-  "stream.reset",
+  STREAM_RESET_EVENT,
 ] as const;
 
 export interface WorkflowInvalidationSource {
@@ -69,8 +75,9 @@ export async function loadWorkflowHttpSnapshot(
   nowMs = Date.now(),
 ): Promise<WorkflowHttpSnapshot> {
   const [definitionPage, taskPage] = await Promise.all([
-    api.workflows({ page: 1, page_size: 200 }),
-    api.tasks({ page: 1, page_size: 200 }),
+    // V1 工作流 / 任务列表单页上限 100
+    api.workflows({ page: 1, page_size: 100 }),
+    api.tasks({ page: 1, page_size: 100 }),
   ]);
 
   const recentCutoff = nowMs - 12 * 60 * 60 * 1000;

@@ -1,51 +1,34 @@
 /**
- * lab-v1 域：实验室布局（区域 / 围墙像素格）—— `unilabos/server/api/runtime/lab.py`，runtime.db。
+ * lab-v1 域：实验室视图（V1 lab 合同；unilabos/server/api/materials/lab.py），只读写物料权威（materials.db）。
  *
- * 布局叠在物料权威的设备位置之上：`cell_size` 与 position 同单位，格子键 `"col,row"`
- * （允许负数），格子左上角 = (col * cell_size, row * cell_size)。一个 Host 一份文档，所有
- * 连接同一微后端的浏览器共享；整份替换 + `revision` 乐观锁（从未保存时 revision = 0）。
+ * - `GET /lab/warehouse`：按品类（模板）聚合批次 / 数量 / 在库实例 / 库位分布；
+ * - `GET /lab/assembly/{id}`：物料组合树（父子 / 库位链），V1 的 `placement` 键保留、恒为 null；
+ * - `POST /lab/demo`：幂等写入仓储演示模板与批次，`zones` / `placements` 计数恒为 0。
+ *
+ * V1 的实验室档案、分区、摆放与 dev 的网格布局（`/lab/profile`、`/lab/layout`、`/lab/zones`、
+ * `/lab/placements`）及其表已在核心删除（回 404），本域不再提供对应方法。
  */
-import type { HttpTransport } from "./common.js";
+import type { HttpTransport, JsonObject } from "./common.js";
 
-export interface LabV1Zone {
-  /** 稳定 id（1–64 字符）。 */
-  id: string;
-  name: string;
-  /** `#rrggbb`，服务端归一为小写。 */
-  color: string;
-  /** 格子键集合；一个格子至多属于一个区域，且不能同时是围墙。 */
-  cells: string[];
-}
-
-export interface LabV1Layout {
-  layout_key: string;
-  /** 0 = 从未保存；每次 PUT 成功 +1。 */
-  revision: number;
-  cell_size: number;
-  zones: LabV1Zone[];
-  walls: string[];
-  created_at_ms: number;
-  updated_at_ms: number;
-}
-
-/** PUT 请求体：`revision` 必须等于当前读到的版本，否则 409。 */
-export interface LabV1LayoutWrite {
-  revision: number;
-  cell_size: number;
-  zones: LabV1Zone[];
-  walls: string[];
+/** `POST /lab/demo` 的写入计数（V1 形状；分区 / 摆放已删除，恒为 0）。 */
+export interface LabV1DemoCounts {
+  zones: number;
+  templates: number;
+  instances: number;
+  placements: number;
+  lots: number;
 }
 
 export function createLabV1Api(http: HttpTransport) {
   const base = "/api/v1/lab";
   return {
-    /** GET /lab/layout —— 当前布局（从未保存时 revision 0、区域 / 围墙为空）。 */
-    layout: () => http.request<LabV1Layout>({ method: "GET", path: `${base}/layout` }),
-    /** PUT /lab/layout —— 整份替换；409 = revision 过期，重读后再决定覆盖或合并。 */
-    saveLayout: (input: LabV1LayoutWrite) =>
-      http.request<LabV1Layout>({ method: "PUT", path: `${base}/layout`, body: input }),
-    /** DELETE /lab/layout —— 重置为未保存状态（204）。 */
-    resetLayout: () => http.request<void>({ method: "DELETE", path: `${base}/layout` }),
+    /** 品类库存聚合（性质 / 品类为组织依据）。 */
+    warehouse: () => http.request<JsonObject>({ method: "GET", path: `${base}/warehouse` }),
+    /** 某实例的组合视图（父子 / 库位链；`placement` 恒为 null）。 */
+    assembly: (subjectId: string) =>
+      http.request<JsonObject>({ method: "GET", path: `${base}/assembly/${encodeURIComponent(subjectId)}` }),
+    /** 写入仓储演示模板与批次（返回 `{seeded: 计数}`）。 */
+    seedDemo: () => http.request<{ seeded: LabV1DemoCounts }>({ method: "POST", path: `${base}/demo` }),
   };
 }
 

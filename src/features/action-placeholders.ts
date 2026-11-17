@@ -8,8 +8,9 @@
  * - legacy ROS 消息动作（如 Stir.goal 的 vessel）没有 placeholder_keys
  *   （yaml 中为空 {}），但 goal 属性形状就是 Resource msg
  *   （id/name/sample_id/children/parent/pose/...），可结构识别。
- * - 写回形状：物料/节点引用统一 `{...原对象, id: 物料名, uuid: 物料uuid}` ——
- *   ResourceSlot 走 dict{id,uuid}（设备侧用 uuid 解析）。
+ * - 写回形状：物料/节点引用统一 `{...原对象, id: resource_id, uuid: 物料uuid}` ——
+ *   ResourceSlot 走 dict{id,uuid}，设备侧先按 uuid 解析，`id` 只在没有 uuid 时按 resource_id 查。
+ *   物料 `name` 现在恒等于 uuid（人读标签是 display_name），不能再当 `id` 写进参数。
  */
 import type { ActionPlaceholderKeys, DeviceActionSchemaDetail } from "@openlab/protocol";
 
@@ -42,8 +43,8 @@ const KIND_BY_PLACEHOLDER: Record<string, PlaceholderKind> = {
   unilabos_class: "class",
   // 指派人来源 GET /manual-confirm/users（旁支端点；404 降级纯自由输入）。
   unilabos_manual_confirm: "confirm",
-  // 物料出库：选 registry 资源类 + 实例名 → POST /materials/instantiate
-  // 在后端实例化并权威登记，产物 {id, uuid} 写回参数（ResourceSlot 引用）。
+  // 物料出库：选 registry 资源类 + 显示名 → 库存命令 instantiate_material
+  // 在后端实例化并权威登记，产物 {id: resource_id, uuid} 写回参数（ResourceSlot 引用）。
   unilabos_deduct_resource: "deduct",
   // 加试剂目标（set_substance）：值就是「要加入 substance 的物料」引用，
   // 与普通物料选择器同数据源。
@@ -147,15 +148,19 @@ export function detectPlaceholderFields(
   return [...fields.values()];
 }
 
-/** 物料引用写回：保留原对象形状，覆写 id（物料名）与 uuid（物料 uuid）。 */
+/**
+ * 物料引用写回：保留原对象形状，覆写 uuid（物料 uuid，设备侧优先按它解析）与 id（resource_id，人可读
+ * 且唯一；不知道时用 uuid，同样能解析）。清空时两者都置空串。
+ */
 export function resourceRefValue(
   existing: unknown,
-  material: { uuid: string; name: string },
+  material: { uuid: string; resourceId?: string },
 ): Record<string, unknown> {
+  const uuid = material.uuid.trim();
   return {
     ...(asRecord(existing) ?? {}),
-    id: material.name,
-    uuid: material.uuid,
+    id: uuid ? material.resourceId?.trim() || uuid : "",
+    uuid,
   };
 }
 
@@ -166,11 +171,16 @@ export function resourceRefUuid(value: unknown): string {
   return String(record.uuid ?? "").trim();
 }
 
-/** 从参数当前值提取物料引用的显示名（uuid 不在选项中时补选项）。 */
+/** 从参数当前值提取物料引用的显示名（uuid 不在选项中时补选项）；与 uuid 相同的字段不算名字。 */
 export function resourceRefLabel(value: unknown): string {
   const record = asRecord(value);
   if (!record) return "";
-  return String(record.name || record.id || "").trim();
+  const uuid = String(record.uuid ?? "").trim();
+  for (const key of ["display_name", "name", "id"]) {
+    const text = String(record[key] ?? "").trim();
+    if (text && text !== uuid) return text;
+  }
+  return "";
 }
 
 /** placeholder 类型的中文说明（选择器上方的小标签）。 */

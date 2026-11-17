@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { ApiError, type MaterialsV1Aggregate, type MaterialsV1Substance } from "@openlab/protocol";
+import {
+  ApiError,
+  InventoryCommandRejectedError,
+  type MaterialsV1Aggregate,
+  type MaterialsV1Substance,
+} from "@openlab/protocol";
 import { materialFixture } from "./material-fixture";
 import {
   aggregatePrecondition,
@@ -92,10 +97,15 @@ describe("关联写入体（PUT data 整份替换）", () => {
     expect(aggregatePrecondition(current)).toEqual({ aggregate_type: "material", aggregate_uuid: "tube-1", expected_state_hash: "hash-1" });
   });
 
-  it("失败文案：409 冲突要刷新、409 无变化、422 化学品无效", () => {
-    expect(describeLinkError(new ApiError(409, "material material tube-1 state changed"))).toMatchObject({ refresh: true });
-    expect(describeLinkError(new ApiError(409, "material data is unchanged"))).toEqual({ message: "关联没有变化", refresh: false });
-    expect(describeLinkError(new ApiError(422, "化学品 c-x 不存在或已删除"))?.message).toContain("不存在或已删除");
+  it("失败文案（库存命令被拒）：冲突要刷新、无变化、参数非法、物料不存在", () => {
+    const rejected = (code: number, error: string, errorCode: string) =>
+      new InventoryCommandRejectedError({ command_id: "c", status: "rejected", error, error_code: errorCode, code });
+    expect(describeLinkError(rejected(3003, "material material tube-1 state changed", "conflict:state"))).toMatchObject({ refresh: true });
+    expect(describeLinkError(rejected(4002, "material data is unchanged", "no_change"))).toEqual({ message: "关联没有变化", refresh: false });
+    expect(describeLinkError(rejected(1000, "化学品 c-x 不存在或已删除", "invalid"))?.message).toContain("不存在或已删除");
+    expect(describeLinkError(rejected(6000, "material not found", "not_found:material"))).toMatchObject({ refresh: true });
+    // 物料接口路由都不存在：旧后端，不是业务失败
+    expect(describeLinkError(new ApiError(404, "Not Found"))?.refresh).toBe(false);
     expect(describeLinkError(new Error("x"))).toBeNull();
   });
 });

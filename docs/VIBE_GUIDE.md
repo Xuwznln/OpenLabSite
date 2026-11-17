@@ -43,8 +43,8 @@ src/vibe-cases/organic-synthesis/OrganicSynthesisWorkbench.vue。
   └─ useEntityCacheStore()                uuid → 名称
                   │
 微后端协议与数据真相（锁定）
-  ├─ 十个协议域（docs/protocol/README.md）
-  ├─ Backend 信封 / materials.v1 幂等信封
+  ├─ 协议域（docs/protocol/README.md）
+  ├─ V1 信封与业务码 / 库存命令（materials.v1 幂等信封）
   └─ 四个 SQLite 库
 ```
 
@@ -66,13 +66,13 @@ const sched = useSchedulerStore();   // sched.workflows / sched.activeTasks / sc
 | 动作参数表单 | `actionSchemaDetailFromCapability(capability)` + `features/action-param-form.ts` |
 | 运行一个设备动作 | `conn.api.domains.workflowBackend.createTask({ execution_kind: "ad_hoc_device_action", device_id, action_name, param })` |
 | 运行一条流程 | `sched.createTask(workflowUuid, "normal")` |
-| 读物料树 / 位点占用 | `conn.api.domains.materialsV1.instances(true)`、`.tree(uuid)` |
-| 按件登记一件可追踪物料（进入「在库物料」，工作流 `kind: "material"` 需求选取） | `conn.api.domains.materialsV1.instantiate(registryClass, name, barcode?)` |
-| 按量登记 / 补充计量库存批次（散装试剂或耗材，工作流 `kind: "lot"` 需求预留与扣减） | `.inboundLot({ template_uuid, unit, quantity, batch_no?, expiry_at_ms?, lot_uuid? })`，模板目录用 `.templates({ includeDefinition: false })` |
-| 出库到位点 / 移动 / 转运 | `.move({...})`（同设备）/ `.transfer({...})`（跨设备） |
+| 读物料树 / 位点占用 | `conn.api.domains.inventory.instances({ rootsOnly: true })`、`conn.api.domains.materialsV1.tree(uuid)` |
+| 按件登记一件可追踪物料（进入「在库物料」，工作流 `kind: "material"` 需求选取） | `conn.api.domains.inventory.instantiate(registryClass, name, barcode?)`（资源类目录 `materialsV1.registryClasses()`） |
+| 按量登记 / 补充计量库存批次（散装试剂或耗材，工作流 `kind: "lot"` 需求预留与扣减） | `conn.api.domains.inventory.inboundLot({ template_uuid, unit, quantity, batch_no?, expiry_at_ms?, lot_uuid? })`，模板目录用 `.templates()`（缺省不带 definition） |
+| 出库到位点 / 移动 / 转运 | `inventory.move({...})`（同设备）/ `inventory.transfer({...})`（跨设备）；所有物料写入都经 `POST /inventory/commands`，被拒抛 `InventoryCommandRejectedError` |
 | 设备实时属性 | `devices.byId(id)?.telemetry.properties` |
 | 属性历史曲线 | `conn.api.domains.telemetryV1.events({ device_uuid, event_type: "property_sample" })` |
-| 执行历史 | `conn.api.domains.historyV1.events({ limit, event_types })` |
+| 执行历史 | `conn.api.domains.historyV1.events({ limit, event_types })`（`/edge/history`）；运行统计 `conn.api.domains.runHistory.workflows()` |
 | 待处理决策 | `useDecisionsStore().errorDecisions / incidents / interventions` |
 
 ## 4. 降级态要求

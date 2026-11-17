@@ -24,6 +24,10 @@ and automated tests without depending on Vue or application state management.
 
 The package name remains `@openlab/protocol`, and the existing `createEdgeApi` entry point is preserved.
 It accesses backend APIs; it does not execute device drivers, schedule workflows, or access databases directly.
+Version 4.x targets the unified Uni-Lab-OS core as merged into `dev` (V1.0 API contract, the 0.13 line): V1 response
+envelopes on every JSON route, no authentication on the management API, material `name` = material uuid with
+`display_name` as the label, a registry that comes only from Host reports, and `POST /api/v1/inventory/commands` as the
+single material write entry point. Use 3.x for the pre-merge unified branch.
 
 ## Installation and requirements
 
@@ -57,18 +61,20 @@ A version in the source tree does not by itself mean that version is published o
 ## Quick start
 
 ```ts
-import { createEdgeApi, ApiError, BackendBusinessError } from "@openlab/protocol";
+import { createEdgeApi, ApiError, BackendBusinessError, isCapabilityUnavailable } from "@openlab/protocol";
 
 const api = createEdgeApi("http://127.0.0.1:8002", { timeoutMs: 10_000 });
 
 try {
   const health = await api.health();
-  const roots = await api.domains.materialsV1.instances(true);
+  const roots = await api.domains.inventory.instances({ rootsOnly: true });
   const tasks = await api.domains.workflowBackend.tasks({ page: 1, page_size: 20 });
   console.log({ health, roots, tasks });
 } catch (error) {
-  if (error instanceof BackendBusinessError) {
-    console.error("Backend business error", error.message);
+  if (isCapabilityUnavailable(error)) {
+    console.warn("Not provided by this process, or the Host is restarting", error);
+  } else if (error instanceof BackendBusinessError) {
+    console.error("Backend business error", error.code, error.symbol, error.message);
   } else if (error instanceof ApiError) {
     console.error("Request failed", error.status, error.message);
   } else {
@@ -77,18 +83,43 @@ try {
 }
 ```
 
+Every `/api/v1` JSON route returns a V1 envelope (`{ code, data }` / `{ code, error: { msg, code?, details? } }`);
+the transport unwraps it, so client methods resolve to `data`. A non-zero `code` rejects with `BackendBusinessError`
+(also on HTTP 200). Every JSON route is an envelope, including `/health`, `/readiness`, `POST /inventory/commands`
+(a rejection is a failure envelope with `error.details.command_id`) and the process-management routes under `/v1/*`;
+only event streams and file downloads are not.
+
 The default endpoint is the backend management API on the caller's computer, not the HostLink device port.
 Availability depends on the backend build, process role, and runtime state.
 
-### Control token
+### No authentication
 
-Backends that require a control token reject write requests (POST / PUT / PATCH / DELETE) without it
-with HTTP 401 (`error.isControlTokenRejected`). Run `unilab token` on the backend machine to see it,
-then pass a provider; it is read on every write request, so updating it needs no new client.
-Read requests and event streams never carry the token.
+The management API is not authenticated: the core removed the control token (`X-UniLab-Token`, `unilab token`)
+and the V1 station API key, so requests carry no credentials and there is no "unauthorized" business code.
+Restrict access at the network boundary (lab LAN, reverse proxy).
+
+### Host restarts (business code 5001)
+
+While the Host child process starts or restarts, Host-owned routes return HTTP 200 + code 5001 + `Retry-After`.
+GET requests are retried with a bounded backoff (default: 2 retries, at most 3 s each; 1 s when the browser
+cannot read `Retry-After` cross-origin). Writes are never retried automatically.
 
 ```ts
-const api = createEdgeApi("http://127.0.0.1:8002", { getToken: () => localStorage.getItem("token") });
+const api = createEdgeApi(url, { unavailableRetry: { retries: 4, delayMs: 1_000, maxDelayMs: 3_000 } });
+const noRetry = createEdgeApi(url, { unavailableRetry: false });
+```
+
+### Material writes
+
+All material mutations go through `POST /api/v1/inventory/commands`. The `inventory` client builds the
+`materials.v1` idempotency envelope with every typed field filled in and returns the `MutationResult`;
+a rejected command throws `InventoryCommandRejectedError` (a `BackendBusinessError` with the business code
+and `error_code` as `symbol`).
+
+```ts
+const tree = await api.domains.inventory.instantiate("demo_tips_24", "tips_01");
+await api.domains.inventory.patch(tree.data.root_material_uuid, { barcode: "BC-1" });
+await api.domains.inventory.typedCommand("material.move", { edge_uuid: "…", parent_uuid: "…" });
 ```
 
 ### Real-time notifications
@@ -97,8 +128,11 @@ The SDK exposes event-stream URLs; the caller manages subscriptions.
 Notifications trigger fresh HTTP reads and are not complete business data.
 
 ```ts
+import { WORKFLOW_EVENT_NAMES } from "@openlab/protocol";
+
 const events = new EventSource(api.domains.workflowBackend.eventsUrl());
-// Subscribe to documented events and refresh the relevant resources.
+// workflow.runtime.changed / workflow.authoring.changed / station.error_handling.changed / stream.reset
+for (const name of WORKFLOW_EVENT_NAMES) events.addEventListener(name, () => refresh());
 // Close the stream when the view unmounts or its connection changes:
 events.close();
 ```
@@ -131,16 +165,18 @@ type InstallRequest = OpenApiComponents["schemas"]["DriverPackageInstallRequest"
 
 | `api.domains.*` | Purpose |
 | --- | --- |
-| `system` | Health, logs, networking, and runtime diagnostics |
+| `system` | Health, readiness, logs, networking, restart/reset, and runtime diagnostics |
 | `runtimeV1` | Execution endpoints, commands, and job projections |
-| `workflowBackend` | Workflows, tasks, node jobs, and execution control |
+| `workflowBackend` | Workflows, graphs, incremental editing, tasks, task commands, interventions, and authoring |
+| `runHistory` / `scheduler` | V1 run history; monitor snapshot, timeline, drain, and recovery |
 | `registry` | Device and material type registry |
-| `materialsV1` | Materials, sites, inventory, and change ledger |
-| `graphsV1` | Device graphs |
-| `telemetryV1` / `historyV1` | Telemetry state and history |
-| `decisions` | Status alerts and action-error handling |
+| `inventory` | V1 inventory reads (`/inventory/*`) and all material writes (`/inventory/commands`) |
+| `materialsV1` | Remaining dev routes: material trees, registry classes, topology links, device notification, executions |
+| `graphsV1` / `chemicalsV1` | Device graphs; chemical definitions |
+| `telemetryV1` / `deviceState` / `historyV1` | Telemetry, V1 device-state views, and Host history (`/edge/history`) |
+| `decisions` | Status alerts and action-error decisions |
 | `driverPackages` / `deviceProcesses` | Driver packages and managed device processes |
-| `labV1` / `debug` | Laboratory layout and read-only database diagnostics |
+| `labV1` / `processManagement` / `debug` | Warehouse aggregate, assembly view and demo data (the lab profile / layout routes were removed); V1 process management (`/v1/*`); read-only database diagnostics |
 
 Use the [API specification](https://github.com/Xuwznln/OpenLabSite/tree/main/docs/protocol)
 and bundled OpenAPI snapshot for role, field, and route details.
@@ -151,10 +187,11 @@ The operation catalog describes the contract; it does not enforce backend author
 | Error | Handling |
 | --- | --- |
 | `ApiError`, `status = 0` | Check network access, timeouts, and CORS; retain previous data |
-| `ApiError`, 404 / 503 | Distinguish a missing resource, unavailable capability, or service not ready using endpoint semantics |
-| `ApiError`, 409 / 422 / 5xx | Handle conflicts, validation failures, or server errors; retain the original body for diagnostics |
-| `BackendBusinessError` | Handle the business code from the backend envelope; do not treat it as success |
+| `ApiError`, 404 / 503 | Route not mounted in this process, or the reset maintenance gate; treat as unavailable |
+| `BackendBusinessError` | Business failure from the V1 envelope (`code`, `symbol`, `details`; `isNotFound`, `isConflict`, `isInvalidInput`, `isUnavailable`); do not treat it as success |
+| `InventoryCommandRejectedError` / `TaskCommandRejectedError` | A rejected inventory command or task command (`status: "rejected"`) |
 
+Use `isCapabilityUnavailable(error)` to show a degraded state for 404 / 503 / code 5001.
 Material mutations use idempotency envelopes, and workflow mutations may require revision checks.
 Do not blindly retry writes or regenerate idempotency keys. Follow the relevant endpoint's recovery rules.
 Poll long-running operations with a delay and deadline, handling every terminal state rather than busy-waiting.

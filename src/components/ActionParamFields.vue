@@ -144,7 +144,7 @@ function renderDeductOption(option: SelectOption): VNodeChild {
         >
           {{ fieldMeta(field.param).description }}
         </div>
-        <!-- 物料出库：资源类 + 实例名 + 数量 + 可选条码 → 后端实例化并
+        <!-- 物料出库：资源类 + 显示名 + 数量 + 可选条码 → 后端实例化并
              权威登记，产物写回参数；数量 >1 时循环出库并自动加序号后缀 -->
         <template v-if="field.kind === 'deduct'">
           <div class="deduct-row">
@@ -167,7 +167,7 @@ function renderDeductOption(option: SelectOption): VNodeChild {
               :value="deductDraftFor(field.param).name"
               size="small"
               class="deduct-name"
-              placeholder="实例名（留空自动生成）"
+              placeholder="显示名（留空自动生成）"
               @update:value="deductDraftFor(field.param).name = $event"
             />
           </div>
@@ -179,7 +179,7 @@ function renderDeductOption(option: SelectOption): VNodeChild {
               :min="1"
               :max="50"
               :precision="0"
-              title="出库数量；大于 1 时实例名自动加 -1/-2… 序号后缀"
+              title="出库数量；大于 1 时显示名自动加 -1/-2… 序号后缀"
               @update:value="deductDraftFor(field.param).quantity = $event ?? 1"
             />
             <NInput

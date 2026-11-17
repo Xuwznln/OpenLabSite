@@ -201,6 +201,19 @@ function openCreate() {
   void loadClasses();
 }
 
+/**
+ * 图节点的人读名：物料层 name 现在恒等于 uuid，标签在 display_name；旧规格里的 name 若是 uuid
+ * （与节点 uuid 相同或形如 uuid）不当作名字回填。
+ */
+function graphNodeLabel(node: Record<string, unknown> | undefined): string {
+  if (!node) return "";
+  const display = String(node.display_name ?? "").trim();
+  if (display) return display;
+  const name = String(node.name ?? "").trim();
+  const looksLikeUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(name);
+  return name && name !== String(node.uuid ?? "") && !looksLikeUuid ? name : "";
+}
+
 function openEdit(process: DeviceProcess) {
   editing.value = process;
   const node = process.graph_nodes[0] as Record<string, unknown> | undefined;
@@ -208,7 +221,7 @@ function openEdit(process: DeviceProcess) {
     name: process.name,
     deviceId: String(node?.id ?? ""),
     deviceClass: node ? String(node.class ?? "") : null,
-    deviceName: String(node?.name ?? ""),
+    deviceName: graphNodeLabel(node),
     configJson: JSON.stringify(node?.config ?? {}, null, 2),
     packageNames: [...process.package_names],
     externalOnly: process.external_only,
@@ -258,13 +271,16 @@ async function submit() {
       max_restarts: form.value.maxRestarts,
     };
     if (editing.value) {
-      // 保留原节点 uuid，只改 id / class / name / config
+      // 保留原节点 uuid，只改 id / class / 显示名 / config；节点已有 display_name 时一并更新
+      const original = editing.value.graph_nodes[0] ?? {};
+      const label = form.value.deviceName.trim() || form.value.deviceId.trim();
       const node: JsonObject = {
-        ...(editing.value.graph_nodes[0] ?? {}),
+        ...original,
         id: form.value.deviceId.trim(),
         class: form.value.deviceClass,
         template_name: form.value.deviceClass,
-        name: form.value.deviceName.trim() || form.value.deviceId.trim(),
+        name: label,
+        ...("display_name" in original ? { display_name: label } : {}),
         config,
       };
       await conn.api.domains.deviceProcesses.update(editing.value.id, { ...common, graph_nodes: [node, ...editing.value.graph_nodes.slice(1)] });

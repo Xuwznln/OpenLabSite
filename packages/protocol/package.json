@@ -1,6 +1,6 @@
 {
   "name": "@openlab/protocol",
-  "version": "2.0.0",
+  "version": "4.0.0",
   "description": "OpenLab TypeScript SDK for the Uni-Lab-OS backend: typed API clients, error handling, operation catalog and OpenAPI definitions.",
   "keywords": [
     "openlab",

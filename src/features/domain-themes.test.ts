@@ -16,7 +16,6 @@ describe("通用版主题", () => {
   it("每个主题的导航词条完整且非空", () => {
     const navKeys = [
       "console",
-      "lab",
       "workflows",
       "timeline",
       "monitor",

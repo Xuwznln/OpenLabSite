@@ -30,12 +30,13 @@ type InstantiateMock = (
   barcode?: string,
 ) => Promise<ReturnType<typeof makeTree>>;
 
+/** 权威返回的树：物料 name = uuid，人读标签在 display_name，resource_id 取 PLR 根名。 */
 function makeTree(name: string) {
   const uuid = `uuid-${name}`;
   return {
     data: {
       root_material_uuid: uuid,
-      nodes: [{ material: { material_uuid: uuid, name } }],
+      nodes: [{ material: { material_uuid: uuid, name: uuid, display_name: name, resource_id: `rid-${name}` } }],
     },
   };
 }
@@ -47,7 +48,7 @@ function setup(instantiate: ReturnType<typeof vi.fn<InstantiateMock>>) {
   const form = useActionParamForm({
     api: () =>
       ({
-        domains: { materialsV1: { instantiate } },
+        domains: { inventory: { instantiate } },
       }) as unknown as EdgeApi,
     device: ref("dev-1"),
     action: ref("act"),
@@ -86,7 +87,8 @@ describe("submitDeduct 数量循环", () => {
     const param = JSON.parse(paramJson.value) as {
       resource: { id: string; uuid: string };
     };
-    expect(param.resource).toEqual({ id: "rack-1", uuid: "uuid-rack-1" });
+    // 引用写 uuid + resource_id，不再把物料 name（= uuid）当 id
+    expect(param.resource).toEqual({ id: "rid-rack-1", uuid: "uuid-rack-1" });
   });
 
   it("数量 1：不加序号后缀且 barcode 随请求下发", async () => {
@@ -140,8 +142,8 @@ describe("submitDeduct 数量循环", () => {
       resource: { id: string; uuid: string }[];
     };
     expect(param.resource).toEqual([
-      { id: "rack-1", uuid: "uuid-rack-1" },
-      { id: "rack-2", uuid: "uuid-rack-2" },
+      { id: "rid-rack-1", uuid: "uuid-rack-1" },
+      { id: "rid-rack-2", uuid: "uuid-rack-2" },
     ]);
   });
 });

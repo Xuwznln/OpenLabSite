@@ -1,5 +1,6 @@
 /** SiteSlot 绑定：候选匹配不等于确认；与微后端导入边界共享作用域规则。 */
 import type { MaterialsV1Aggregate } from "@openlab/protocol";
+import { materialLabel } from "./material-label";
 
 export interface SiteBinding {
   site_uuid: string;
@@ -39,8 +40,8 @@ export class SiteIndex {
       for (const site of sites ?? []) {
         if (site.deleted_at_ms != null) continue;
         this.sites.push({ value: site.site_uuid, siteLabel: site.label,
-          ownerUuid: material.material_uuid, ownerName: material.display_name || material.name,
-          label: `${material.display_name || material.name} · ${site.label}${site.occupied_material_uuid ? "（已占用）" : ""}` });
+          ownerUuid: material.material_uuid, ownerName: materialLabel(material),
+          label: `${materialLabel(material)} · ${site.label}${site.occupied_material_uuid ? "（已占用）" : ""}` });
       }
     }
   }
@@ -64,8 +65,10 @@ export class SiteIndex {
       const ref = mount as Record<string, unknown>;
       if (ref.uuid) owner = String(ref.uuid);
       else {
-        const label = String(ref.name || ref.id || "");
-        const matches = [...this.materials.values()].filter((m) => label && (m.name === label || m.resource_id === label));
+        // 没有 uuid 的旧引用：id 是 resource_id（或 uuid），name 是旧式标签（现按 display_name 匹配，可能重名）
+        const label = String(ref.id || ref.name || "");
+        const matches = [...this.materials.values()].filter((m) =>
+          label && (m.resource_id === label || m.material_uuid === label || m.display_name === label));
         if (matches.length !== 1) return [];
         owner = matches[0].material_uuid;
       }

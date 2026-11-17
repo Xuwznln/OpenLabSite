@@ -22,7 +22,7 @@ import {
   NTag,
 } from "naive-ui";
 import { ArrowBackOutline } from "@vicons/ionicons5";
-import { ApiError, type EdgeApi, type MaterialsV1Tree } from "@openlab/protocol";
+import { ApiError, type EdgeApi, type MaterialsV1Tree, BackendBusinessError } from "@openlab/protocol";
 import { assemblyFromMaterials, findAssemblyNode, type AssemblyNode, type LabAssembly } from "../features/material-assembly";
 import { createRefreshQueue } from "../features/refresh-queue";
 import { TERMS } from "../features/terminology";
@@ -313,7 +313,7 @@ const load = createRefreshQueue(async () => {
   } catch (err) {
     if (!disposed && api === conn.api && subject === subjectId.value) {
       error.value = describeError(err);
-      if (err instanceof ApiError && err.status === 404) {
+      if ((err instanceof ApiError && err.status === 404) || (err instanceof BackendBusinessError && err.isNotFound)) {
         assembly.value = null;
         selected.value = null;
       }
@@ -347,9 +347,9 @@ watch([() => conn.baseUrl, subjectId], () => {
     <NCard :bordered="false">
       <NSpace align="center" justify="space-between">
         <NSpace align="center">
-          <NButton size="small" quaternary @click="router.push('/lab')">
+          <NButton size="small" quaternary @click="router.push('/inventory')">
             <template #icon><NIcon><ArrowBackOutline /></NIcon></template>
-            返回地图
+            返回物料
           </NButton>
           <span class="asm-title">
             {{ assembly?.root.template_name || subjectId }}

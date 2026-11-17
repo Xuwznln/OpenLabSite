@@ -173,7 +173,7 @@ async function resync() {
   try {
     const [states, materialChanges, historyEvents, backendEvents] = await Promise.all([
       conn.api.domains.telemetryV1.states(),
-      conn.api.domains.materialsV1.changes(0, 500),
+      conn.api.domains.inventory.ledger(0, 500),
       conn.api.domains.historyV1.events({ limit: 500 }),
       conn.api.domains.runtimeV1.backendEvents({ limit: 500 }).catch(() => []),
       sched.refresh(),
@@ -499,7 +499,7 @@ async function loadLedger(): Promise<void> {
   ledgerLoading.value = true;
     try {
     for (let page = 0; page < 20; page++) {
-      const rows = await conn.api.domains.materialsV1.changes(ledgerCursor, LEDGER_PAGE);
+      const rows = await conn.api.domains.inventory.ledger(ledgerCursor, LEDGER_PAGE);
       if (!rows.length) break;
       const entries: LedgerEntry[] = rows.map((row) => ({
         ledger_id: row.sequence,

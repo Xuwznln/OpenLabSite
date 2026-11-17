@@ -69,7 +69,7 @@ describe("Site 绑定", () => {
     const bindings = ref<SiteBindings>({});
     const onError = vi.fn();
     const instances = vi.fn().mockResolvedValue(items);
-    const form = useActionParamForm({ api: () => ({ domains: { materialsV1: { instances }, runtimeV1: {
+    const form = useActionParamForm({ api: () => ({ domains: { inventory: { instances }, runtimeV1: {
       endpoints: async () => [{ action_capabilities: [{ device_uuid: "bench", action_name: "load", state: "active", descriptor: detail }] }],
     } } }) as unknown as EdgeApi,
       device: ref("bench"), action: ref("load"), paramJson, siteBindings: bindings, active: () => true, onError });

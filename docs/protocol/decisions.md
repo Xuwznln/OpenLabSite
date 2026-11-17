@@ -1,8 +1,9 @@
-# 人工决策：状态告警与动作异常
+# 人工决策：状态告警、动作异常与工作流干预
 
-两类需要操作员介入的执行端事件都由带执行面的 Host 进程持有（`health.execution=ready`），
-FastAPI 直出 DTO，REST 快照为权威，页面以轮询 + 可见性恢复收敛。
-`--role backend` 进程返回 503，页面整面板置灰并提示连接 Host。
+需要操作员介入的执行端事件，V1 信封（传输层解包），REST 快照为权威，页面以轮询 + 可见性恢复收敛。
+状态告警由 Host 持有（Host 专有路由，经调度权威转交）；动作异常由调度权威的决策台回答（V1 实际合同）。
+Host 不在线（启动 / 重启中）或 `--role backend` 没有执行面时返回信封 5001（或 404），页面整面板置灰并提示，
+`isCapabilityUnavailable(error)` 判定。
 
 ## 1. 状态告警（status-incidents）
 
@@ -12,48 +13,59 @@ FastAPI 直出 DTO，REST 快照为权威，页面以轮询 + 可见性恢复收
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/status-incidents?device_id=&include_terminal=` | `{host_ready, incidents[], holds[]}`；`host_ready=false` 时两数组必为空（HostNode 启动中） |
-| POST | `/status-incidents/{incident_id}` | `{action, option?, reason?}`；`action` 必须是该 incident `options[].action` 之一（`execute_recovery` / `resume`），否则 422 |
+| POST | `/status-incidents/{incident_id}` | `{action, option?, reason?}`；`action` 必须是该 incident `options[].action` 之一（`execute_recovery` / `resume`），否则 1000 |
 
 - `incident.mode`：`interlock`（产生 hold，压住调度）/ `notify`（只提醒，`hold_token=""`）；
 - `incident.state`：`awaiting_decision → recovering → resolved`，或属性自愈 `cleared`；
 - `options[].recovery_action` 只读展示，由 Host 经 ActionClient 执行，浏览器不得调用或改参；
 - POST 回执 `{status:"delivered", state}`：delivered 只表示受理，恢复是否成功以后续 GET 为准；
-- 404 = 不存在 / 已终态 / 被他人处理，重新 GET 收敛；409 = 已有恢复在执行。
+- 「不存在」业务码（4001 / 3002）= 不存在 / 已终态 / 被他人处理，重新 GET 收敛；3003 = 已有恢复在执行。
 
-## 2. 动作异常（error-decisions）
+## 2. 动作异常（error-decisions，V1 合同）
 
-动作执行失败后由微后端挂起（不是执行器），等待人工选择 Host 给出的处理选项。
+动作执行失败（或动作执行前预检失败，如缺料）后由调度器挂起，等待人工选择执行面给出的处理选项。
+清单同时包含调度器在重启后接管的执行态未知 / 决策上下文丢失的 attempt，两者同形。
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/error-decisions` | `{items: ErrorDecision[]}` |
-| POST | `/error-decisions/{decision_id}` | 见下；409 = 已被处理或不再挂起 |
+| GET | `/error-decisions` | `{decisions: ErrorDecision[]}`（dev 时代的 `items` 已按 V1 改名） |
+| POST | `/error-decisions/{decision_id}` | V1 `ErrorDecisionIn`；成功 `{decision_id, status: "delivered"}`；决策已不在等待 → 「不存在」业务码 4001 |
 
-`ErrorDecision`：`decision_id` `device_id` `action_name` `task_id` `job_id` `node_id`
-`exception_type` `error_message` `traceback` `options[{action,label,description}]`
-`retry_count/max_retries` `created_at` `expires_at`（epoch 秒）`decision_timeout_seconds`
-`default_on_decision_timeout` `require_confirmation`，可选 `category` / `severity`。
+`ErrorDecision`：`decision_id` `device_id` `action_name` `task_id` `job_id` `node_id` `node_run_uuid`
+`exception_type` `error_message` `traceback` `options[{id?, action, label, description}]`
+`retry_count/max_retries` `created_at`（epoch 秒）`require_confirmation`，可选 `category`
+（`preflight` = 动作尚未派发 / `execution`）、`stage`、`severity`、`error_info[]`（如 `{code: "inventory_shortage"}`），
+以及执行面声明了决策超时时才有的 `expires_at` / `decision_timeout_seconds` / `default_on_decision_timeout`
+（**已知缺口**：预检报错没有这三个字段，页面不显示倒计时）。
 
-常见 `options[].action`：`retry`（Backend 更新调度并创建新 attempt）、`abort`（放行
-failed 结果）、`skip`、`operator_intervention`（人工替换结果，正文带 `result`）。
+常见 `options[].action`：`retry`（补料或排除原因后重新预检 / 创建新 attempt）、`skip`、`abort`（放行
+failed 结果）、`operator_intervention`（人工替换结果，正文带 `result`）。
 
-POST 正文必须回带 `job_id` 与 `device_id`（微后端以此校验放行目标）并声明
-`scheduler_updated: true`；协议客户端 `resolveErrorDecision(decision, body)` 自动补齐：
+POST 正文即 V1 `ErrorDecisionIn`：`action` / `option` / `result` / `reason` 均可选，`action` 不强制、不默认，
+都不给时执行面按 V1 设备侧口径缺省 `abort`。页面只提交 Host 给出的 `options[].action`：
 
 ```json
-{
-  "scheduler_updated": true,
-  "job_id": "<decision.job_id>",
-  "device_id": "<decision.device_id>",
-  "action": "retry",
-  "option": { "action": "retry", "label": "重试" },
-  "reason": "operator_ui"
-}
+{ "action": "retry", "option": { "action": "retry", "label": "重试" }, "reason": "operator_ui" }
 ```
 
-## 3. 工作流干预（interventions）
+dev 时代必须回带的 `job_id` / `device_id` / `scheduler_updated` 已删除。dev 扩展（可选）：请求头 `Idempotency-Key`
+同键同内容重放首次结果（SDK `resolveErrorDecision(decision, body, { idempotencyKey })`），请求体 `operator_id`
+记录操作员；物理结果未知的作业只允许补记或终止（3003）。
 
-调度器把任务置为 `control_status=waiting_intervention` 时，`GET
-/workflow-tasks/{uuid}/interventions` 给出 `status=open` 的干预记录（选项、revision、
-恢复控制态）。异常审批页聚合展示并跳转任务运行时；决策入口随 Workflow Authority 的
-干预 API 一并提供时再接入，页面不自行拼装。
+## 3. 工作流干预（interventions，V1 合同）
+
+调度器把 attempt 标为待决时，在同一事务里开出一条干预（`workflow_intervention`），恢复或进入终态时 superseded。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/workflow-interventions?status=&limit=` | 全局列表（`open` / `selected` / `superseded`，limit 1..500）；按任务看就按 `workflow_task_uuid` 过滤 |
+| GET | `/workflow-interventions/{uuid}` | 干预详情 |
+| POST | `/workflow-interventions/{uuid}/decisions` | `{revision, option_id, result?}` + 请求头 `Idempotency-Key`（必填）；201 新决策 / 200 重放；未投递 3003，用同一键重试 |
+
+- 干预字段：`revision`、`status`、`options[{id, action, label, description}]`、`resume_control_status`、
+  `selected_option`（未决策时 `{}`）、`edge_command_uuid`（= 执行面 `decision_id`）、`delivery_status`、`opened_at`。
+- 决策与 `/error-decisions` 走同一放行通道：**同一个待决动作失败既出现在 `/error-decisions`，也有一条干预**
+  （`edge_command_uuid` 相同）。异常审批页按 `edge_command_uuid` 去重，只在「动作异常」里展示一次；
+  只有不在决策台上的干预才单列「工作流干预」，按钮提交 `option_id`（SDK `decideIntervention(uuid, body, idempotencyKey)`）。
+- 人工确认（`manual_confirm` 节点）不是干预：按作业提交 `POST /workflow-node-jobs/{job_uuid}/manual-confirmation`
+  （`approve` / `reject`），见 [runtime.md §2.4](./runtime.md#24-graph-写入)。

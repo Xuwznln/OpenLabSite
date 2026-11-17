@@ -34,9 +34,9 @@ components, Python code, or SQLite files.
 - never redefines state machines, IDs, timestamps, or event names;
 - degrades explicitly when the connected process lacks a capability (role-aware pages);
 - keeps purely human annotations that the microbackend has no API for in the browser
-  only, scoped by microbackend address and exportable as JSON: the lab layout
-  (zones / walls, `features/lab-layout.ts`), editor drafts, manual-confirm assignees.
-  Device positions are never stored locally — they come from materials.v1.
+  only, scoped by microbackend address and exportable as JSON: editor drafts,
+  manual-confirm assignees. Device positions are never stored locally — they come from
+  materials.v1. (The core deleted the shared lab layout, so there is no lab map page.)
 
 Per-attempt execution data is read from the Workflow Authority (tasks + node jobs,
 `features/task-jobs.ts` resolves device/action from the frozen task snapshot); the

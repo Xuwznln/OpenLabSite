@@ -1,20 +1,21 @@
 /**
  * 人工决策（decisions 域，unilabos/server/api/runtime/diagnostics.py）。
  *
- * 两类需要操作员介入的执行端事件，都是 FastAPI 直出 DTO（无 Backend 信封），
- * REST 快照为权威，页面以轮询收敛：
+ * 两类需要操作员介入的执行端事件，V1 信封（传输层解包），REST 快照为权威，页面以轮询收敛：
  *
- * - 状态联锁（status-incidents）：设备属性触发策略后压住调度的 incident；
- *   前端只能提交 Host 返回的 `options[].action`，不能自行拼装设备动作。
- * - 动作异常（error-decisions）：动作失败后等待人工放行 / 替换结果 / 中止。
+ * - 状态联锁（status-incidents，Host 专有，经调度权威代理）：设备属性触发策略后压住调度的
+ *   incident；前端只能提交 Host 返回的 `options[].action`，不能自行拼装设备动作。
+ * - 动作异常（error-decisions，调度权威回答，V1 实际合同）：动作失败后等待人工放行 / 替换结果 / 中止。
+ *   列表 `{decisions: [...]}`；放行成功 `{decision_id, status: "delivered"}`；决策已不在等待是
+ *   「不存在」业务码 4001；物理结果未知只允许补记或终止（3003）。
  *
  * 不可用语义：
- * - GET 503 → 本进程没有执行端（`--role backend` 纯调度权威），整面板置灰；
+ * - 信封 5001 → Host 不在线（启动 / 重启中）或本进程没有执行端（`--role backend`），整面板置灰；
  * - GET 200 + host_ready=false + 空数组 → HostNode 启动中；
- * - POST 404 → incident 不存在/已终态/已被他人处理，重新 GET 收敛；
- * - POST 409 → 已有决策在执行。
+ * - 不存在（4001 / 3002）→ incident 或决策已终态 / 已被他人处理，重新 GET 收敛；
+ * - 3003 → 已有决策在执行或状态不允许。
  */
-import type { HttpTransport, JsonObject, JsonValue } from "./common.js";
+import type { HttpTransport, JsonValue } from "./common.js";
 
 // ---------------------------------------------------------------------------
 // 契约 §8 类型（冻结，字段名/枚举值照用不改）
@@ -170,7 +171,7 @@ export interface ErrorDecisionOption {
   return_value?: JsonValue;
 }
 
-/** GET /api/v1/error-decisions 的 items[] 条目（执行端 report）。 */
+/** GET /api/v1/error-decisions 的 decisions[] 条目（执行端 report）。 */
 export interface ErrorDecision {
   decision_id: string;
   device_id: string;
@@ -186,32 +187,49 @@ export interface ErrorDecision {
   max_retries: number;
   /** epoch 秒。 */
   created_at: number;
-  decision_timeout_seconds: number;
+  /** 执行面声明了决策超时才有（V1 预检报错没有）。 */
+  decision_timeout_seconds?: number;
   /** epoch 秒；到期后按 default_on_decision_timeout 处理。 */
-  expires_at: number;
-  default_on_decision_timeout: ErrorDecisionAction;
+  expires_at?: number;
+  default_on_decision_timeout?: ErrorDecisionAction;
   require_confirmation: boolean;
+  /** `preflight`（动作执行前预检）/ `execution` 等。 */
   category?: string;
+  stage?: string;
   severity?: string;
+  node_run_uuid?: string;
+  /** 结构化错误（如 `[{code: "inventory_shortage", ...}]`）。 */
+  error_info?: JsonValue[];
 }
 
+/** V1 清单键是 `decisions`（dev 原来的 `items` 已按 V1 改名）。 */
 export interface ErrorDecisionsResponse {
-  items: ErrorDecision[];
+  decisions: ErrorDecision[];
 }
 
+/**
+ * V1 `ErrorDecisionIn`：`action` / `option` / `result` / `reason` 均可选，`action` 不强制、不默认，
+ * 都不给时执行面按 V1 设备侧口径缺省 `abort`。页面应提交 Host 返回的 `options[].action`。
+ */
 export interface ErrorDecisionInput {
-  /** 必须是该 decision `options[].action` 之一；与 option 二选一。 */
+  /** 该 decision `options[].action` 之一；与 option 二选一。 */
   action?: ErrorDecisionAction;
   option?: ErrorDecisionOption;
   reason?: string;
   /** operator_intervention 的人工替换结果。 */
   result?: JsonValue;
-  extra?: JsonObject;
+  /** dev 扩展：操作员身份（缺省取请求上下文）。 */
+  operator_id?: string | null;
 }
 
 export interface ErrorDecisionAck {
   decision_id: string;
-  status: "resolved";
+  status: "delivered";
+}
+
+export interface ErrorDecisionOptions {
+  /** dev 扩展 `Idempotency-Key`：同键同内容重放首次结果（同一次点击的重试复用）。 */
+  idempotencyKey?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -244,31 +262,28 @@ export function createDecisionsApi(http: HttpTransport) {
         path: `/api/v1/status-incidents/${encodeURIComponent(incidentId)}`,
         body,
       }),
-    /** GET /api/v1/error-decisions —— 微后端持有的待决动作失败 */
+    /** GET /api/v1/error-decisions —— 待人工决策的动作失败（含重启后接管的执行态未知 attempt） */
     errorDecisions: () =>
       http.request<ErrorDecisionsResponse>({
         method: "GET",
         path: "/api/v1/error-decisions",
       }),
     /**
-     * POST /api/v1/error-decisions/{decision_id}
+     * POST /api/v1/error-decisions/{decision_id} —— V1 `ErrorDecisionIn`。
      *
-     * 请求体必须回带该 decision 的 job_id 与 device_id（微后端以此校验放行目标），
-     * 并声明 scheduler_updated=true。409 = 已被处理或不再挂起；成功后以 GET 收敛。
+     * 成功 `{decision_id, status: "delivered"}`（只表示已投递给执行面）；已不在等待 → 4001；
+     * 成功后以 GET 收敛。
      */
     resolveErrorDecision: (
-      decision: Pick<ErrorDecision, "decision_id" | "job_id" | "device_id">,
+      decision: Pick<ErrorDecision, "decision_id">,
       body: ErrorDecisionInput,
+      options: ErrorDecisionOptions = {},
     ) =>
       http.request<ErrorDecisionAck>({
         method: "POST",
         path: `/api/v1/error-decisions/${encodeURIComponent(decision.decision_id)}`,
-        body: {
-          scheduler_updated: true,
-          job_id: decision.job_id,
-          device_id: decision.device_id,
-          ...body,
-        },
+        body,
+        headers: options.idempotencyKey ? { "Idempotency-Key": options.idempotencyKey } : undefined,
       }),
   };
 }

@@ -1,17 +1,25 @@
 /**
- * 对着一台真实微后端跑通浏览器会用到的读路径与关键写流程。
+ * 对着一台真实微后端（Uni-Lab-OS V1.0 合同）跑通浏览器会用到的读路径与关键写流程。
  *
  *   node packages/protocol/scripts/live-smoke.mjs [http://127.0.0.1:8002] [--write]
- *   pnpm --filter @openlab/protocol smoke -- --write
+ *   pnpm --filter @openlab/protocol smoke -- http://127.0.0.1:8002 --write
  *   pnpm --filter @openlab/protocol smoke -- http://127.0.0.1:8002 --write --step-only
+ *   pnpm --filter @openlab/protocol smoke -- http://127.0.0.1:8002 --write --restart   # 另测 Host 重启期间的 5001 退避
  *
- * 读路径：每个域的列表接口都要 2xx 且形状符合类型的关键字段。
- * --write：创建并删除一条 Workflow 定义；出库一件物料、移动到空位点、删除；
+ * 管理 API 不鉴权：请求不带任何令牌。
+ *
+ * 读路径：每个域的列表接口都要 2xx + 信封 code 0，且形状符合类型的关键字段。
+ * --write：写请求不需要令牌；逐步 / V1 暂停任务；Workflow 定义增删；
+ * 库存命令出库一件物料、改条码、移动到空位点、删除，被拒命令是失败信封（InventoryCommandRejectedError）；
  * 对在线设备提交一个 always_free 动作并等待任务终态。
  */
-import { createEdgeApi, ApiError, BackendBusinessError } from "../dist/index.js";
+import { createEdgeApi, ApiError, BackendBusinessError, InventoryCommandRejectedError, isCapabilityUnavailable } from "../dist/index.js";
 
 const args = process.argv.slice(2);
+const flagValue = (name) => {
+  const index = args.indexOf(name);
+  return index >= 0 ? args[index + 1] : undefined;
+};
 const baseUrl = args.find((arg) => !arg.startsWith("--")) ?? process.env.OPENLAB_EDGE_URL ?? "http://127.0.0.1:8002";
 const doWrite = args.includes("--write");
 const api = createEdgeApi(baseUrl).domains;
@@ -28,9 +36,9 @@ async function step(name, fn, { optional = false } = {}) {
     record(name, true, typeof detail === "string" ? detail : "");
     return true;
   } catch (error) {
-    const unsupported = error instanceof ApiError && error.isUnsupported;
+    const unsupported = isCapabilityUnavailable(error);
     if (optional && unsupported) {
-      record(name, true, `未挂载（${error.status}），按降级处理`);
+      record(name, true, `当前进程不提供（${error.status ?? `业务码 ${error.code}`}），按降级处理`);
       return false;
     }
     const message = error instanceof BackendBusinessError ? `业务码 ${error.code}: ${error.message}` : error?.message ?? String(error);
@@ -46,9 +54,13 @@ function expectKeys(value, keys, label) {
 }
 
 const health = await api.system.health();
-record("system.health", health.status === "ok", `scheduler=${health.scheduler} execution=${health.execution}`);
+record(
+  "system.health",
+  health.status === "ok" && "scheduler_mode" in health,
+  `scheduler=${health.scheduler} scheduler_mode=${health.scheduler_mode} execution=${health.execution}`,
+);
 const executionReady = health.execution === "ready";
-const schedulerLocal = health.scheduler !== "remote";
+const schedulerLocal = (health.scheduler_mode ?? health.scheduler) !== "remote";
 
 async function waitUntil(read, predicate) {
   const deadline = Date.now() + 10_000;
@@ -79,15 +91,9 @@ async function workflowStepSmoke() {
     const initial = await api.workflowBackend.task(task.uuid);
     if (initial.control_revision !== 0) throw new Error("缺少逐步控制版本");
     const first = { type: "step", expected_revision: 0, idempotency_key: crypto.randomUUID() };
-    await api.workflowBackend.commandTask(task.uuid, first);
-    const approveNext = async () => {
-      const records = await waitUntil(() => api.workflowBackend.taskManualConfirmations(task.uuid),
-        (items) => items.some((item) => item.status === "pending"));
-      const record = records.find((item) => item.status === "pending");
-      await api.workflowBackend.decideManualConfirmation(record.uuid, {
-        action: "approve", decision_idempotency_key: crypto.randomUUID(),
-      });
-    };
+    const command = await api.workflowBackend.commandTask(task.uuid, first);
+    if (!["pending", "succeeded"].includes(command.status)) throw new Error(`单步命令投影状态异常：${command.status}`);
+    const approveNext = () => approvePending(task.uuid);
     await approveNext();
     const paused = await waitUntil(() => api.workflowBackend.task(task.uuid), (value) => value.control_status === "paused");
     await api.workflowBackend.commandTask(task.uuid, first); // 已完成后的同键重放也不能多放行一步
@@ -103,15 +109,113 @@ async function workflowStepSmoke() {
     if (done.run_mode !== "normal") throw new Error("切换自动失败");
     return `task ${task.uuid}: 暂停 → 单点 → 幂等重放 → 自动 → succeeded`;
   } finally {
-    if (task) {
-      for (const pending of await api.workflowBackend.taskManualConfirmations(task.uuid)) {
-        if (pending.status === "pending") await api.workflowBackend.decideManualConfirmation(pending.uuid, {
-          action: "reject", decision_idempotency_key: crypto.randomUUID(),
-        });
-      }
-    }
+    if (task) await rejectPending(task.uuid);
     await api.workflowBackend.deleteWorkflow(wf.uuid);
   }
+}
+
+/** V1 人工确认按作业提交：确认记录的 workflow_node_job_uuid 就是 job_uuid。 */
+async function approvePending(taskUuid) {
+  const records = await waitUntil(() => api.workflowBackend.taskManualConfirmations(taskUuid),
+    (items) => items.some((item) => item.status === "pending"));
+  const record = records.find((item) => item.status === "pending");
+  await api.workflowBackend.decideJobManualConfirmation(record.workflow_node_job_uuid, {
+    action: "approve", decision_idempotency_key: crypto.randomUUID(),
+  });
+  return record;
+}
+
+async function rejectPending(taskUuid) {
+  for (const pending of await api.workflowBackend.taskManualConfirmations(taskUuid)) {
+    if (pending.status !== "pending") continue;
+    await api.workflowBackend.decideJobManualConfirmation(pending.workflow_node_job_uuid, {
+      action: "reject", decision_idempotency_key: crypto.randomUUID(),
+    }).catch(() => undefined);
+  }
+}
+
+function confirmationGraph(count) {
+  const nodes = [];
+  for (let i = 0; i < count; i++) {
+    nodes.push({ uuid: crypto.randomUUID(), name: `确认 ${i + 1}`, type: "device_action",
+      material_uuid: crypto.randomUUID(), action_name: "manual_confirm", action_type: "UniLabJsonCommand",
+      meta_data: { target_device_id: "host_node" },
+      pose: { x: i * 250, y: 0 }, param: { assignee_user_ids: [], timeout_seconds: 60 },
+      execution_policy: { depends_on: i ? [nodes[i - 1].uuid] : [] } });
+  }
+  return nodes;
+}
+
+async function workflowPauseSmoke() {
+  // V1 pause = 暂停派发（不转逐步）：已下发的确认照常完成，下一个节点不派发；resume 后继续。
+  const wf = await api.workflowBackend.createWorkflow({ name: `pause-smoke-${Date.now()}`, tags: ["smoke"] });
+  let task;
+  try {
+    await api.workflowBackend.saveGraph(wf.uuid, { revision: wf.revision, nodes: confirmationGraph(2), edges: [] });
+    task = await api.workflowBackend.createTask({ workflow_uuid: wf.uuid, run_mode: "normal" });
+    await waitUntil(() => api.workflowBackend.taskManualConfirmations(task.uuid), (items) => items.some((item) => item.status === "pending"));
+    const pause = await api.workflowBackend.commandTask(task.uuid, { type: "pause", idempotency_key: crypto.randomUUID() });
+    if (pause.status !== "succeeded") throw new Error(`pause 命令投影状态 ${pause.status}`);
+    const paused = await api.workflowBackend.task(task.uuid);
+    if (paused.dispatch_gate !== "paused" || paused.run_mode !== "normal") {
+      throw new Error(`暂停后 dispatch_gate=${paused.dispatch_gate} run_mode=${paused.run_mode}`);
+    }
+    // 自动模式下 pause 的重复提交（换键）应被拒为状态冲突，而不是被当成功
+    const again = await api.workflowBackend.commandTask(task.uuid, { type: "switch_to_step", idempotency_key: crypto.randomUUID() })
+      .then(() => null, (error) => error);
+    await approvePending(task.uuid);
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    const runs = await api.workflowBackend.taskNodeRuns(task.uuid);
+    if (runs.filter((run) => run.status === "pending").length !== 1) throw new Error("暂停派发期间仍派发了下一个节点");
+    const current = await api.workflowBackend.task(task.uuid);
+    await api.workflowBackend.commandTask(task.uuid, { type: "resume", expected_revision: current.control_revision, idempotency_key: crypto.randomUUID() });
+    await approvePending(task.uuid);
+    const done = await waitUntil(() => api.workflowBackend.task(task.uuid), (value) => value.status === "succeeded");
+    return `task ${task.uuid}: pause（dispatch_gate=paused）→ 在途完成、不派发 → resume → ${done.status}` +
+      (again ? `；暂停中 switch_to_step 被拒：${again.reason ?? again.message}` : "");
+  } finally {
+    if (task) {
+      const latest = await api.workflowBackend.task(task.uuid).catch(() => null);
+      if (latest && ["pending", "running"].includes(latest.status)) {
+        await api.workflowBackend.commandTask(task.uuid, { type: "cancel", idempotency_key: crypto.randomUUID() }).catch(() => undefined);
+      }
+      await rejectPending(task.uuid);
+    }
+    await api.workflowBackend.deleteWorkflow(wf.uuid).catch(() => undefined);
+  }
+}
+
+async function restartRetrySmoke() {
+  // 安静点重启 Host 子进程（scope=edge）：重启期间 Host 专有路由返回 5001 + Retry-After，GET 自动退避重试。
+  const requested = await api.system.requestRestart({ mode: "quiescent", scope: "edge" });
+  const started = Date.now();
+  let unavailable = 0;
+  const probe = createEdgeApi(baseUrl, { unavailableRetry: false }).domains;
+  const deadline = Date.now() + 90_000;
+  // 先观察到一次 5001（Host 已退出），再用默认的退避客户端读到恢复
+  while (Date.now() < deadline) {
+    try {
+      await probe.runtimeV1.endpoints();
+      if (unavailable) break;
+    } catch (error) {
+      if (!(error instanceof BackendBusinessError && error.isUnavailable)) throw error;
+      unavailable += 1;
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  let endpoints = null;
+  while (Date.now() < deadline) {
+    try {
+      endpoints = await api.runtimeV1.endpoints();
+      break;
+    } catch (error) {
+      if (!(error instanceof BackendBusinessError && error.isUnavailable)) throw error;
+      unavailable += 1;
+    }
+  }
+  if (!endpoints) throw new Error("Host 90 秒内未恢复");
+  return `restart scope=${requested.effective_scope ?? requested.scope}；观察到 5001 ${unavailable} 次，${Date.now() - started} ms 后 Host 路由恢复（endpoints=${endpoints.length}）`;
 }
 
 async function runtimeLogsSmoke() {
@@ -156,6 +260,7 @@ if (args.includes("--logs-only")) {
 if (args.includes("--step-only")) {
   if (!doWrite || !schedulerLocal || !executionReady) throw new Error("--step-only 需要 --write 与带执行面的本机调度微后端");
   await step("workflow step → resume", workflowStepSmoke);
+  await step("workflow pause → resume (V1)", workflowPauseSmoke);
   process.exit(results.some((item) => !item.ok) ? 1 : 0);
 }
 // 重置只测只读预览；即使 --write 也绝不清空使用者数据。
@@ -164,10 +269,20 @@ await step("system.resetPreview", async () => {
   expectKeys(preview, ["supported", "pending", "confirmation_token", "backup_path", "detail"], "reset");
 });
 
+await step("envelope: unmatched route → 404 + 4001", async () => {
+  // 未匹配的路由（含 /v1/* 与已删除的 lab 布局路由）由应用级兜底返回信封，保留 404
+  const missing = await createEdgeApi(baseUrl).http.request({ method: "GET", path: "/api/v1/__openlab_smoke_missing__" }).then(() => null, (error) => error);
+  if (!(missing instanceof ApiError) || missing.status !== 404 || missing.businessCode !== 4001) {
+    throw new Error(`应为 404 + 4001，实际 ${missing?.status ?? "成功"} / ${missing?.businessCode}`);
+  }
+  return `404 + ${missing.businessCode}: ${missing.message}`;
+});
+
 await step("system.readiness", async () => {
   const readiness = await api.system.readiness();
-  expectKeys(readiness, ["status", "scheduler", "execution", "reasons"], "readiness");
-  return `status=${readiness.status} execution=${readiness.execution}${readiness.reasons.length ? ` reasons=${readiness.reasons.join("；")}` : ""}`;
+  expectKeys(readiness, ["status", "capabilities", "phase", "workflowRuntime", "scheduler", "execution", "reasons"], "readiness");
+  if (!["ready", "starting", "failed"].includes(readiness.status)) throw new Error(`readiness.status 不是 V1 取值：${readiness.status}`);
+  return `status=${readiness.status} phase=${readiness.phase} execution=${readiness.execution}${readiness.reasons.length ? ` reasons=${readiness.reasons.join("；")}` : ""}`;
 });
 
 await step("system.hostlinkPeers", async () => {
@@ -206,22 +321,30 @@ await step("runtimeV1.jobs / commands / sessions / outboxes", async () => {
   return `jobs=${jobs.length} commands=${commands.length} sessions=${sessions.length} adapter=${adapter.length} events=${events.length}`;
 });
 
-await step("materialsV1.instances(roots) / links / lots / reservations / changes / registryClasses", async () => {
-  const [roots, all, links, lots, reservations, changes, classes] = await Promise.all([
-    api.materialsV1.instances(true),
-    api.materialsV1.instances(),
-    api.materialsV1.links(),
-    api.materialsV1.lots(),
-    api.materialsV1.reservations(),
-    api.materialsV1.changes(0, 50),
+await step("inventory.instances(roots) / relations / lots / reservations / ledger / contents + materialsV1.registryClasses", async () => {
+  const [health, roots, all, relations, lots, reservations, ledger, contents, classes] = await Promise.all([
+    api.inventory.health(),
+    api.inventory.instances({ rootsOnly: true }),
+    api.inventory.instances(),
+    api.inventory.relations(),
+    api.inventory.lots(),
+    api.inventory.reservations(),
+    api.inventory.ledger(0, 50),
+    api.inventory.contents(),
     api.materialsV1.registryClasses(),
   ]);
-  for (const aggregate of roots) expectKeys(aggregate, ["material", "position", "data", "sites", "state_hash"], "aggregate");
-  return `roots=${roots.length} all=${all.length} links=${links.length} lots=${lots.length} reservations=${reservations.length} changes=${changes.length} classes=${classes.length}`;
+  for (const aggregate of roots) expectKeys(aggregate, ["material", "position", "data", "sites", "state_hash", "edge_uuid", "status"], "instance");
+  expectKeys(reservations, ["reservations", "content_reservations", "source_bindings"], "reservations");
+  if (all[0]) {
+    const detail = await api.inventory.instance(all[0].edge_uuid);
+    expectKeys(detail, ["material", "relation", "content"], "instance detail");
+  }
+  return `ledger_seq=${health.ledger_sequence} roots=${roots.length} all=${all.length} relations=${relations.relations.length} links=${relations.links.length} lots=${lots.length} reservations=${reservations.reservations.length} ledger=${ledger.length} contents=${contents.length} classes=${classes.length}`;
 });
-await step("materialsV1.templates (heavy, on-demand)", async () => {
+await step("inventory.templates (heavy, on-demand)", async () => {
   const started = Date.now();
-  const templates = await api.materialsV1.templates();
+  const templates = await api.inventory.templates({ includeDefinition: true });
+  for (const template of templates.slice(0, 5)) expectKeys(template, ["template_uuid", "template_id", "name", "definition"], "template");
   return `${templates.length} templates in ${Date.now() - started} ms`;
 });
 await step("graphsV1.graphs / livePayload", async () => {
@@ -239,26 +362,57 @@ await step("telemetryV1.states / events", async () => {
   for (const state of states) expectKeys(state, ["endpoint_uuid", "device_uuid", "properties", "connection_state"], "state");
   return `states=${states.length} events=${events.length}`;
 });
-await step("historyV1.events", async () => {
+await step("deviceState.all / history", async () => {
+  const [all, history] = await Promise.all([api.deviceState.all(), api.deviceState.history({ limit: 20 })]);
+  return `keys=${Object.keys(all).join(",")} history=${Object.keys(history).join(",")}`;
+}, { optional: !executionReady });
+await step("historyV1.events (/edge/history)", async () => {
   const events = await api.historyV1.events({ limit: 50 });
+  if (events[0]) await api.historyV1.event(events[0].event_uuid);
   return `${events.length} events`;
 });
-await step("workflowBackend.workflows / tasks", async () => {
-  const [workflows, tasks] = await Promise.all([api.workflowBackend.workflows({ page: 1, page_size: 20 }), api.workflowBackend.tasks({ page: 1, page_size: 20 })]);
-  return `workflows=${workflows.total} tasks=${tasks.total}`;
+await step("runHistory.workflows / jobs", async () => {
+  const [runs, jobs] = await Promise.all([api.runHistory.workflows({ limit: 20 }), api.runHistory.jobs({ limit: 20 })]);
+  expectKeys(runs, ["runs", "stats"], "run history");
+  return `runs=${runs.runs.length} jobs=${jobs.jobs.length}`;
+}, { optional: true });
+await step("scheduler.monitorSnapshot / timeline / timePlan / drainStatus", async () => {
+  const [snapshot, timeline, plan, drain] = await Promise.all([
+    api.scheduler.monitorSnapshot(),
+    api.scheduler.timeline({ window_s: 3600 }),
+    api.scheduler.timePlan(),
+    api.scheduler.drainStatus(),
+  ]);
+  return `snapshot=${Object.keys(snapshot).join(",")} timeline=${Object.keys(timeline).join(",")} plan.enabled=${plan.enabled} drain=${drain.phase}`;
+}, { optional: true });
+await step("workflowBackend.workflows / tasks / presentations / interventions / categories", async () => {
+  const [workflows, tasks, presentations, interventions, categories] = await Promise.all([
+    api.workflowBackend.workflows({ page: 1, page_size: 20 }),
+    api.workflowBackend.tasks({ page: 1, page_size: 20 }),
+    api.workflowBackend.taskPresentations({ view: "matrix" }),
+    api.workflowBackend.interventions({ status: "open" }),
+    api.workflowBackend.operationCategories(),
+  ]);
+  expectKeys(workflows, ["items", "has_more", "page", "page_size"], "workflow page");
+  return `workflows=${workflows.items.length}${workflows.has_more ? "+" : ""} tasks=${tasks.items.length}${tasks.has_more ? "+" : ""} presentations=${presentations.items?.length ?? "?"} open interventions=${interventions.length} categories=${categories.length}`;
 }, { optional: true });
 await step("workflowBackend.latestPublications", async () => {
   const publications = await api.workflowBackend.latestPublications();
   for (const item of publications) expectKeys(item, ["uuid", "workflow_uuid", "revision", "contract_digest", "inputs", "outputs"], "publication");
   return `${publications.length} published workflow(s)`;
 }, { optional: true });
-await step("registry.entries", async () => {
-  const { entries } = await api.registry.entries();
-  return `${entries.length} entries`;
+await step("registry.entries / status / remoteSlaves", async () => {
+  const [{ entries }, status, slaves] = await Promise.all([api.registry.entries(), api.registry.status(), api.registry.remoteSlaves()]);
+  expectKeys(status, ["reported", "last_report", "active_count", "pending_count", "machine_id", "acceptance", "remote_slaves"], "registry status");
+  expectKeys(status.acceptance, ["single_machine", "reason", "reporter_machine_id", "remote_slaves"], "acceptance");
+  const pending = entries.filter((entry) => entry.status.includes("pending"));
+  if (pending.length !== status.pending_count) throw new Error(`挂起数不一致：entries=${pending.length} status=${status.pending_count}`);
+  return `${entries.length} entries · reported=${status.reported} pending=${status.pending_count} single_machine=${status.acceptance.single_machine} remote_slaves=${slaves.slaves.length}`;
 }, { optional: true });
 await step("decisions.incidents / errorDecisions", async () => {
   const [incidents, errors] = await Promise.all([api.decisions.incidents(), api.decisions.errorDecisions()]);
-  return `host_ready=${incidents.host_ready} incidents=${incidents.incidents.length} errors=${errors.items.length}`;
+  expectKeys(errors, ["decisions"], "error decisions");
+  return `host_ready=${incidents.host_ready} incidents=${incidents.incidents.length} errors=${errors.decisions.length}`;
 }, { optional: true });
 await step("driverPackages.inventory / catalog", async () => {
   const [inventory, catalog] = await Promise.all([api.driverPackages.inventory(), api.driverPackages.catalog()]);
@@ -274,11 +428,27 @@ await step("deviceProcesses.list / deviceClasses", async () => {
   return `processes=${listing.processes.length} running=${listing.processes.filter((p) => p.status === "running").length} classes=${classes.length}`;
 }, { optional: true });
 
-await step("labV1.layout", async () => {
-  const layout = await api.labV1.layout();
-  expectKeys(layout, ["layout_key", "revision", "cell_size", "zones", "walls", "created_at_ms", "updated_at_ms"], "layout");
-  return `revision=${layout.revision} zones=${layout.zones.length} walls=${layout.walls.length} cell=${layout.cell_size}`;
+await step("labV1.warehouse; deleted lab profile / layout / zones / placements → 404", async () => {
+  const warehouse = await api.labV1.warehouse();
+  const probe = createEdgeApi(baseUrl).http;
+  const deleted = [];
+  for (const [method, path] of [
+    ["GET", "/api/v1/lab/profile"],
+    ["GET", "/api/v1/lab/layout"],
+    ["POST", "/api/v1/lab/zones"],
+    ["DELETE", "/api/v1/lab/placements/smoke"],
+  ]) {
+    const error = await probe.request({ method, path, ...(method === "POST" ? { body: {} } : {}) }).then(() => null, (e) => e);
+    if (!(error instanceof ApiError) || error.status !== 404) throw new Error(`${method} ${path} 应已删除（404），实际 ${error?.status ?? "成功"}`);
+    deleted.push(`${method} ${path.replace("/api/v1", "")}`);
+  }
+  return `warehouse keys=${Object.keys(warehouse).join(",")}；已删除：${deleted.join("、")}`;
 });
+await step("processManagement.snapshot (/v1, envelope)", async () => {
+  const snapshot = await api.processManagement.snapshot();
+  expectKeys(snapshot, ["schemaVersion", "revision", "components"], "process snapshot");
+  return `${snapshot.schemaVersion} revision=${snapshot.revision} components=${Object.values(snapshot.components).map((c) => `${c.name}:${c.phase}`).join(" ")}`;
+}, { optional: true });
 
 await step("debug.databases + first table", async () => {
   const databases = await api.debug.databases();
@@ -291,7 +461,13 @@ await step("debug.databases + first table", async () => {
 
 if (doWrite) {
   console.log("\n--- write flows ---");
+  await step("no auth: a write without any credentials is accepted", async () => {
+    // 管理 API 不鉴权：不带任何令牌的写请求照常受理（取消重启在没有挂起的重启时是空操作）
+    const result = await api.system.cancelRestart();
+    return `DELETE /restart → pending=${result.pending}`;
+  });
   if (schedulerLocal && executionReady) await step("workflow step → resume", workflowStepSmoke);
+  if (schedulerLocal && executionReady) await step("workflow pause → resume (V1)", workflowPauseSmoke);
   if (schedulerLocal) {
     await step("workflow create → graph → delete", async () => {
       const wf = await api.workflowBackend.createWorkflow({ name: `smoke-${Date.now().toString(36)}`, tags: ["smoke"] });
@@ -301,26 +477,51 @@ if (doWrite) {
       return wf.uuid;
     });
   }
-  await step("material instantiate → move → delete", async () => {
+  await step("inventory commands: instantiate (display_name) → patch → move → delete; rejected → failure envelope", async () => {
     const classes = await api.materialsV1.registryClasses();
-    const roots = await api.materialsV1.instances(true);
+    const roots = await api.inventory.instances({ rootsOnly: true });
     const preferred = classes.find((c) => /tip/i.test(c.registry_class)) ?? classes[0];
     if (!preferred) throw new Error("registry 没有可实例化的资源类");
-    const created = await api.materialsV1.instantiate(preferred.registry_class, `smoke_${Date.now().toString(36)}`);
+    const label = `smoke_${Date.now().toString(36)}`;
+    const created = await api.inventory.instantiate(preferred.registry_class, label);
     const uuid = created.data.root_material_uuid;
+    // 物料 name = uuid；人读标签落在 display_name
+    const root = created.data.nodes.find((node) => node.material.material_uuid === uuid);
+    if (root?.material.name !== uuid || root.material.display_name !== label) {
+      throw new Error(`实例化后应 name = uuid、display_name = ${label}，实际 name=${root?.material.name} display_name=${root?.material.display_name}`);
+    }
+    const barcode = `SMOKE-${Date.now().toString(36).toUpperCase()}`;
+    const patched = await api.inventory.patch(uuid, { barcode, display_name: `${label}_renamed` });
+    if (patched.data.material.barcode !== barcode) throw new Error("条码没有写入");
+    if (patched.data.material.display_name !== `${label}_renamed` || patched.data.material.name !== uuid) throw new Error("display_name 没有写入或 name 被改动");
+    const detail = await api.inventory.instance(uuid);
+    if (detail.barcode !== barcode) throw new Error("/inventory/instances 读不到新条码");
+    const byLabel = await api.inventory.instances({ name: `${label}_renamed` });
+    if (!byLabel.some((item) => item.material.material_uuid === uuid)) throw new Error("?name= 没有按 display_name 筛到物料");
     let moved = "未移动（没有空位点）";
     const vacant = roots.flatMap((root) => root.sites.filter((site) => !site.occupied_material_uuid).map((site) => ({ root, site })))[0];
     if (vacant) {
       try {
-        await api.materialsV1.move({ material_uuid: uuid, destination_site_uuid: vacant.site.site_uuid, parent_material_uuid: vacant.root.material.material_uuid });
+        await api.inventory.move({ material_uuid: uuid, destination_site_uuid: vacant.site.site_uuid, parent_material_uuid: vacant.root.material.material_uuid });
         moved = `已移动到 ${vacant.root.material.resource_id}/${vacant.site.label}`;
       } catch (error) {
         moved = `移动被拒绝：${error?.message ?? error}`;
       }
     }
-    const removed = await api.materialsV1.remove(uuid, true);
-    return `${preferred.registry_class} → ${uuid.slice(0, 8)} · ${moved} · 删除 ${removed.data.deleted_material_uuids.length} 节点`;
+    const rejected = await api.inventory.move({ material_uuid: uuid, destination_site_uuid: crypto.randomUUID() }).then(() => null, (error) => error);
+    if (!(rejected instanceof InventoryCommandRejectedError) || typeof rejected.details?.command_id !== "string") {
+      throw new Error("移动到不存在的库位应是失败信封（error.details.command_id）");
+    }
+    const removed = await api.inventory.remove(uuid, true);
+    return `${preferred.registry_class} → ${uuid.slice(0, 8)}（name = uuid，display_name = ${label}_renamed）· 条码 ${barcode} · ${moved} · 被拒命令 ${rejected.code}/${rejected.symbol} · 删除 ${removed.data.deleted_material_uuids.length} 节点`;
   });
+  await step("registry pending batch apply / dismiss (only when nothing is pending)", async () => {
+    const status = await api.registry.status();
+    if (status.pending_count) return `有 ${status.pending_count} 个挂起条目，留给用户确认，跳过`;
+    const [applied, dismissed] = [await api.registry.applyPending(), await api.registry.dismissPending()];
+    if (applied.entries.length || dismissed.entries.length) throw new Error("没有挂起条目时批量确认不应改动任何条目");
+    return `apply → ${applied.entries.length}/${applied.failed.length}，dismiss → ${dismissed.entries.length}/${dismissed.failed.length}`;
+  }, { optional: true });
   if (executionReady && schedulerLocal) {
     await step("ad-hoc device action → terminal", async () => {
       const endpoints = await api.runtimeV1.endpoints();
@@ -347,6 +548,10 @@ if (doWrite) {
       return `${capability.device_uuid}/${capability.action_name} → ${latest.status} (${jobs.length} job)`;
     });
   }
+}
+
+if (doWrite && args.includes("--restart") && executionReady) {
+  await step("Host restart: 5001 + Retry-After backoff", restartRetrySmoke);
 }
 
 const failed = results.filter((item) => !item.ok);

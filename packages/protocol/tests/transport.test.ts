@@ -6,11 +6,14 @@ import { OPERATIONS, operationsOf } from "../src/catalog";
 import { createEdgeApi } from "../src/client";
 import {
   ApiError,
-  CONTROL_TOKEN_REJECTED_CODE,
+  BACKEND_BUSINESS_CODES,
+  BackendBusinessError,
   createHttpTransport,
   createSystemApi,
   hostlinkPeerState,
-  type ControlTokenProvider,
+  isBackendEnvelope,
+  isCapabilityUnavailable,
+  parseRetryAfter,
   type HostLinkPeer,
   type HostLinkStatus,
   type ProtocolDomain,
@@ -18,6 +21,7 @@ import {
 import { createDeviceProcessesApi } from "../src/device-processes";
 import { createDriverPackagesApi } from "../src/driver-packages";
 import { createLabV1Api } from "../src/lab-v1";
+import { createProcessManagementApi } from "../src/process-management";
 import { catalogOps, collectCalls, createMockHttp, DUMMY_ID } from "./helpers";
 
 /** 运行栈实测样本（host 进程 /api/v1/hostlink/peers 原样收录）。 */
@@ -32,24 +36,29 @@ const DOMAINS: ProtocolDomain[] = [
   "system",
   "runtime-v1",
   "workflow",
+  "run-history",
+  "scheduler",
   "registry",
+  "inventory",
   "materials-v1",
   "graphs-v1",
   "chemicals-v1",
   "telemetry-v1",
+  "device-state",
   "history-v1",
   "decisions",
   "driver-packages",
   "device-processes",
   "lab-v1",
+  "process-management",
   "debug",
 ];
 
 describe("system 协议与传输层", () => {
   it("URL 数组参数使用 FastAPI 可识别的重复 query key", () => {
     const http = createHttpTransport("http://edge.local");
-    expect(http.url("/api/v1/history/events", { event_types: ["job_result", "job_log"] }))
-      .toBe("http://edge.local/api/v1/history/events?event_types=job_result&event_types=job_log");
+    expect(http.url("/api/v1/edge/history/events", { event_types: ["job_result", "job_log"] }))
+      .toBe("http://edge.local/api/v1/edge/history/events?event_types=job_result&event_types=job_log");
   });
 
   it("目录按域分区后双向一致，且 method+path 跨域唯一", () => {
@@ -116,15 +125,121 @@ describe("system 协议与传输层", () => {
     });
   });
 
-  it("非 2xx 归一为 ApiError（status + 后端 detail），404/503 标记为不支持", async () => {
+  it("非 2xx 归一为 ApiError（status + 后端 detail / 信封 msg），404/503 标记为不支持", async () => {
     const mock = createMockHttp();
     const api = createSystemApi(mock.http);
-    mock.nextResponse = { status: 503, data: { detail: "scheduler authority is remote" } };
+    mock.nextResponse = { status: 404, data: { detail: "Not Found" } };
     const error = await api.schedulerResources().catch((e: unknown) => e);
     expect(error).toBeInstanceOf(ApiError);
-    expect(error).toMatchObject({ status: 503, message: "scheduler authority is remote" });
+    expect(error).toMatchObject({ status: 404, message: "Not Found" });
     expect((error as ApiError).isUnsupported).toBe(true);
     expect((error as ApiError).isNetwork).toBe(false);
+    expect(isCapabilityUnavailable(error)).toBe(true);
+
+    // 全量重置维护闸门：HTTP 503 + 信封 5001
+    mock.nextResponse = { status: 503, data: { code: 5001, error: { msg: "正在全量重置，停止接受业务请求" } } };
+    const gate = await api.restartStatus().catch((e: unknown) => e);
+    expect(gate).toMatchObject({ status: 503, message: "正在全量重置，停止接受业务请求", businessCode: 5001 });
+  });
+
+  it("V1 信封：code 0 解包 data，code != 0 抛 BackendBusinessError（符号码 / details）", async () => {
+    const mock = createMockHttp();
+    const api = createSystemApi(mock.http);
+    mock.nextResponse = { status: 200, data: { code: 0, data: { sequence: 3, requests: [], ownerships: [], handoffs: [] } } };
+    await expect(api.schedulerResources()).resolves.toEqual({ sequence: 3, requests: [], ownerships: [], handoffs: [] });
+
+    mock.nextResponse = { status: 200, data: { code: 0 } };
+    await expect(api.cancelRestart()).resolves.toBeUndefined();
+
+    mock.nextResponse = {
+      status: 200,
+      data: { code: 3003, error: { msg: "预检失败", code: "preflight_failed", details: { blockers: ["x"] } } },
+    };
+    const error = await api.requestRestart().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(BackendBusinessError);
+    expect(error).toMatchObject({ code: 3003, symbol: "preflight_failed", details: { blockers: ["x"] }, message: "预检失败" });
+    expect((error as BackendBusinessError).isConflict).toBe(true);
+
+    for (const code of [3002, 4001, 6000]) {
+      expect(new BackendBusinessError({ code, error: { msg: "x" } }).isNotFound, String(code)).toBe(true);
+    }
+    expect(isBackendEnvelope({ code: 0, data: [] })).toBe(true);
+    // 带 code 字段的业务 DTO（除 code / data / error 外还有别的键）不是信封
+    expect(isBackendEnvelope({ command_id: "c", status: "rejected", code: 4001 })).toBe(false);
+  });
+
+  it("GET 遇 5001（Host 启动 / 重启中）按 Retry-After 有限退避重试；写请求不重试", async () => {
+    const waits: number[] = [];
+    let calls = 0;
+    const responses = [
+      { status: 200, data: { code: 5001, error: { msg: "Host 执行进程暂不可用" } }, headers: { "retry-after": "3" } },
+      { status: 200, data: { code: 5001, error: { msg: "Host 执行进程暂不可用" } }, headers: {} },
+      { status: 200, data: { code: 0, data: { pending: false } } },
+    ];
+    const instance = {
+      request: async () => responses[Math.min(calls++, responses.length - 1)],
+    } as unknown as AxiosInstance;
+    const http = createHttpTransport("http://edge.local", {
+      axios: instance,
+      sleep: async (ms) => {
+        waits.push(ms);
+      },
+      unavailableRetry: { retries: 2, delayMs: 500, maxDelayMs: 2_000 },
+    });
+    await expect(http.request({ method: "GET", path: "/api/v1/restart" })).resolves.toEqual({ pending: false });
+    // 第一次读到 Retry-After: 3 → 按上限 2000；第二次读不到（跨源）→ 缺省 500
+    expect(waits).toEqual([2_000, 500]);
+
+    calls = 0;
+    waits.length = 0;
+    const write = await http.request({ method: "POST", path: "/api/v1/restart", body: {} }).catch((e: unknown) => e);
+    expect(write).toBeInstanceOf(BackendBusinessError);
+    expect(write).toMatchObject({ code: 5001, retryAfterMs: 3_000 });
+    expect(waits).toEqual([]);
+    expect(isCapabilityUnavailable(write)).toBe(true);
+
+    // 重试用尽仍是 5001：抛出，页面按「暂不可用」降级
+    let unavailableCalls = 0;
+    const always = {
+      request: async () => {
+        unavailableCalls += 1;
+        return { status: 200, data: { code: 5001, error: { msg: "scheduler authority is remote" } } };
+      },
+    } as unknown as AxiosInstance;
+    const exhausted = createHttpTransport("http://edge.local", { axios: always, sleep: async () => undefined });
+    await expect(exhausted.request({ method: "GET", path: "/api/v1/timeline" })).rejects.toMatchObject({ code: 5001 });
+    expect(unavailableCalls).toBe(3);
+    expect(parseRetryAfter("2")).toBe(2_000);
+    expect(parseRetryAfter(undefined)).toBeUndefined();
+  });
+
+  it("health / readiness 也是信封；readiness 503 + 5001 返回 error.details 里的摘要", async () => {
+    const mock = createMockHttp();
+    const api = createSystemApi(mock.http);
+    mock.nextResponse = { status: 200, data: { code: 0, data: { status: "ok", scheduler: "ready", scheduler_mode: "local", execution: "ready" } } };
+    await expect(api.health()).resolves.toMatchObject({ scheduler_mode: "local", execution: "ready" });
+    mock.nextResponse = {
+      status: 503,
+      data: {
+        code: 5001,
+        error: {
+          msg: "Host 子进程未接入控制面",
+          code: "not_ready",
+          details: { status: "starting", phase: "host_restarting", scheduler: "local", execution: "restarting", reasons: ["Host 子进程未接入控制面"] },
+        },
+      },
+    };
+    await expect(api.readiness()).resolves.toMatchObject({ status: "starting", phase: "host_restarting", execution: "restarting" });
+  });
+
+  it("未匹配的路由是 404 + 信封 4001（ApiError，按「不支持」降级）", async () => {
+    const mock = createMockHttp();
+    const api = createSystemApi(mock.http);
+    mock.nextResponse = { status: 404, data: { code: 4001, error: { msg: "Not Found" } } };
+    const error = await api.restartStatus().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: 404, businessCode: 4001, message: "Not Found" });
+    expect(isCapabilityUnavailable(error)).toBe(true);
   });
 
   it("网络层失败归一为 ApiError(status=0)", async () => {
@@ -182,15 +297,21 @@ describe("system 协议与传输层", () => {
       "system",
       "runtimeV1",
       "workflowBackend",
+      "runHistory",
+      "scheduler",
       "registry",
+      "inventory",
       "materialsV1",
       "graphsV1",
       "chemicalsV1",
       "telemetryV1",
+      "deviceState",
       "historyV1",
       "decisions",
       "driverPackages",
       "deviceProcesses",
+      "labV1",
+      "processManagement",
       "debug",
     ] as const) {
       expect(typeof api.domains[domain], domain).toBe("object");
@@ -209,6 +330,9 @@ describe("system 协议与传输层", () => {
       install: () => api.install({ spec: "git+https://example.com/acme/devices.git" }),
       operations: () => api.operations(),
       operation: () => api.operation(DUMMY_ID),
+      changes: () => api.changes(),
+      confirmOperation: () => api.confirmOperation(DUMMY_ID, { expected_version: 1, reason: "现场已确认" }),
+      recoverOperation: () => api.recoverOperation(DUMMY_ID, { expected_version: 1, reason: "重试" }),
       setEnabled: () => api.setEnabled(DUMMY_ID, false),
       uninstall: () => api.uninstall(DUMMY_ID),
       graphs: () => api.graphs(DUMMY_ID),
@@ -240,24 +364,52 @@ describe("system 协议与传输层", () => {
     expect(mock.calls.some((call) => call.url.endsWith("/logs"))).toBe(false);
   });
 
-  it("覆盖 lab-v1 域全部 HTTP 操作，PUT 原样携带 revision 乐观锁", async () => {
+  it("覆盖 lab-v1 域全部 HTTP 操作：只剩仓储、组合视图与演示数据（档案 / 布局 / 分区 / 摆放已删除）", async () => {
     const mock = createMockHttp();
     const api = createLabV1Api(mock.http);
-    const write = { revision: 3, cell_size: 100, zones: [{ id: "prep", name: "样品制备区", color: "#2e5bff", cells: ["0,0"] }], walls: ["1,1"] };
     const called = await collectCalls(mock, {
-      layout: () => api.layout(),
-      saveLayout: () => api.saveLayout(write),
-      resetLayout: () => api.resetLayout(),
+      warehouse: () => api.warehouse(),
+      assembly: () => api.assembly(DUMMY_ID),
+      seedDemo: () => api.seedDemo(),
     });
     expect(called).toEqual(catalogOps("lab-v1"));
-    const put = mock.calls.find((call) => call.method === "PUT");
-    expect(put?.data).toEqual(write);
+    expect(Object.keys(api).sort()).toEqual(["assembly", "seedDemo", "warehouse"]);
+    expect(OPERATIONS.some((operation) => /\/lab\/(profile|layout|zones|placements)/.test(operation.path))).toBe(false);
+
+    mock.nextResponse = { status: 200, data: { code: 0, data: { seeded: { zones: 0, templates: 2, instances: 0, placements: 0, lots: 3 } } } };
+    await expect(api.seedDemo()).resolves.toEqual({ seeded: { zones: 0, templates: 2, instances: 0, placements: 0, lots: 3 } });
+  });
+
+  it("覆盖 process-management 域：/v1 路由也是信封，V1 符号码在 error.code", async () => {
+    const mock = createMockHttp();
+    const api = createProcessManagementApi(mock.http);
+    const called = await collectCalls(mock, {
+      snapshot: () => api.snapshot(),
+      submitOperation: () => api.submitOperation({ operationId: "op-1", command: "scheduler.drain" }),
+      operation: () => api.operation(DUMMY_ID),
+      logs: () => api.logs(DUMMY_ID, 4096),
+    });
+    expect(called).toEqual(catalogOps("process-management"));
+    expect(mock.calls[1]?.data).toEqual({ parameters: {}, operationId: "op-1", command: "scheduler.drain" });
+
+    mock.nextResponse = { status: 200, data: { code: 3003, error: { msg: "快照修订已变化", code: "revision_conflict" } } };
+    const error = await api.submitOperation({ operationId: "op-2", command: "workspace.restart", expectedRevision: 1 }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(BackendBusinessError);
+    expect(error).toMatchObject({ code: 3003, symbol: "revision_conflict", message: "快照修订已变化" });
+    expect((error as BackendBusinessError).isConflict).toBe(true);
+    // 提交操作是 HTTP 202 + 成功信封
+    mock.nextResponse = { status: 202, data: { code: 0, data: { schemaVersion: "unilab-workspace-host/v1", operationId: "op-3", phase: "accepted" } } };
+    await expect(api.submitOperation({ operationId: "op-3", command: "scheduler.resume" })).resolves.toMatchObject({ operationId: "op-3" });
+    mock.nextResponse = { status: 200, data: { code: 4001, error: { msg: "操作不存在", code: "operation_not_found" } } };
+    const missing = await api.operation("op-x").catch((e: unknown) => e);
+    expect(missing).toMatchObject({ code: 4001, symbol: "operation_not_found" });
+    expect((missing as BackendBusinessError).isNotFound).toBe(true);
   });
 });
 
-describe("控制令牌（写请求鉴权）", () => {
+describe("请求头（管理 API 不鉴权）", () => {
   /** 只记录 method + 每次请求的 headers；所有请求回 200 空对象。 */
-  function recordingApi(getToken?: ControlTokenProvider) {
+  function recordingApi() {
     const seen: Array<{ method: string; headers: Record<string, string> | undefined }> = [];
     const instance = {
       request: async (config: { method?: string; headers?: Record<string, string> }) => {
@@ -265,80 +417,29 @@ describe("控制令牌（写请求鉴权）", () => {
         return { status: 200, data: {} };
       },
     } as unknown as AxiosInstance;
-    const api = createEdgeApi("http://edge.local", { axios: instance, getToken });
+    const api = createEdgeApi("http://edge.local", { axios: instance });
     return { seen, api };
   }
 
-  const layout = { revision: 1, cell_size: 100, zones: [], walls: [] };
-
-  it("设置令牌时写请求带 Authorization: Bearer，并与 Content-Type 合并；读请求不带", async () => {
-    const { seen, api } = recordingApi(() => "tok-123");
+  it("写请求只带 Content-Type（有正文时），不带 X-UniLab-Token / Authorization；读请求不带任何头", async () => {
+    const { seen, api } = recordingApi();
     await api.domains.system.requestRestart({ mode: "quiescent" });
-    await api.domains.labV1.saveLayout(layout);
+    await api.domains.workflowBackend.updateWorkflow("wf-1", { name: "x" });
     await api.domains.system.cancelRestart();
     await api.domains.system.restartStatus();
+    await api.domains.processManagement.submitOperation({ operationId: "op", command: "scheduler.resume" });
     expect(seen).toEqual([
-      { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer tok-123" } },
-      { method: "PUT", headers: { "Content-Type": "application/json", Authorization: "Bearer tok-123" } },
-      { method: "DELETE", headers: { Authorization: "Bearer tok-123" } },
+      { method: "POST", headers: { "Content-Type": "application/json" } },
+      { method: "PUT", headers: { "Content-Type": "application/json" } },
+      { method: "DELETE", headers: undefined },
       { method: "GET", headers: undefined },
+      { method: "POST", headers: { "Content-Type": "application/json" } },
     ]);
   });
 
-  it("未提供 getToken、或返回空值 / 空白时，请求头与旧行为逐字节一致", async () => {
-    const providers: Array<ControlTokenProvider | undefined> = [
-      undefined,
-      () => null,
-      () => undefined,
-      () => "",
-      () => "  \n",
-    ];
-    for (const getToken of providers) {
-      const { seen, api } = recordingApi(getToken);
-      await api.domains.system.requestRestart({ mode: "quiescent" });
-      await api.domains.system.cancelRestart();
-      await api.domains.system.restartStatus();
-      expect(seen.map((call) => call.headers)).toEqual([{ "Content-Type": "application/json" }, undefined, undefined]);
-    }
-  });
-
-  it("令牌每次请求现取：更新或清除后无需重建 API", async () => {
-    let token: string | null = null;
-    const { seen, api } = recordingApi(() => token);
-    await api.domains.system.cancelRestart();
-    token = "first";
-    await api.domains.system.cancelRestart();
-    token = " second\n";
-    await api.domains.system.cancelRestart();
-    token = null;
-    await api.domains.system.cancelRestart();
-    expect(seen.map((call) => call.headers?.Authorization)).toEqual([
-      undefined,
-      "Bearer first",
-      "Bearer second",
-      undefined,
-    ]);
-  });
-
-  it("401 + code 4001 识别为控制令牌被拒；其他 401 / 403 不算", async () => {
-    const mock = createMockHttp();
-    const api = createSystemApi(mock.http);
-    mock.nextResponse = {
-      status: 401,
-      data: {
-        code: CONTROL_TOKEN_REJECTED_CODE,
-        error: { msg: "写操作需要控制令牌" },
-        detail: "control token missing or invalid",
-      },
-    };
-    const error = await api.requestRestart().catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(ApiError);
-    expect(error).toMatchObject({ status: 401, message: "control token missing or invalid" });
-    expect((error as ApiError).isControlTokenRejected).toBe(true);
-    expect((error as ApiError).isUnsupported).toBe(false);
-
-    expect(new ApiError(401, "unauthorized", { detail: "unauthorized" }).isControlTokenRejected).toBe(false);
-    expect(new ApiError(403, "forbidden", { code: 4001 }).isControlTokenRejected).toBe(false);
-    expect(new ApiError(401, "x", { code: "4001" }).isControlTokenRejected).toBe(true);
+  it("业务码表不再有「未授权」1002；401 不是能力不可用", () => {
+    expect(Object.values(BACKEND_BUSINESS_CODES)).not.toContain(1002);
+    expect(new ApiError(401, "x", { code: 1002 }).isUnsupported).toBe(false);
   });
 });
+

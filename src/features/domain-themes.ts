@@ -10,7 +10,6 @@ export const DEFAULT_LAB_THEME_ID: LabThemeId = "general";
 
 export type ThemeNavKey =
   | "console"
-  | "lab"
   | "workflows"
   | "timeline"
   | "monitor"
@@ -73,7 +72,6 @@ export const LAB_THEMES: Record<LabThemeId, LabThemeConfig> = {
     toolkitDescription: "汇集分子、序列与晶体结构等常用工具，随时取用。",
     nav: {
       console: "运行总览",
-      lab: "实验室地图",
       workflows: "实验流程",
       timeline: "任务排程",
       monitor: "运行监控",

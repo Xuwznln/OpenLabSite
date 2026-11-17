@@ -1,4 +1,9 @@
-/** Browser-safe read projection of UniLabOS `history.v1` / `history.db`. */
+/**
+ * history-v1 域：UniLabOS `history.v1` / `history.db` 的浏览器只读投影（Host 的事件 / 载荷存储）。
+ *
+ * V1 合同把 `/api/v1/history/*` 让给了工作流运行历史（见 run-history 域），本存储整体搬到
+ * `/api/v1/edge/history/*`（Host 专有，经调度权威代理；Host 启动中返回 5001）。DTO 不变。
+ */
 import type { HttpTransport, JsonObject } from "./common.js";
 
 export type HistoryV1EventType =
@@ -61,17 +66,17 @@ export interface HistoryV1Query {
 export function createHistoryV1Api(http: HttpTransport) {
   return {
     payload: (payloadUuid: string) =>
-      http.request<HistoryV1Payload>({ method: "GET", path: `/api/v1/history/payloads/${encodeURIComponent(payloadUuid)}` }),
+      http.request<HistoryV1Payload>({ method: "GET", path: `/api/v1/edge/history/payloads/${encodeURIComponent(payloadUuid)}` }),
     events: (params: HistoryV1Query = {}) =>
       http.request<HistoryV1Event[]>({
         method: "GET",
-        path: "/api/v1/history/events",
+        path: "/api/v1/edge/history/events",
         params: { ...params },
       }),
     event: (eventUuid: string) =>
-      http.request<HistoryV1Event>({ method: "GET", path: `/api/v1/history/events/${encodeURIComponent(eventUuid)}` }),
+      http.request<HistoryV1Event>({ method: "GET", path: `/api/v1/edge/history/events/${encodeURIComponent(eventUuid)}` }),
     replacementChain: (eventUuid: string) =>
-      http.request<HistoryV1Event[]>({ method: "GET", path: `/api/v1/history/events/${encodeURIComponent(eventUuid)}/replacement-chain` }),
+      http.request<HistoryV1Event[]>({ method: "GET", path: `/api/v1/edge/history/events/${encodeURIComponent(eventUuid)}/replacement-chain` }),
   };
 }
 

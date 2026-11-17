@@ -2,8 +2,10 @@
 /**
  * 任务运行时的只读画布：把任务提交时固化的 `workflow_snapshot` 画成图，用节点运行的状态着色。
  *
- * - 节点 = 快照 nodes（设备动作 / host_node 动作 / 循环容器），边 = 快照 edges ∪ execution_policy.depends_on；
+ * - 节点 = 快照 nodes（设备动作 / host_node 动作 / 循环容器 / 条件 / 人工物料），边 = 快照 edges ∪
+ *   execution_policy.depends_on；展示分组（ctx.group / ctx.parallel）不执行、没有节点运行，不画，成员照常排；
  * - 循环容器画成框（dagre 复合节点），循环体成员在框里，框头显示"第 i/N 轮"；
+ * - 结构节点（条件 / 人工物料）带类型徽标与摘要；`ctx.lock` 作用域里的节点带锁标记；
  * - 只读：不能拖、不能连、不能选，只能平移缩放；
  * - 布局用 dagre 从左到右自动排（快照里的 pose 只是画布坐标，运行页统一自动布局更稳）。
  */
@@ -11,6 +13,7 @@ import { computed, ref, watch } from "vue";
 import { Handle, Position, VueFlow, useVueFlow, type Edge, type Node } from "@vue-flow/core";
 import { Background } from "@vue-flow/background";
 import dagre from "@dagrejs/dagre";
+import { compoundLayoutEdges } from "../features/compound-layout";
 import type {
   BackendLoopProgress,
   BackendManualConfirmation,
@@ -18,7 +21,8 @@ import type {
   BackendWorkflowTask,
 } from "@openlab/protocol";
 import { snapshotNodes, type SnapshotNode } from "../features/task-jobs";
-import { describeLoopProgress, describeLoopNode, loopNodeDataFromSpec } from "../features/workflow-loops";
+import { describeLoopProgress } from "../features/workflow-loops";
+import { describeStructuralNode, nodeTypeLabel, resourceScopeLabels, structuralKind } from "../features/workflow-node-kinds";
 import { statusMeta } from "../theme";
 
 const props = defineProps<{
@@ -46,6 +50,10 @@ interface RunNodeData {
   disabled: boolean;
   /** 循环容器：轮次进度（第 i/N 轮） */
   loopProgress?: string;
+  /** 结构节点（条件 / 人工物料）的类型徽标 */
+  kindLabel?: string;
+  /** 所在的 ctx.lock 作用域（悬停看资源） */
+  lockLabel?: string;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -67,14 +75,23 @@ function isLoopSnapshotNode(node: SnapshotNode): boolean {
 }
 
 const graph = computed(() => {
-  const nodes = snapshotNodes(props.task);
+  const allNodes = snapshotNodes(props.task);
+  const byUuid = new Map(allNodes.map((n) => [n.uuid, n]));
+  // 展示分组不执行：不画，成员挂到分组外最近的循环
+  const nodes = allNodes.filter((node) => structuralKind(node.type) !== "group");
   const runByNode = new Map(props.runs.map((run) => [run.workflow_node_uuid, run]));
   const pendingConfirmJobs = new Set(props.confirmations.filter((c) => c.status === "pending").map((c) => c.workflow_node_job_uuid));
-  const byUuid = new Map(nodes.map((n) => [n.uuid, n]));
-  // 执行父级：parent_uuid 指向的循环容器（组框等非循环父级不画）
+  const lockLabels = resourceScopeLabels(asRecord(asRecord(props.task?.workflow_snapshot)?.workflow)?.meta_data);
+  // 执行父级：沿 parent_uuid 找最近的循环容器（分组等非循环父级跳过）
   const loopParentOf = (node: SnapshotNode): string | undefined => {
-    const parent = node.parent_uuid ? byUuid.get(node.parent_uuid) : undefined;
-    return parent && isLoopSnapshotNode(parent) ? parent.uuid : undefined;
+    const seen = new Set<string>();
+    let parent = node.parent_uuid ? byUuid.get(node.parent_uuid) : undefined;
+    while (parent && !seen.has(parent.uuid)) {
+      if (isLoopSnapshotNode(parent)) return parent.uuid;
+      seen.add(parent.uuid);
+      parent = parent.parent_uuid ? byUuid.get(parent.parent_uuid) : undefined;
+    }
+    return undefined;
   };
 
   const g = new dagre.graphlib.Graph({ compound: true });
@@ -88,7 +105,6 @@ const graph = computed(() => {
     const key = `${source}->${target}`;
     if (edgeKeys.has(key)) return;
     edgeKeys.add(key);
-    g.setEdge(source, target);
     edges.push({ id: key, source, target, type: "smoothstep", style: { stroke: "#94a3b8", strokeWidth: 2 } });
   };
   for (const node of nodes) g.setNode(node.uuid, { width: NODE_W, height: NODE_H });
@@ -107,6 +123,9 @@ const graph = computed(() => {
     const dependsOn = asRecord(node.execution_policy)?.depends_on;
     if (Array.isArray(dependsOn)) for (const upstream of dependsOn) addEdge(String(upstream), node.uuid);
   }
+  // 连在循环节点本身的依赖：布局时换成循环的入口 / 出口成员（dagre 复合节点不支持连线直连），画面上的线不变
+  const members = nodes.map((node) => ({ id: node.uuid, parent: loopParentOf(node) ?? null }));
+  for (const edge of compoundLayoutEdges(members, edges)) g.setEdge(edge.source, edge.target);
   dagre.layout(g);
 
   // 循环框：簇外接框加内边距，并向上留出标题栏；成员坐标相对循环框
@@ -155,8 +174,10 @@ const graph = computed(() => {
     const position = parentFrame ? { x: absolute.x - parentFrame.x, y: absolute.y - parentFrame.y } : absolute;
     const isLoop = isLoopSnapshotNode(node);
     const frame = frames.get(node.uuid);
-    const loopSpec = isLoop ? loopNodeDataFromSpec(node.param, String(node.name ?? "")) : null;
+    const kind = structuralKind(node.type);
+    const structural = kind ? describeStructuralNode(node) : "";
     const progress = asRecord(run?.control_data)?.loop as Partial<BackendLoopProgress> | undefined;
+    const locks = lockLabels.get(node.uuid);
     return {
       id: node.uuid,
       type: isLoop ? "loop-run" : "run",
@@ -168,8 +189,8 @@ const graph = computed(() => {
       selectable: false,
       data: {
         title: isLoop ? String(node.name ?? "循环") : nodeTitle(node),
-        subtitle: isLoop
-          ? describeLoopNode(loopSpec ?? {})
+        subtitle: structural
+          ? structural
           : device
             ? `${device} · ${String(node.action_name ?? "")}`
             : String(node.action_name ?? node.type ?? ""),
@@ -180,6 +201,8 @@ const graph = computed(() => {
         waitingConfirm,
         disabled: Boolean((node as { disabled?: boolean }).disabled),
         loopProgress: isLoop ? describeLoopProgress(progress, status) : undefined,
+        kindLabel: kind && !isLoop ? nodeTypeLabel(kind) : undefined,
+        lockLabel: locks?.length ? locks.join("；") : undefined,
       },
     };
   });
@@ -225,7 +248,9 @@ watch(
           <Handle type="target" :position="Position.Left" class="run-handle" />
           <div class="run-head">
             <span class="run-dot" />
+            <span v-if="data.kindLabel" class="run-kind">{{ data.kindLabel }}</span>
             <span class="run-title">{{ data.title }}</span>
+            <span v-if="data.lockLabel" class="run-lock" :title="`资源锁 ${data.lockLabel}`">锁</span>
           </div>
           <div class="run-sub mono">{{ data.subtitle }}</div>
           <div class="run-status">
@@ -327,6 +352,27 @@ watch(
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.run-kind {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #ecfdf5;
+  color: #047857;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.run-lock {
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 10px;
+  font-weight: 600;
 }
 
 .run-sub {

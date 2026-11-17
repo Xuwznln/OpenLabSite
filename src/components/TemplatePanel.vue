@@ -95,7 +95,16 @@ function openGuide(tpl: WorkflowTemplate) {
       </div>
       <div class="tpl-desc">{{ row.tpl.description }}</div>
       <div class="tpl-badges">
-        <NTag size="tiny" :bordered="false">{{ row.stats.actions }} 动作</NTag>
+        <NTag
+          v-if="row.tpl.sourceOnly?.length"
+          size="tiny"
+          :bordered="false"
+          type="warning"
+          :title="`用了画布不能编辑的写法：${row.tpl.sourceOnly.join('、')}；点击后可从模板直接创建工作流`"
+        >
+          源码写法 · 整体创建
+        </NTag>
+        <NTag v-else size="tiny" :bordered="false">{{ row.stats.actions }} 动作</NTag>
         <NTag v-if="row.stats.slots" size="tiny" :bordered="false" type="warning">
           {{ row.stats.slots }} 空位
         </NTag>

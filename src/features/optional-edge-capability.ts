@@ -1,4 +1,5 @@
 import { ApiError } from "@openlab/protocol";
+// 注意：信封 5001（Host 启动 / 重启中）是暂时不可用，不在这里固化为「不支持」，下次健康周期重试。
 
 export type OptionalCapabilitySupport = "unknown" | "available" | "unsupported";
 

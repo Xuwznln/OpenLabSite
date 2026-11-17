@@ -639,3 +639,33 @@ describe("submitWorkflow", () => {
     expect(api.calls).toEqual(["create", "save@1", "task"]);
   });
 });
+
+describe("buildAuthorityGraph：人工物料（material_io）", () => {
+  const param = { mode: "load", mount: "deck", site: "A1", resource_template: "tip_box", assignee_user_ids: [] };
+
+  it("按 material_io 节点提交：没有 material_uuid / action_name，参数原样，算本机可执行", async () => {
+    const build = await buildAuthorityGraph({
+      nodes: [
+        actionNode("a", "pump_1", "dose", 0),
+        { id: "m", type: "material_io", position: { x: 300, y: 100 }, data: { label: "换盒", param } },
+      ],
+      edges: [{ source: "a", target: "m", mappings: [] }],
+      disabled: new Set(),
+      resolveDevice,
+    });
+    const node = build.nodes.find((item) => item.type === "material_io")!;
+    expect(node).toMatchObject({ name: "换盒", type: "material_io", param, execution_policy: { depends_on: [build.uuidByNodeId.get("a")] }, meta_data: { editor_node_id: "m" } });
+    expect(node).not.toHaveProperty("material_uuid");
+    expect(node).not.toHaveProperty("action_name");
+    expect(build.notLocallyExecutable).toEqual([]);
+  });
+
+  it("参数未完成（缺库位 / 模板）时拦下并说清缺什么", async () => {
+    await expect(buildAuthorityGraph({
+      nodes: [{ id: "m", type: "material_io", position: { x: 0, y: 0 }, data: { label: "", param: { mode: "load", assignee_user_ids: [] } } }],
+      edges: [],
+      disabled: new Set(),
+      resolveDevice,
+    })).rejects.toThrow(/人工装入.*挂载物料/);
+  });
+});
