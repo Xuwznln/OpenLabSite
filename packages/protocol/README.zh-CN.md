@@ -23,7 +23,7 @@
 
 **SDK 名称与 HTTP 协议版本分开管理。** npm 包名保持 `@openlab/protocol`，
 现有入口 `createEdgeApi` 保持兼容；它访问的是后端 API，不负责设备驱动、调度或数据库访问。
-3.x 面向 Uni-Lab-OS V1.0 合同（统一分支 0.13 发布线）：V1 响应信封、`X-UniLab-Token` 写请求头，
+3.x 面向 Uni-Lab-OS V1.0 合同（统一分支 0.13 发布线）：V1 响应信封、管理 API 不鉴权，
 物料写入只有 `POST /api/v1/inventory/commands` 一个入口。
 
 ## 安装与运行环境
@@ -86,16 +86,10 @@ try {
 `127.0.0.1:8002` 是调用方机器上的后端管理 API，不是 HostLink 设备通信端口。
 能力是否可用取决于后端版本、进程角色和当前运行状态。
 
-### 控制令牌
+### 不鉴权
 
-写请求（POST / PUT / PATCH / DELETE）必须在请求头 `X-UniLab-Token`（`CONTROL_TOKEN_HEADER`）带后端的控制面令牌，
-缺失或错误时后端返回 HTTP 401 + 业务码 1002（`error.isControlTokenRejected`）。在后端机器上执行 `unilab token`
-查看令牌，再传入取值函数；每次写请求现取，更新令牌无需重建客户端。读请求与事件流始终不带令牌。
-`Authorization: Bearer` 在 V1 合同里留给工站 api_key，本 SDK 不使用。
-
-```ts
-const api = createEdgeApi("http://127.0.0.1:8002", { getToken: () => localStorage.getItem("token") });
-```
+管理 API 不鉴权：核心已删除控制面令牌（`X-UniLab-Token`、`unilab token`）与 V1 工站 api_key，请求不带任何凭据，
+也没有「未授权」业务码。访问控制交给网络边界（实验室局域网、反向代理）。
 
 ### Host 重启（业务码 5001）
 
@@ -182,7 +176,6 @@ type InstallRequest = OpenApiComponents["schemas"]["DriverPackageInstallRequest"
 | 错误 | 处理原则 |
 | --- | --- |
 | `ApiError`，`status = 0` | 检查网络、超时和 CORS；保留上次读取的数据 |
-| `ApiError`，401 + 业务码 1002 | 控制面令牌缺失或不正确（`isControlTokenRejected`） |
 | `ApiError`，404 / 503 | 当前进程未挂载该路由，或全量重置维护闸门；按「不可用」降级 |
 | `BackendBusinessError` | V1 信封中的业务失败（`code` / `symbol` / `details`；`isNotFound` / `isConflict` / `isInvalidInput` / `isUnavailable`），不视作成功响应 |
 | `InventoryCommandRejectedError` / `TaskCommandRejectedError` | 库存命令 / 任务命令被拒（`status: "rejected"`） |

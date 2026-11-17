@@ -67,8 +67,7 @@ Host 的统一 append-only 历史流（history.db）。V1 合同把 `/api/v1/his
 
 原 V1 Workspace Host 合同，挂在调度权威的管理应用上（`server/api/process_management.py`）。路径**不带 `/api` 前缀**，
 成功是**裸 JSON**，失败是 HTTP 状态 + `{"error": {"code", "message", "details?"}}`（不存在 404、`operation_conflict` /
-`revision_conflict` 409、其余 400、日志暂不可读 503 `component_unavailable`），SDK 抛 `ApiError`。写操作同样要
-`X-UniLab-Token`，被拒是 HTTP 401 + `{"error": {"code": "unauthorized"}}`（`ApiError.isControlTokenRejected` 也认这种形状）。
+`revision_conflict` 409、其余 400、日志暂不可读 503 `component_unavailable`），SDK 抛 `ApiError`。
 
 | 方法 | 路径 | SDK | 说明 |
 | --- | --- | --- | --- |

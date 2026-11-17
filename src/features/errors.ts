@@ -4,11 +4,9 @@
  * - 网络不可达：传输层只给网络错误，这里明确指向后端进程；
  * - 404 / 503 / 业务码 5001：多数是进程角色不同（Host vs --role backend）或 Host 正在启动 / 重启，
  *   不是程序缺陷；
- * - 其他业务码（1000 / 1001 / 3002 / 3003 / 4001 / 6xxx …）：后端 message 已经是人话，加上类别透出；
- * - 401 + 1002（写请求缺控制令牌或令牌不对）：统一文案，并上报给连接设置弹出填写入口。
+ * - 其他业务码（1000 / 1001 / 3002 / 3003 / 4001 / 6xxx …）：后端 message 已经是人话，加上类别透出。
  */
 import { ApiError, BACKEND_BUSINESS_CODES, BackendBusinessError, isCapabilityUnavailable } from "@openlab/protocol";
-import { CONTROL_TOKEN_REJECTED_MESSAGE, reportControlTokenRejected } from "./control-token";
 
 const BUSINESS_CODE_LABELS: Record<number, string> = {
   [BACKEND_BUSINESS_CODES.invalidInput]: "参数无效",
@@ -30,10 +28,6 @@ export function describeError(error: unknown): string {
   }
   if (error instanceof ApiError) {
     if (error.isNetwork) return "无法连接后端：进程未启动、地址不对或网络不可达";
-    if (error.isControlTokenRejected) {
-      reportControlTokenRejected(error);
-      return CONTROL_TOKEN_REJECTED_MESSAGE;
-    }
     if (error.status === 404) return "当前进程不提供该接口（Host 与 --role backend 角色不同）";
     if (error.status === 503) return "该能力在当前进程暂不可用（执行面或调度权威未就绪）";
     if (error.status === 409) return `操作与当前状态冲突：${error.message}`;

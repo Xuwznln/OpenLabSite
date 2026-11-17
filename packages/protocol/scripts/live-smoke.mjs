@@ -1,33 +1,28 @@
 /**
  * 对着一台真实微后端（Uni-Lab-OS V1.0 合同）跑通浏览器会用到的读路径与关键写流程。
  *
- *   node packages/protocol/scripts/live-smoke.mjs [http://127.0.0.1:8002] [--write] [--token <t>]
- *   OPENLAB_CONTROL_TOKEN=<t> pnpm --filter @openlab/protocol smoke -- http://127.0.0.1:8002 --write
+ *   node packages/protocol/scripts/live-smoke.mjs [http://127.0.0.1:8002] [--write]
+ *   pnpm --filter @openlab/protocol smoke -- http://127.0.0.1:8002 --write
  *   pnpm --filter @openlab/protocol smoke -- http://127.0.0.1:8002 --write --step-only
  *   pnpm --filter @openlab/protocol smoke -- http://127.0.0.1:8002 --write --restart   # 另测 Host 重启期间的 5001 退避
  *
- * 写请求的控制面 token 按 `--token`、`OPENLAB_CONTROL_TOKEN`、`UNILABOS_BASICCONFIG_CONTROL_TOKEN` 依次取，
- * 放在 `X-UniLab-Token` 请求头（运行 unilab 的机器上 `unilab token` 可查看）。
+ * 管理 API 不鉴权：请求不带任何令牌。
  *
  * 读路径：每个域的列表接口都要 2xx + 信封 code 0，且形状符合类型的关键字段。
- * --write：控制面 token 被拒（无 token 写 → 401 + 1002）；逐步 / V1 暂停任务；Workflow 定义增删；
+ * --write：写请求不需要令牌；逐步 / V1 暂停任务；Workflow 定义增删；
  * 库存命令出库一件物料、改条码、移动到空位点、删除，被拒命令映射为业务错误；
  * 对在线设备提交一个 always_free 动作并等待任务终态。
  */
-import { createEdgeApi, ApiError, BackendBusinessError, isCapabilityUnavailable } from "../dist/index.js";
+import { createEdgeApi, BackendBusinessError, isCapabilityUnavailable } from "../dist/index.js";
 
 const args = process.argv.slice(2);
 const flagValue = (name) => {
   const index = args.indexOf(name);
   return index >= 0 ? args[index + 1] : undefined;
 };
-const tokenArg = flagValue("--token");
-const baseUrl =
-  args.find((arg, index) => !arg.startsWith("--") && args[index - 1] !== "--token") ?? process.env.OPENLAB_EDGE_URL ?? "http://127.0.0.1:8002";
+const baseUrl = args.find((arg) => !arg.startsWith("--")) ?? process.env.OPENLAB_EDGE_URL ?? "http://127.0.0.1:8002";
 const doWrite = args.includes("--write");
-const token = (tokenArg ?? process.env.OPENLAB_CONTROL_TOKEN ?? process.env.UNILABOS_BASICCONFIG_CONTROL_TOKEN ?? "").trim();
-const api = createEdgeApi(baseUrl, { getToken: () => token }).domains;
-const anonymous = createEdgeApi(baseUrl).domains;
+const api = createEdgeApi(baseUrl).domains;
 
 const results = [];
 function record(name, ok, detail = "") {
@@ -66,7 +61,6 @@ record(
 );
 const executionReady = health.execution === "ready";
 const schedulerLocal = (health.scheduler_mode ?? health.scheduler) !== "remote";
-if (doWrite && !token) console.log("WARN  --write 没有控制面 token：写请求会被 401 拒绝（--token / OPENLAB_CONTROL_TOKEN）");
 
 async function waitUntil(read, predicate) {
   const deadline = Date.now() + 10_000;
@@ -446,13 +440,10 @@ await step("debug.databases + first table", async () => {
 
 if (doWrite) {
   console.log("\n--- write flows ---");
-  await step("control token: X-UniLab-Token required (no token → 401 + 1002)", async () => {
-    const rejected = await anonymous.workflowBackend.createWorkflow({ name: `no-token-${Date.now()}` }).then(() => null, (error) => error);
-    if (!rejected) return "后端未启用控制面 token（写请求无需令牌）";
-    if (!(rejected instanceof ApiError) || !rejected.isControlTokenRejected) {
-      throw new Error(`无令牌写请求应 401 + 1002，实际：${rejected?.status ?? ""} ${rejected?.message ?? rejected}`);
-    }
-    return `401 + ${rejected.businessCode}: ${rejected.message}`;
+  await step("no auth: a write without any credentials is accepted", async () => {
+    // 管理 API 不鉴权：不带任何令牌的写请求照常受理（取消重启在没有挂起的重启时是空操作）
+    const result = await api.system.cancelRestart();
+    return `DELETE /restart → pending=${result.pending}`;
   });
   if (schedulerLocal && executionReady) await step("workflow step → resume", workflowStepSmoke);
   if (schedulerLocal && executionReady) await step("workflow pause → resume (V1)", workflowPauseSmoke);

@@ -17,8 +17,8 @@ Module Federation。AI 应从现有页面复制结构，再按用户所在学科
 - `packages/protocol/`：协议类型、客户端、目录（`catalog.ts`）、测试与 live smoke
 - `docs/protocol/`：各域规范
 - 微后端的 REST 路由（Uni-Lab-OS V1.0 合同）、SSE 事件名（`workflow.runtime.changed` 等）、V1 信封与业务码
-  （`{code, data}` / `{code, error}`；1002 = 控制面 token 被拒，4001 = 资源不存在，5001 = Host 暂不可用）、
-  `X-UniLab-Token` 写请求头、`POST /inventory/commands` 库存命令（materials.v1 变更信封 / V1 类型化命令，裸结果）
+  （`{code, data}` / `{code, error}`；4001 = 资源不存在，5001 = Host 暂不可用；管理 API 不鉴权）、
+  `POST /inventory/commands` 库存命令（materials.v1 变更信封 / V1 类型化命令，裸结果）
 - 状态词汇（Task / Node Job / 执行 job / 物料 lifecycle / registry 条目状态）
 - 四个 SQLite 库的 schema
 
@@ -73,6 +73,5 @@ pnpm run app:build
 ```
 
 四项必须通过。涉及协议的改动还需对着真实微后端跑
-`OPENLAB_CONTROL_TOKEN=<unilab token 的输出> pnpm --filter @openlab/protocol smoke -- http://127.0.0.1:8002 --write`
-（写请求需要控制面 token；也可用 `--token <t>`）。
+`pnpm --filter @openlab/protocol smoke -- http://127.0.0.1:8002 --write`（管理 API 不鉴权，不需要令牌）。
 不要提交生成的 `dist/`。不要修改协议来消除 TypeScript 错误；应在页面内正确使用现有类型。

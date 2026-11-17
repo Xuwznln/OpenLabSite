@@ -44,7 +44,7 @@ src/vibe-cases/organic-synthesis/OrganicSynthesisWorkbench.vue。
                   │
 微后端协议与数据真相（锁定）
   ├─ 协议域（docs/protocol/README.md）
-  ├─ V1 信封与业务码 / X-UniLab-Token / 库存命令（materials.v1 幂等信封）
+  ├─ V1 信封与业务码 / 库存命令（materials.v1 幂等信封）
   └─ 四个 SQLite 库
 ```
 

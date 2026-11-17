@@ -145,7 +145,7 @@ const CONTROL_PLANE_OPERATIONS = new Set([
   "GET /api/v1/registry/digest",
   "POST /api/v1/registry/reports",
   "POST /api/v1/resource-templates",
-  // V1 工站调用：只认工站 api_key（Authorization: Bearer），不接受控制面 token
+  // V1 工站调用（工站 → 调度权威发起工作流），浏览器不调
   "POST /api/v1/station/workflow-invocations",
 ]);
 const UNADOPTED_GROUPS = {

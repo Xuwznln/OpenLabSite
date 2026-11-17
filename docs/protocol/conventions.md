@@ -38,7 +38,7 @@
   （`catalog` 校验脚本硬性禁止，§11）。
 - **能力而非版本探测**：页面按 `GET /api/v1/health` 与 404 / 503 / 信封 5001 判断"当前进程有没有这项能力"，
   而不是按 unilabos 版本号分叉（§8）。
-- **写操作要控制面 token**：所有 POST / PUT / PATCH / DELETE 带 `X-UniLab-Token`（§9）；读与 SSE 不带。
+- **管理 API 不鉴权**：读写请求都不带令牌（控制面 token 与 V1 工站 api_key 已在核心删除，§9）。
 
 ## 2. URL 与命名
 
@@ -119,7 +119,6 @@ V1 合同里**业务结果看信封 `code`，不看 HTTP 状态**：业务失败
 | 200 | 读成功；同步写成功；**业务失败**（信封 `code != 0`）；Host 暂不可用（信封 5001 + `Retry-After`） | 信封 |
 | 201 | 同步创建了新资源 / 受理了新命令（`POST /workflow-tasks`、任务命令、干预决策首次提交） | 信封 |
 | 202 | 已接受、异步执行（`POST /driver-packages/install`、`DELETE /driver-packages/{name}`、`POST /v1/operations`） | 信封 / 裸 JSON |
-| 401 | 写请求缺少或带错控制面 token | 信封 `{"code": 1002, "error": {...}}`；`/v1/*` 为 `{"error": {"code": "unauthorized"}}` |
 | 404 | **路由未在本进程挂载**；`/v1/*` 的资源不存在 | FastAPI `{"detail": "Not Found"}` / `{"error": {...}}` |
 | 409 / 400 | 只用于 `/v1/*` 进程管理（`operation_conflict` / `revision_conflict` / 其余） | `{"error": {"code", "message", "details?"}}` |
 | 503 | 进程级维护闸门（全量重置进行中）；`/readiness` 未就绪；`/v1/logs` 暂不可读 | 信封 5001 / readiness 同形状正文 |
@@ -230,12 +229,11 @@ V1 合同：**全部 `/api/v1` JSON 路由都是 V1 信封**（`server/api/envel
 | 1 | 未归类内部错误 | — |
 | 1000 | 参数或载荷不合法（含请求体校验、非法 JSON） | `isInvalidInput` |
 | 1001 | 只读模式 / 调试不允许 / 设备动作不允许 | `isOperationNotAllowed` |
-| 1002 | 写操作缺少或带错控制面 token（HTTP 401） | 走 `ApiError.isControlTokenRejected` |
 | 2005 | 数据库冲突 | `isConflict` |
 | 3002 | 工作流或任务不存在 | `isNotFound` |
 | 3003 | 状态冲突：修订过期、唯一键重复、状态不允许 | `isConflict` |
 | 4000 | 试剂信息仍被引用 | `isConflict` |
-| 4001 | 资源不存在（dev 时代的 4001 = 未授权已改为 1002） | `isNotFound` |
+| 4001 | 资源不存在（dev 时代的 4001 = 未授权；「未授权」码已随鉴权一起删除） | `isNotFound` |
 | 4002 | 资源数据冲突（含物料「无变化」`no_change`） | `isConflict` |
 | 5000 | 资源模板不存在 | `isNotFound` |
 | 5001 | 依赖暂不可用（Host 启动 / 重启中，带 `Retry-After`）或部署不支持 | `isUnavailable` |
@@ -247,7 +245,6 @@ V1 合同：**全部 `/api/v1` JSON 路由都是 V1 信封**（`server/api/envel
 
 ### 5.3 仍用 HTTP 状态表达的情形
 
-- 控制面 token 缺失或错误：HTTP 401 + 信封 1002（`ApiError.isControlTokenRejected`）；
 - 全量重置维护闸门：HTTP 503 + 信封 5001；
 - 路由未在本进程挂载：HTTP 404 + FastAPI `{"detail": "Not Found"}`；
 - 服务端缺陷：HTTP 500。
@@ -320,7 +317,7 @@ driver-packages / device-processes …）由调度权威转交给 Host 子进程
 
 | 类 | 何时 | 关键属性 |
 | --- | --- | --- |
-| `ApiError` | 网络失败（`status=0`）或非 2xx | `status`、`body`、`businessCode`、`retryAfterMs`、`isNetwork`、`isUnsupported`（404/503）、`isControlTokenRejected`（401 + 1002，或 `/v1/*` 的 `unauthorized`） |
+| `ApiError` | 网络失败（`status=0`）或非 2xx | `status`、`body`、`businessCode`、`retryAfterMs`、`isNetwork`、`isUnsupported`（404/503） |
 | `BackendBusinessError` | 信封 `code != 0` | `code`、`symbol`、`details`、`httpStatus`、`retryAfterMs`、`isNotFound`、`isConflict`、`isInvalidInput`、`isOperationNotAllowed`、`isUnavailable` |
 | `InventoryCommandRejectedError` | 库存命令 `status != "completed"`（继承 `BackendBusinessError`） | `result`（裸结果） |
 | `TaskCommandRejectedError` | 任务命令投影 `status = "rejected"`（继承 `BackendBusinessError`，code 3003） | `command`、`reason`（`result.reason`） |
@@ -390,13 +387,11 @@ GET /api/v1/readiness → 200 | 503 { "status": "ready" | "starting" | "failed",
 ## 9. 传输与安全
 
 - v1 面向**实验室局域网**；远程访问通过反向代理 / 隧道，并由代理层做 TLS 与访问控制。
-- **控制面 token**：所有写请求（POST / PUT / PATCH / DELETE，含 `/v1/*`）必须带请求头 `X-UniLab-Token: <token>`
-  （`CONTROL_TOKEN_HEADER`），缺失或错误 → HTTP 401 + 信封 1002（`/v1/*` 为 `{"error": {"code": "unauthorized"}}`）。
-  读请求与 SSE 不带 token，避免额外的 CORS 预检。token 保存在 `<working_dir>/control_token`，运行 unilab 的机器上
-  `unilab token` 查看；SDK 经 `getToken` 每次写请求现取，OpenLab 按后端地址分开存在 localStorage，
-  并接受落地页链接 `#/?backend=<地址>&token=<令牌>` 导入。
-- `Authorization: Bearer` 在 V1 合同里**留给工站 api_key**（`POST /station/workflow-invocations`），浏览器不得用它携带控制面 token。
-- CORS 默认放行所有来源（`BasicConfig.cors_allow_origins` 可收窄），允许头含 `X-UniLab-Token`、`Idempotency-Key`、
+- **不鉴权**：管理 API（含 `/v1/*`、SSE）不校验任何令牌。控制面 token（`X-UniLab-Token`、`unilab token`、
+  `<working_dir>/control_token`）与 V1 工站 `Authorization: Bearer <station_api_key>` 都已在核心删除，旧客户端带来的
+  这两个头被忽略；业务码 1002 随之删除。访问控制交给网络边界（局域网 / 反向代理）。
+- OpenLab 接受落地页链接 `#/?backend=<地址>` 导入后端地址（导入后从地址栏去掉）。
+- CORS 默认放行所有来源（`BasicConfig.cors_allow_origins` 可收窄），允许头含 `Idempotency-Key`、
   `X-Workflow-Filename`；`Retry-After` 未列入 expose（§5.5）。
 - 页面由 HTTPS 站点（GitHub Pages）托管、微后端是 `http://` 时，浏览器按混合内容规则处理：
   - `http://127.0.0.1` / `localhost` 是「可信来源」，Chrome / Edge / Firefox 放行，Safari 拦截；

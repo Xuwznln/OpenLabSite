@@ -15,7 +15,7 @@
 
 | 文档 | 内容 | 性质 |
 | --- | --- | --- |
-| [conventions.md](./conventions.md) | URL / 方法 / 状态码 / 表示层 / V1 信封与业务码 / 控制面 token / 5001 重试 / 长操作 / SSE / 能力发现 / 版本兼容 / 契约治理 | **规范**（MUST / SHOULD） |
+| [conventions.md](./conventions.md) | URL / 方法 / 状态码 / 表示层 / V1 信封与业务码 / 不鉴权 / 5001 重试 / 长操作 / SSE / 能力发现 / 版本兼容 / 契约治理 | **规范**（MUST / SHOULD） |
 | [runtime.md](./runtime.md) | `runtime-v1`（执行投影）、`workflow`（Workflow Authority）、`run-history`、`scheduler`、`registry` | 域契约 |
 | [materials.md](./materials.md) | `inventory`（V1 库存面 + 唯一写入口）、`materials-v1`（dev 独有物料路由）、`graphs-v1`（设备图） | 域契约 |
 | [telemetry-history.md](./telemetry-history.md) | `telemetry-v1`、`device-state`、`history-v1`（`/edge/history`）、`debug`、`process-management` | 域契约 |
@@ -30,7 +30,7 @@
 
 ```text
 浏览器 (OpenLab Web，静态站)
-   │  HTTP JSON（/api/v1，V1 信封；写请求带 X-UniLab-Token）+ 两条 SSE 失效通知流
+   │  HTTP JSON（/api/v1，V1 信封；不鉴权）+ 两条 SSE 失效通知流
    ▼
 unilab 调度权威 :8002（unilab --port，浏览器只连这一个地址）
    ├─ runtime.db    Workflow 定义 / Graph / Task / Node Job / 干预 / Authoring / 运行历史视图
@@ -88,7 +88,7 @@ unilab 调度权威 :8002（unilab --port，浏览器只连这一个地址）
 | `debug` | `/api/v1/debug/databases*` | 四库只读 | `createDebugApi` | any |
 
 除标注「裸 JSON / 裸结果」的路由外，全部 `/api/v1` JSON 路由都是 V1 信封 `{code, data}`，传输层统一解包。
-信封、业务码、token、5001 重试的精确定义见 [conventions.md §5](./conventions.md#5-响应信封与错误)。
+信封、业务码、5001 重试的精确定义见 [conventions.md §5](./conventions.md#5-响应信封与错误)。
 
 ### 2.1 浏览器暂未采用的 V1 控制台面
 
@@ -167,7 +167,7 @@ Host 子进程启动 / 重启期间 Host 专有路由返回 HTTP 200 + 信封 50
 ```bash
 pnpm --filter @openlab/protocol openapi:sync   # 调微后端导出器刷新 OpenAPI 快照并重生成类型（UNILABOS_PYTHON 指定解释器）
 pnpm run protocol:check     # tsc + 目录校验（域覆盖、角色、SSE 清单、裸 JSON 清单、目录 ↔ OpenAPI 导出对账、控制面 / 暂未采用清单）
-pnpm run protocol:test      # 客户端方法 ↔ 目录双向比对、V1 信封解包、5001 重试、token 头、库存命令、版本一致、快照元信息
-OPENLAB_CONTROL_TOKEN=<unilab token> pnpm --filter @openlab/protocol smoke -- http://127.0.0.1:8002 --write
+pnpm run protocol:test      # 客户端方法 ↔ 目录双向比对、V1 信封解包、5001 重试、不带鉴权头、库存命令、版本一致、快照元信息
+pnpm --filter @openlab/protocol smoke -- http://127.0.0.1:8002 --write
                             # 对着真实微后端跑通全部读路径与关键写流程（--restart 另测 Host 重启期间的 5001 退避）
 ```

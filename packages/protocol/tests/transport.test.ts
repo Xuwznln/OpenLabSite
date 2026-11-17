@@ -6,16 +6,14 @@ import { OPERATIONS, operationsOf } from "../src/catalog";
 import { createEdgeApi } from "../src/client";
 import {
   ApiError,
+  BACKEND_BUSINESS_CODES,
   BackendBusinessError,
-  CONTROL_TOKEN_HEADER,
-  CONTROL_TOKEN_REJECTED_CODE,
   createHttpTransport,
   createSystemApi,
   hostlinkPeerState,
   isBackendEnvelope,
   isCapabilityUnavailable,
   parseRetryAfter,
-  type ControlTokenProvider,
   type HostLinkPeer,
   type HostLinkStatus,
   type ProtocolDomain,
@@ -404,9 +402,9 @@ describe("system 协议与传输层", () => {
   });
 });
 
-describe("控制令牌（写请求鉴权）", () => {
+describe("请求头（管理 API 不鉴权）", () => {
   /** 只记录 method + 每次请求的 headers；所有请求回 200 空对象。 */
-  function recordingApi(getToken?: ControlTokenProvider) {
+  function recordingApi() {
     const seen: Array<{ method: string; headers: Record<string, string> | undefined }> = [];
     const instance = {
       request: async (config: { method?: string; headers?: Record<string, string> }) => {
@@ -414,80 +412,29 @@ describe("控制令牌（写请求鉴权）", () => {
         return { status: 200, data: {} };
       },
     } as unknown as AxiosInstance;
-    const api = createEdgeApi("http://edge.local", { axios: instance, getToken });
+    const api = createEdgeApi("http://edge.local", { axios: instance });
     return { seen, api };
   }
 
-  const layout = { revision: 1, cell_size: 100, zones: [], walls: [] };
-
-  it("设置令牌时写请求带 X-UniLab-Token（不再用 Authorization: Bearer），并与 Content-Type 合并；读请求不带", async () => {
-    const { seen, api } = recordingApi(() => "tok-123");
+  it("写请求只带 Content-Type（有正文时），不带 X-UniLab-Token / Authorization；读请求不带任何头", async () => {
+    const { seen, api } = recordingApi();
     await api.domains.system.requestRestart({ mode: "quiescent" });
-    await api.domains.labV1.saveLayout(layout);
+    await api.domains.workflowBackend.updateWorkflow("wf-1", { name: "x" });
     await api.domains.system.cancelRestart();
     await api.domains.system.restartStatus();
     await api.domains.processManagement.submitOperation({ operationId: "op", command: "scheduler.resume" });
-    expect(CONTROL_TOKEN_HEADER).toBe("X-UniLab-Token");
     expect(seen).toEqual([
-      { method: "POST", headers: { "Content-Type": "application/json", "X-UniLab-Token": "tok-123" } },
-      { method: "PUT", headers: { "Content-Type": "application/json", "X-UniLab-Token": "tok-123" } },
-      { method: "DELETE", headers: { "X-UniLab-Token": "tok-123" } },
+      { method: "POST", headers: { "Content-Type": "application/json" } },
+      { method: "PUT", headers: { "Content-Type": "application/json" } },
+      { method: "DELETE", headers: undefined },
       { method: "GET", headers: undefined },
-      { method: "POST", headers: { "Content-Type": "application/json", "X-UniLab-Token": "tok-123" } },
+      { method: "POST", headers: { "Content-Type": "application/json" } },
     ]);
-    expect(seen.some((call) => call.headers && "Authorization" in call.headers)).toBe(false);
   });
 
-  it("未提供 getToken、或返回空值 / 空白时，请求头与旧行为逐字节一致", async () => {
-    const providers: Array<ControlTokenProvider | undefined> = [
-      undefined,
-      () => null,
-      () => undefined,
-      () => "",
-      () => "  \n",
-    ];
-    for (const getToken of providers) {
-      const { seen, api } = recordingApi(getToken);
-      await api.domains.system.requestRestart({ mode: "quiescent" });
-      await api.domains.system.cancelRestart();
-      await api.domains.system.restartStatus();
-      expect(seen.map((call) => call.headers)).toEqual([{ "Content-Type": "application/json" }, undefined, undefined]);
-    }
-  });
-
-  it("令牌每次请求现取：更新或清除后无需重建 API", async () => {
-    let token: string | null = null;
-    const { seen, api } = recordingApi(() => token);
-    await api.domains.system.cancelRestart();
-    token = "first";
-    await api.domains.system.cancelRestart();
-    token = " second\n";
-    await api.domains.system.cancelRestart();
-    token = null;
-    await api.domains.system.cancelRestart();
-    expect(seen.map((call) => call.headers?.["X-UniLab-Token"])).toEqual([undefined, "first", "second", undefined]);
-  });
-
-  it("401 + 信封业务码 1002 识别为控制令牌被拒；dev 旧码 4001（V1 里是资源不存在）与其他 401 / 403 不算", async () => {
-    const mock = createMockHttp();
-    const api = createSystemApi(mock.http);
-    mock.nextResponse = {
-      status: 401,
-      data: { code: CONTROL_TOKEN_REJECTED_CODE, error: { msg: "写操作需要控制面 token：请求头 X-UniLab-Token: <token>" } },
-    };
-    const error = await api.requestRestart().catch((e: unknown) => e);
-    expect(CONTROL_TOKEN_REJECTED_CODE).toBe(1002);
-    expect(error).toBeInstanceOf(ApiError);
-    expect(error).toMatchObject({ status: 401, message: "写操作需要控制面 token：请求头 X-UniLab-Token: <token>" });
-    expect((error as ApiError).isControlTokenRejected).toBe(true);
-    expect((error as ApiError).isUnsupported).toBe(false);
-
-    expect(new ApiError(401, "unauthorized", { detail: "unauthorized" }).isControlTokenRejected).toBe(false);
-    expect(new ApiError(403, "forbidden", { code: 1002 }).isControlTokenRejected).toBe(false);
-    expect(new ApiError(401, "legacy", { code: 4001 }).isControlTokenRejected).toBe(false);
-    expect(new ApiError(401, "x", { code: "1002" }).isControlTokenRejected).toBe(true);
-    // 进程管理路由被拒是 V1 形状（不是信封），同样算令牌被拒
-    expect(new ApiError(401, "x", { error: { code: "unauthorized", message: "写操作需要控制面 token" } }).isControlTokenRejected).toBe(true);
-    expect(new ApiError(400, "x", { error: { code: "unauthorized" } }).isControlTokenRejected).toBe(false);
+  it("业务码表不再有「未授权」1002；401 不是能力不可用", () => {
+    expect(Object.values(BACKEND_BUSINESS_CODES)).not.toContain(1002);
+    expect(new ApiError(401, "x", { code: 1002 }).isUnsupported).toBe(false);
   });
 });
+

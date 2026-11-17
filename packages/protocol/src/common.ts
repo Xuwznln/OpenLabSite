@@ -17,7 +17,7 @@ export interface ValidationIssue {
 }
 
 /**
- * 非 2xx 响应的错误体：信封（401 + 1002 / 503 + 5001）、FastAPI 默认（未挂载路由 404 的 `detail`）
+ * 非 2xx 响应的错误体：信封（503 + 5001 / 未匹配路由 404 + 4001）、FastAPI 默认（`detail`）
  * 或 V1 进程管理的 `{error: {code, message}}`。
  */
 export interface ProtocolErrorBody {
@@ -96,8 +96,8 @@ export interface OperationContract {
 //
 // - HTTP 200 + code 0：成功，传输层解包返回 `data`（无数据的命令可省略 data）；
 // - HTTP 200 + code != 0：业务失败，抛 BackendBusinessError（code / symbol / details）；
-// - 例外仍用 HTTP 状态码：控制面 token 缺失或错误 401 + 1002，全量重置维护闸门 503 + 5001，
-//   未挂载的路由 404，服务端缺陷 500，统一抛 ApiError（status + 信封里的业务码）；
+// - 例外仍用 HTTP 状态码：全量重置维护闸门 503 + 5001，未挂载的路由 404，服务端缺陷 500，
+//   统一抛 ApiError（status + 信封里的业务码）；管理 API 不鉴权，没有 401；
 // - 不包信封的路由（`/health`、`/readiness`、`POST /inventory/commands`、`/v1/*` 进程管理、
 //   SSE）在请求上标 `raw: true`，原样返回正文。
 // ---------------------------------------------------------------------------
@@ -118,14 +118,13 @@ export interface BackendEnvelope<T = never> {
 
 /**
  * V1 业务码（与 Uni-Lab-OS `server/api/envelope.py` 一一对应）。
- * 1002 是控制面 token 被拒（HTTP 401）；dev 时代的 4001 已改作「资源不存在」。
+ * 管理 API 不鉴权：控制面 token 已取消，「未授权」1002 不再出现；dev 时代的 4001 是「资源不存在」。
  */
 export const BACKEND_BUSINESS_CODES = {
   ok: 0,
   internalError: 1,
   invalidInput: 1000,
   operationNotAllowed: 1001,
-  unauthorized: 1002,
   databaseConflict: 2005,
   /** 工作流或任务不存在。 */
   notFound: 3002,
@@ -227,12 +226,6 @@ export class BackendBusinessError extends Error {
 import axios from "axios";
 import type { AxiosInstance } from "axios";
 
-/** 控制面 token 请求头（写请求）。`Authorization: Bearer` 留给 V1 工站 api_key，浏览器不用。 */
-export const CONTROL_TOKEN_HEADER = "X-UniLab-Token" as const;
-
-/** 写请求被拒（HTTP 401）时信封里的业务码：控制面 token 缺失或不正确。 */
-export const CONTROL_TOKEN_REJECTED_CODE = 1002 as const;
-
 export class ApiError extends Error {
   readonly status: number;
   readonly body?: ProtocolErrorBody;
@@ -246,7 +239,7 @@ export class ApiError extends Error {
     this.retryAfterMs = retryAfterMs;
   }
 
-  /** 正文是信封时的业务码（401 → 1002，503 维护闸门 → 5001）；其它正文为 undefined。 */
+  /** 正文是信封时的业务码（503 维护闸门 → 5001，未匹配路由 404 → 4001）；其它正文为 undefined。 */
   get businessCode(): number | undefined {
     const code = Number(this.body?.code);
     return this.body?.code !== undefined && Number.isFinite(code) ? code : undefined;
@@ -261,29 +254,12 @@ export class ApiError extends Error {
   get isUnsupported(): boolean {
     return this.status === 404 || this.status === 503;
   }
-
-  /**
-   * 写请求因控制面 token 缺失或不正确被拒：HTTP 401 + 信封业务码 1002；V1 进程管理路由（`/v1/*`）
-   * 不走信封，被拒是 HTTP 401 + `{error: {code: "unauthorized"}}`。
-   */
-  get isControlTokenRejected(): boolean {
-    if (this.status !== 401) return false;
-    if (this.businessCode === CONTROL_TOKEN_REJECTED_CODE) return true;
-    const error = this.body?.error;
-    return typeof error === "object" && error !== null && error.code === "unauthorized";
-  }
 }
 
 /** 页面判定「当前进程 / 部署不提供该能力」：404 / 503，或信封 5001（Host 不在线、--role backend）。 */
 export function isCapabilityUnavailable(error: unknown): boolean {
   return (error instanceof ApiError && error.isUnsupported) || (error instanceof BackendBusinessError && error.isUnavailable);
 }
-
-/**
- * 控制令牌来源：每次写请求时调用，返回空值表示「不带令牌」。
- * 令牌由微后端保存在 `<working_dir>/control_token`，用户经 `unilab token` 查看。
- */
-export type ControlTokenProvider = () => string | null | undefined;
 
 /** Host 启动 / 重启期间 Host 专有路由返回 HTTP 200 + 5001 + Retry-After：GET 按此退避重试。 */
 export interface UnavailableRetryOptions {
@@ -302,12 +278,6 @@ export interface HttpTransportOptions {
   headers?: Record<string, string>;
   /** 注入自定义 axios 实例（测试 mock / 自定义拦截器）；默认内部创建。 */
   axios?: AxiosInstance;
-  /**
-   * 控制令牌：写请求（POST / PUT / PATCH / DELETE）发出前调用，返回非空字符串时附加
-   * `X-UniLab-Token: <token>`。读请求（GET、SSE）不需要令牌，始终不带，避免额外的
-   * CORS 预检；未提供或返回空值时请求与不带该选项时完全一致。
-   */
-  getToken?: ControlTokenProvider;
   /** GET 遇到 5001（Host 暂不可用）时的退避重试；`false` 关闭。写请求从不自动重试。 */
   unavailableRetry?: UnavailableRetryOptions | false;
   /** 退避等待的实现（测试注入假时钟）；默认 setTimeout。 */
@@ -415,7 +385,7 @@ export function createHttpTransport(
       validateStatus: () => true,
     });
 
-  /** 单次请求的 headers；都不需要时返回 undefined（不带令牌的读请求不触发 CORS 预检）。 */
+  /** 单次请求的 headers；都不需要时返回 undefined（读请求不带自定义头，不触发 CORS 预检）。 */
   function requestHeaders(config: RequestConfig): Record<string, string> | undefined {
     const headers: Record<string, string> = { ...config.headers };
     // 只有带正文时才声明 JSON：workflow 路由会解码任何 JSON 类型的请求体，
@@ -423,9 +393,6 @@ export function createHttpTransport(
     if (config.body !== undefined && !Object.keys(headers).some((key) => key.toLowerCase() === "content-type")) {
       headers["Content-Type"] = "application/json";
     }
-    // 令牌每次请求现取：调用方更新令牌后无需重建客户端。
-    const token = config.method === "GET" ? "" : options.getToken?.()?.trim();
-    if (token) headers[CONTROL_TOKEN_HEADER] = token;
     return Object.keys(headers).length ? headers : undefined;
   }
 

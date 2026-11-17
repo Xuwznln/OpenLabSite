@@ -1,5 +1,5 @@
 import { createRouter, createWebHashHistory } from "vue-router";
-import { readConnectionLink } from "./features/control-token";
+import { readConnectionLink } from "./features/connection-link";
 import { useConnectionStore } from "./stores/connection";
 
 // hash 模式：GitHub Pages 静态托管无需服务端 rewrite
@@ -143,8 +143,8 @@ export const router = createRouter({
   ],
 });
 
-// 微后端落地页的链接：`#/<任意路由>?backend=<地址>&token=<令牌>`。导入连接后用 replace 去掉这两个参数，
-// 令牌既不留在地址栏，也不留在浏览历史（hash 路由，参数本来就不会发给静态托管的服务器）。
+// 微后端落地页的链接：`#/<任意路由>?backend=<地址>`。导入连接后用 replace 去掉这个参数，
+// 地址栏和浏览历史里只留页面本身的路由。
 router.beforeEach((to) => {
   const link = readConnectionLink(to.query);
   if (!link) return true;

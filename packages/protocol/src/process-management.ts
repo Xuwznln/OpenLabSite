@@ -4,8 +4,7 @@
  * - 路径不带 `/api` 前缀（`/v1/snapshot`、`/v1/operations`、`/v1/operations/{id}`、`/v1/logs/{component}`）；
  * - 成功是**裸 JSON**（提交操作 HTTP 202），失败是 HTTP 状态码 + `{error: {code, message, details?}}`
  *   （不存在 404、`operation_conflict` / `revision_conflict` 409、其余 400，日志暂不可读 503），
- *   统一抛 ApiError（`body.error.code` 是符号码）；
- * - 写操作同样要 `X-UniLab-Token`，被拒是 HTTP 401 + `{error: {code: "unauthorized"}}`（不是信封 1002）。
+ *   统一抛 ApiError（`body.error.code` 是符号码）。
  *
  * 组件：`backend`（调度权威本身）、`edge`（Host）、`managed:<process_id>`（Host 的受管设备进程）；
  * `plc` / `renderer` 恒为 idle（dev 不运行）。时间字段是 ISO 8601 UTC 毫秒。

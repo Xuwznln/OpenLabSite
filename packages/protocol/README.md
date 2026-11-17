@@ -24,8 +24,8 @@ and automated tests without depending on Vue or application state management.
 
 The package name remains `@openlab/protocol`, and the existing `createEdgeApi` entry point is preserved.
 It accesses backend APIs; it does not execute device drivers, schedule workflows, or access databases directly.
-Version 3.x targets the Uni-Lab-OS V1.0 API contract (the unified 0.13 line): V1 response envelopes, the
-`X-UniLab-Token` write header, and `POST /api/v1/inventory/commands` as the single material write entry point.
+Version 3.x targets the Uni-Lab-OS V1.0 API contract (the unified 0.13 line): V1 response envelopes, no
+authentication on the management API, and `POST /api/v1/inventory/commands` as the single material write entry point.
 
 ## Installation and requirements
 
@@ -89,17 +89,11 @@ process-management routes under `/v1/*`.
 The default endpoint is the backend management API on the caller's computer, not the HostLink device port.
 Availability depends on the backend build, process role, and runtime state.
 
-### Control token
+### No authentication
 
-Write requests (POST / PUT / PATCH / DELETE) must carry the backend's control token in the
-`X-UniLab-Token` header (`CONTROL_TOKEN_HEADER`); without it the backend answers HTTP 401 with business code 1002
-(`error.isControlTokenRejected`). Run `unilab token` on the backend machine to see it, then pass a provider;
-it is read on every write request, so updating it needs no new client. Read requests and event streams never
-carry the token. `Authorization: Bearer` is reserved for V1 station API keys and is not used by this SDK.
-
-```ts
-const api = createEdgeApi("http://127.0.0.1:8002", { getToken: () => localStorage.getItem("token") });
-```
+The management API is not authenticated: the core removed the control token (`X-UniLab-Token`, `unilab token`)
+and the V1 station API key, so requests carry no credentials and there is no "unauthorized" business code.
+Restrict access at the network boundary (lab LAN, reverse proxy).
 
 ### Host restarts (business code 5001)
 
@@ -190,7 +184,6 @@ The operation catalog describes the contract; it does not enforce backend author
 | Error | Handling |
 | --- | --- |
 | `ApiError`, `status = 0` | Check network access, timeouts, and CORS; retain previous data |
-| `ApiError`, 401 + code 1002 | Missing or wrong control token (`isControlTokenRejected`) |
 | `ApiError`, 404 / 503 | Route not mounted in this process, or the reset maintenance gate; treat as unavailable |
 | `BackendBusinessError` | Business failure from the V1 envelope (`code`, `symbol`, `details`; `isNotFound`, `isConflict`, `isInvalidInput`, `isUnavailable`); do not treat it as success |
 | `InventoryCommandRejectedError` / `TaskCommandRejectedError` | A rejected inventory command or task command (`status: "rejected"`) |

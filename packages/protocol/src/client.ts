@@ -2,8 +2,8 @@
  * OpenLab Edge 客户端门面：按「单协议域单文件」组装各域客户端。
  *
  * - 传输层：axios（common.ts createHttpTransport）。V1 信封统一解包：业务失败抛
- *   BackendBusinessError，非 2xx 抛 ApiError；写请求带 `X-UniLab-Token`；GET 遇 5001（Host 启动 /
- *   重启中）按 Retry-After 有限退避重试。
+ *   BackendBusinessError，非 2xx 抛 ApiError；管理 API 不鉴权，请求不带任何令牌；GET 遇 5001
+ *   （Host 启动 / 重启中）按 Retry-After 有限退避重试。
  * - 每个域的类型与客户端实现内聚在各自文件，与微后端路由模块一一对应：
  *     common.ts             ↔ server/api/runtime/diagnostics.py（system 域）
  *     runtime-v1.ts         ↔ server/api/runtime/data.py
@@ -53,7 +53,7 @@ import { createWorkflowBackendApi } from "./workflow-backend.js";
 
 export { ApiError, BackendBusinessError } from "./common.js";
 
-/** 传输层选项：超时、默认 headers、自定义 axios、写请求控制令牌 `getToken`、5001 退避 `unavailableRetry`。 */
+/** 传输层选项：超时、默认 headers、自定义 axios、5001 退避 `unavailableRetry`。 */
 export type EdgeApiOptions = HttpTransportOptions;
 
 export interface EdgeApiDomains {
