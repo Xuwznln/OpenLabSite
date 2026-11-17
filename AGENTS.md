@@ -17,8 +17,8 @@ Module Federation。AI 应从现有页面复制结构，再按用户所在学科
 - `packages/protocol/`：协议类型、客户端、目录（`catalog.ts`）、测试与 live smoke
 - `docs/protocol/`：各域规范
 - 微后端的 REST 路由（Uni-Lab-OS V1.0 合同）、SSE 事件名（`workflow.runtime.changed` 等）、V1 信封与业务码
-  （`{code, data}` / `{code, error}`；4001 = 资源不存在，5001 = Host 暂不可用；管理 API 不鉴权）、
-  `POST /inventory/commands` 库存命令（materials.v1 变更信封 / V1 类型化命令，裸结果）
+  （全部 JSON 路由都是 `{code, data}` / `{code, error}`；4001 = 资源不存在，5001 = Host 暂不可用；管理 API 不鉴权）、
+  `POST /inventory/commands` 库存命令（materials.v1 变更信封 / V1 类型化命令，被拒是带 `command_id` 的失败信封）
 - 状态词汇（Task / Node Job / 执行 job / 物料 lifecycle / registry 条目状态）
 - 四个 SQLite 库的 schema
 
@@ -28,6 +28,8 @@ Module Federation。AI 应从现有页面复制结构，再按用户所在学科
 - 物料写入只经 `api.domains.inventory.*` 的写方法（内部提交 `/inventory/commands`），不手拼变更信封；
   错误按 `BackendBusinessError` / `ApiError` / `isCapabilityUnavailable()` 分类，不按 HTTP 状态猜业务结果。
 - 禁止为了页面方便而修改返回字段、事件名、时间单位或 ID 语义。
+- 物料 `name` 是物料 uuid，不是名字：显示 / 排序 / 搜索用 `features/material-label.ts`（`display_name`，回退
+  `resource_id`）；参数里引用物料写 `{id: resource_id, uuid}`（`resourceRefValue`）。
 - 不把 SSE 通知的 payload 当业务正文；正文一律重新经 HTTP 读取。
 - 人工决策只能提交 Host 返回的 `options[].action`（干预提交 `options[].id`），不得自行拼装设备动作。
 - 若现有接口不支持需求：保留降级空态，并在交付说明中列出缺少的能力，**不要擅自修改协议**。
