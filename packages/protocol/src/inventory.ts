@@ -311,7 +311,10 @@ export function createInventoryApi(http: HttpTransport) {
   return {
     // ── 读 ────────────────────────────────────────────────────────
     health: () => http.request<InventoryHealth>({ method: "GET", path: `${base}/health` }),
-    /** `rootsOnly` 只返回根物料（设备与独立台面）；`name` 精确搜索；`status` 按生命周期过滤。 */
+    /**
+     * `rootsOnly` 只返回根物料（设备与独立台面，按 display_name 排序）；`name` 按人读标签 display_name 精确搜索
+     * （物料 `name` 是 uuid）；`status` 按生命周期过滤。
+     */
     instances: async (
       params: { rootsOnly?: boolean; name?: string; status?: MaterialsV1Lifecycle } & InventoryListOptions = {},
     ) =>
@@ -454,13 +457,13 @@ export function createInventoryApi(http: HttpTransport) {
     deleteTemplate: (templateUuid: string, options?: MaterialsV1MutationOptions) =>
       mutate<MaterialsV1Template>("delete_template", { template_uuid: templateUuid }, options),
     /**
-     * 物料出库/实例化：按 registry 资源类名在微后端实例化并权威登记（权威发 uuid）。
-     * 返回整棵权威树；根节点即 ResourceSlot 引用 {id: name, uuid} 的来源。
+     * 物料出库/实例化：按 registry 资源类名在微后端实例化并权威登记（权威发 uuid）。`displayName` 是人读标签
+     * （同时作 PLR 根名）；返回整棵权威树，根节点的 `material_uuid` 即 ResourceSlot 引用 `{uuid}` 的来源。
      */
-    instantiate: (registryClass: string, name: string, barcode?: string, options?: MaterialsV1MutationOptions) =>
+    instantiate: (registryClass: string, displayName: string, barcode?: string, options?: MaterialsV1MutationOptions) =>
       mutate<MaterialsV1Tree>(
         "instantiate_material",
-        { registry_class: registryClass, name, ...(barcode ? { barcode } : {}) },
+        { registry_class: registryClass, display_name: displayName, ...(barcode ? { barcode } : {}) },
         options,
       ),
     /**
@@ -471,13 +474,13 @@ export function createInventoryApi(http: HttpTransport) {
       mutate<MaterialsV1Tree>("create_material_tree", value, options),
     /**
      * 标识字段局部更新。服务端把 payload 与 MaterialPatch 的完整 dump 逐字段比对，
-     * 未设置的字段必须显式为 null，这里统一补齐（只传 {barcode} 也能通过）。
+     * 未设置的字段必须显式为 null，这里统一补齐（只传 {barcode} 也能通过）。`name`（= uuid）不可改，
+     * MaterialPatch 已没有这个字段，改人读标签用 `display_name`。
      */
     patch: (materialUuid: string, value: MaterialsV1Patch, options?: MaterialsV1MutationOptions) =>
       mutate<MaterialsV1Aggregate>(
         "patch_material",
         {
-          name: value.name ?? null,
           display_name: value.display_name ?? null,
           description: value.description ?? null,
           machine_name: value.machine_name ?? null,

@@ -1,5 +1,6 @@
 import type { MaterialsV1Aggregate, MaterialsV1Substance, MaterialsV1Tree } from "@openlab/protocol";
 import { finiteNumber, mapSites, type MapSite } from "./material-map";
+import { materialLabel } from "./material-label";
 
 export interface AssemblyNode {
   edge_uuid: string;
@@ -44,7 +45,7 @@ export function assemblyFromMaterials(tree: MaterialsV1Tree): LabAssembly {
     const explicitVolume = typeof item.data.data.volume_ml === "number" ? item.data.data.volume_ml : undefined;
     return {
       edge_uuid: identity.material_uuid, template_id: identity.template_uuid,
-      template_name: identity.display_name || identity.name || identity.template_name,
+      template_name: materialLabel(identity) || identity.template_name,
       category: identity.resource_type, barcode: identity.barcode, status: identity.lifecycle_status,
       slot_id: parentSite?.site.label || "", spec: { volume_ml: explicitVolume },
       content: { substance: substance?.name, volume_ml: explicitVolume ??

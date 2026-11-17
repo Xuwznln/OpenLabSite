@@ -25,6 +25,13 @@ dev 时代按操作分路由的读写（`/materials/templates`、`/instances`、
   `parent_material_uuid` `name` `display_name` `resource_type` `class_name`
   `template_uuid` `template_name` `machine_name` `barcode` `lifecycle_status`
   （`active reserved in_use quarantined consumed retired`）`version`。
+- **`name` 恒等于 `material_uuid`**（所有物料，包括设备；核心 2026-11-17 起，与 V1 有意不同），不是给人看的名字。
+  人读标签是 `display_name`（孔位是 ordering 标识如 `A1`；权威保证非空，缺省依次回退旧名、PLR 键、`resource_id`），
+  PyLabRobot 树里用的名字（PLR 键）在 `config.name`，唯一的人可读键是 `resource_id`（显示名可以重名）。
+  前端显示 / 排序 / 去重 / 搜索一律用 `display_name`（`features/material-label.ts`，缺失时回退 `resource_id`）；
+  `?name=` 筛选与根物料排序也按 `display_name`。
+- 工作流 / 动作参数里的物料引用（ResourceSlot）写 `{id: resource_id, uuid}`：设备侧先按 `uuid` 解析，`id` 只在
+  没有 uuid 时按 resource_id（或 UUID 形式的 id）查；不要再把物料 `name` 写成 `id`。
 - `position`：`position_x/y/z`（可为 null = 权威中无坐标；三者要么都给要么都空）、`size_width/height/depth`、
   旋转、`layout`、`cross_section_type`。装配视图直接用这些字段绘制。
 - `data`：`substances[]`（name / quantity / quantity_unit / physical_state，关联了化学品时还有
@@ -44,7 +51,7 @@ dev 时代按操作分路由的读写（`/materials/templates`、`/instances`、
 
 | 方法 | 路径 | SDK | 说明 |
 | --- | --- | --- | --- |
-| GET | `/inventory/instances?roots_only=&name=&status=&limit=&all=` | `inventory.instances({ rootsOnly, name, status })` | 物料聚合列表 `{instances}`；`roots_only=true` 只返回根（设备 / 独立台面）；`name` 精确搜索；默认 `limit=500` 截断，SDK 缺省带 `all=true`（dev 扩展，取全集） |
+| GET | `/inventory/instances?roots_only=&name=&status=&limit=&all=` | `inventory.instances({ rootsOnly, name, status })` | 物料聚合列表 `{instances}`；`roots_only=true` 只返回根（设备 / 独立台面，按 `display_name` 排序）；`name` 按 `display_name` 精确搜索；默认 `limit=500` 截断，SDK 缺省带 `all=true`（dev 扩展，取全集） |
 | GET | `/inventory/instances/{edge_uuid}` | `inventory.instance(uuid)` | 单个聚合 + `relation` + `content` |
 | GET | `/inventory/templates?name=&include_definition=&all=` | `inventory.templates({ includeDefinition })` | 资源模板目录 `{templates}`；缺省只取目录字段（`definition` 为 `{}`）。`includeDefinition: true` 附 registry 全量展开树，**体积大，按需加载** |
 | GET | `/inventory/templates/{template_id}` | `inventory.template(id)` | 模板详情 |
@@ -90,7 +97,7 @@ dev 变更的正文仍是 `InventoryMutation`（materials.v1 幂等信封），�
   "actor_type": "human",
   "observed_at_ms": 1788294959000,
   "preconditions": [],
-  "payload": { "registry_class": "demo_tips_24", "name": "tips_01" }
+  "payload": { "registry_class": "demo_tips_24", "display_name": "tips_01" }
 }
 ```
 
@@ -106,9 +113,9 @@ dev 变更的正文仍是 `InventoryMutation`（materials.v1 幂等信封），�
 
 | SDK（`inventory.*`） | operation | payload |
 | --- | --- | --- |
-| `instantiate(registryClass, name, barcode?)` | `instantiate_material` | `{registry_class, name, barcode?}` → 微后端按 registry 实例化并落库，返回整棵树 |
+| `instantiate(registryClass, displayName, barcode?)` | `instantiate_material` | `{registry_class, display_name, barcode?}` → 微后端按 registry 实例化并落库（显示名同时作 PLR 根名，缺省派生 `resource_id`），返回整棵树 |
 | `createTree(value)` | `create_material_tree` | `{nodes[]}` parent-first、恰一个根；节点 identity / position / data / sites 带全字段 |
-| `patch(uuid, value)` | `patch_material` + `target_uuid` | 名称 / 条码 / 描述 / lifecycle_status 等标识字段；未改的字段显式 `null` |
+| `patch(uuid, value)` | `patch_material` + `target_uuid` | `display_name` / 条码 / 描述 / lifecycle_status 等标识字段；未改的字段显式 `null`；`MaterialPatch` 没有 `name`（= uuid，不可改） |
 | `putData(uuid, value)` | `put_data` + `target_uuid` | 整份替换 `substances[]` / `data` / `sites_initialized` / 状态（漏传即回缺省）；内容物只带可写字段 |
 | `putPosition(uuid, value)` | `put_position` + `target_uuid` | 位置 / 尺寸整份替换 |
 | `remove(uuid, recursive)` | `delete_material` | `{material_uuid, recursive}`；释放占用位点 |

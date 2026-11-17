@@ -13,6 +13,7 @@ import { computed, ref, shallowRef, watch } from "vue";
 import { describeNodeJob, describeTask } from "../features/task-jobs";
 import { createRefreshQueue } from "../features/refresh-queue";
 import { useConnectionStore } from "./connection";
+import { materialLabel } from "../features/material-label";
 import { useDevicesStore } from "./devices";
 import { useSchedulerStore } from "./scheduler";
 
@@ -98,7 +99,7 @@ export const useEntityCacheStore = defineStore("entity-cache", () => {
         }
         next.set(material.material_uuid, {
           uuid: material.material_uuid,
-          name: material.display_name || material.name,
+          name: materialLabel(material),
           kind: "material",
           category: material.resource_type,
           templateName: templateName.get(material.template_uuid) ?? material.template_name,

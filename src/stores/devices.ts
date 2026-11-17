@@ -25,6 +25,7 @@ import type {
 } from "@openlab/protocol";
 import { useConnectionStore } from "./connection";
 import { createRefreshQueue } from "../features/refresh-queue";
+import { materialLabel } from "../features/material-label";
 
 export interface DeviceRecord {
   /** 设备 id（runtime device_uuid == materials resource_id）。 */
@@ -120,7 +121,7 @@ export const useDevicesStore = defineStore("devices", () => {
       const material = aggregate.material;
       if (material.resource_type !== "device") continue;
       const record = ensure(material.resource_id);
-      record.displayName = material.display_name || material.name || record.id;
+      record.displayName = materialLabel(material) || record.id;
       record.className = material.class_name || record.className;
       record.materialUuid = material.material_uuid;
       record.machineName = material.machine_name || record.machineName;

@@ -33,6 +33,7 @@ import {
   type ParameterField,
 } from "./workflow-variables";
 import { describeError } from "./errors";
+import { compareMaterialLabels, materialLabel } from "./material-label";
 import { SiteIndex, confirmSite, siteBindingStatus, siteParamValue, type SiteBindings, type SiteContext } from "./site-bindings";
 
 export interface PlaceholderOption {
@@ -77,7 +78,7 @@ export interface ActionParamFormOptions {
   siteDirectory?: { readonly index: SiteIndex | null; readonly loading: boolean; readonly error: string; refresh: () => Promise<void> };
 }
 
-/** deduct（物料出库）字段的草稿状态：资源类 + 实例名 + 数量 + 条码 + 出库中标记。 */
+/** deduct（物料出库）字段的草稿状态：资源类 + 显示名 + 数量 + 条码 + 出库中标记。 */
 export interface DeductDraftState {
   registryClass: string;
   name: string;
@@ -150,7 +151,8 @@ export function useActionParamForm(options: ActionParamFormOptions) {
   const classOptionState = ref<PlaceholderOptionState>(emptyOptionState());
   const confirmOptionState = ref<PlaceholderOptionState>(emptyOptionState());
   const deductOptionState = ref<PlaceholderOptionState>(emptyOptionState());
-  const materialNameByUuid = ref<Map<string, string>>(new Map());
+  /** 物料 uuid → 人读标签与 resource_id（写回引用的 `id` 用 resource_id；物料 name 是 uuid）。 */
+  const materialRefByUuid = ref<Map<string, { label: string; resourceId: string }>>(new Map());
   /** deduct 字段草稿（按参数名），出库成功后写回 {id, uuid} 引用。 */
   const deductDrafts = ref<Record<string, DeductDraftState>>({});
   /** 并发防护：表单快速开关/切动作时丢弃过期响应。 */
@@ -207,17 +209,16 @@ export function useActionParamForm(options: ActionParamFormOptions) {
     try {
       const data = await options.api().domains.inventory.instances();
       if (seq !== loadSeq) return;
-      const index = new Map<string, string>();
-      const opts = data.map((item) => {
-        index.set(item.material.material_uuid, item.material.name);
+      const index = new Map<string, { label: string; resourceId: string }>();
+      const opts = [...data].sort((a, b) => compareMaterialLabels(a.material, b.material)).map((item) => {
+        const label = materialLabel(item.material);
+        index.set(item.material.material_uuid, { label, resourceId: item.material.resource_id });
         return {
-          label: item.material.resource_type
-            ? `${item.material.name} · ${item.material.resource_type}`
-            : item.material.name,
+          label: item.material.resource_type ? `${label} · ${item.material.resource_type}` : label,
           value: item.material.material_uuid,
         };
       });
-      materialNameByUuid.value = index;
+      materialRefByUuid.value = index;
       materialOptionState.value = { ...emptyOptionState(), options: opts };
     } catch {
       if (seq !== loadSeq) return;
@@ -504,7 +505,7 @@ export function useActionParamForm(options: ActionParamFormOptions) {
         const materialRef = (uuid: string, existing: unknown) =>
           resourceRefValue(existing, {
             uuid,
-            name: materialNameByUuid.value.get(uuid) ?? "",
+            resourceId: materialRefByUuid.value.get(uuid)?.resourceId,
           });
         if (field.multiple) {
           param[field.param] = (Array.isArray(selected) ? selected : []).map(
@@ -513,10 +514,7 @@ export function useActionParamForm(options: ActionParamFormOptions) {
         } else if (selected) {
           param[field.param] = materialRef(String(selected), param[field.param]);
         } else {
-          param[field.param] = resourceRefValue(param[field.param], {
-            uuid: "",
-            name: "",
-          });
+          param[field.param] = resourceRefValue(param[field.param], { uuid: "" });
         }
       } else if (field.kind === "confirm" && field.multiple) {
         const users = (Array.isArray(selected) ? selected : []).map((item) => String(item));
@@ -575,7 +573,7 @@ export function useActionParamForm(options: ActionParamFormOptions) {
     const uuid = resourceRefUuid(value);
     if (!uuid) return "";
     const name =
-      resourceRefLabel(value) || materialNameByUuid.value.get(uuid) || "";
+      materialRefByUuid.value.get(uuid)?.label || resourceRefLabel(value) || "";
     return name ? `${name}（${uuid.slice(0, 8)}…）` : uuid;
   }
 
@@ -594,8 +592,8 @@ export function useActionParamForm(options: ActionParamFormOptions) {
   }
 
   /**
-   * 执行物料出库：按草稿（资源类 + 实例名 + 数量 + 可选条码）循环调
-   * materials.v1 /instantiate。数量 >1 时实例名自动加 -1/-2… 序号后缀，
+   * 执行物料出库：按草稿（资源类 + 显示名 + 数量 + 可选条码）循环提交
+   * instantiate_material。数量 >1 时显示名自动加 -1/-2… 序号后缀，
    * 条码仅数量为 1 时随请求下发。成功实例写回参数（multiple 字段追加全部
    * 引用，单值字段写第一个），逐个失败即时提示，最后给汇总消息。
    */
@@ -611,7 +609,7 @@ export function useActionParamForm(options: ActionParamFormOptions) {
       `${draft.registryClass}_${Date.now().toString(36)}`;
     const barcode = quantity === 1 ? draft.barcode.trim() : "";
     draft.busy = true;
-    const created: { uuid: string; name: string }[] = [];
+    const created: { uuid: string; label: string; resourceId: string }[] = [];
     let failedCount = 0;
     try {
       for (let index = 0; index < quantity; index += 1) {
@@ -629,9 +627,10 @@ export function useActionParamForm(options: ActionParamFormOptions) {
           const root = tree.nodes.find(
             (node) => node.material.material_uuid === rootUuid,
           );
-          const rootName = root?.material.name ?? name;
-          materialNameByUuid.value.set(rootUuid, rootName);
-          created.push({ uuid: rootUuid, name: rootName });
+          const label = materialLabel(root?.material) || name;
+          const resourceId = root?.material.resource_id ?? "";
+          materialRefByUuid.value.set(rootUuid, { label, resourceId });
+          created.push({ uuid: rootUuid, label, resourceId });
         } catch (err) {
           failedCount += 1;
           options.onError?.(
@@ -651,13 +650,13 @@ export function useActionParamForm(options: ActionParamFormOptions) {
           param[field.param] = [
             ...existing,
             ...created.map((item) =>
-              resourceRefValue({}, { uuid: item.uuid, name: item.name }),
+              resourceRefValue({}, { uuid: item.uuid, resourceId: item.resourceId }),
             ),
           ];
         } else {
           param[field.param] = resourceRefValue(param[field.param], {
             uuid: created[0].uuid,
-            name: created[0].name,
+            resourceId: created[0].resourceId,
           });
         }
         options.paramJson.value = JSON.stringify(param, null, 2);
@@ -668,7 +667,7 @@ export function useActionParamForm(options: ActionParamFormOptions) {
       }
       options.onSuccess?.(
         quantity === 1
-          ? `已出库：${created[0].name}`
+          ? `已出库：${created[0].label}`
           : `出库完成：成功 ${created.length}/${quantity} 个${
               failedCount ? `，失败 ${failedCount} 个` : ""
             }`,

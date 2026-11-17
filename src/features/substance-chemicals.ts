@@ -19,6 +19,7 @@ import type {
   MaterialsV1Precondition,
   MaterialsV1Substance,
 } from "@openlab/protocol";
+import { materialLabel } from "./material-label";
 
 export type SubstanceLinkState =
   | { kind: "linked"; chemicalUuid: string; summary: ChemicalSummary }
@@ -102,7 +103,7 @@ export function substanceReferences(
       if (substance.chemical_uuid !== chemicalUuid) continue;
       result.push({
         materialUuid: aggregate.material.material_uuid,
-        materialName: aggregate.material.display_name || aggregate.material.name,
+        materialName: materialLabel(aggregate.material),
         substanceName: substance.name,
         quantity: substance.quantity,
         unit: substance.quantity_unit,

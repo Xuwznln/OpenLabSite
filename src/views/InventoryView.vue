@@ -66,6 +66,7 @@ import ChemicalPickerDialog from "../components/ChemicalPickerDialog.vue";
 import { aggregatePrecondition, dataWriteWithLink, describeLinkError } from "../features/substance-chemicals";
 import { actorTypeLabel } from "../features/actor-type";
 import { describeError } from "../features/errors";
+import { compareMaterialLabels, materialLabel, materialMatches } from "../features/material-label";
 import { createRefreshQueue } from "../features/refresh-queue";
 import { useConnectionStore } from "../stores/connection";
 import { useDomainThemeStore } from "../stores/domain-theme";
@@ -100,7 +101,7 @@ const childrenOf = computed(() => {
     (map.get(parent) ?? map.set(parent, []).get(parent)!).push(item);
   }
   for (const list of map.values()) {
-    list.sort((a, b) => a.material.ordinal - b.material.ordinal || a.material.name.localeCompare(b.material.name));
+    list.sort((a, b) => a.material.ordinal - b.material.ordinal || compareMaterialLabels(a.material, b.material));
   }
   return map;
 });
@@ -136,14 +137,13 @@ function siteOf(materialUuid: string): { site: MaterialsV1Site; owner: Materials
   return null;
 }
 
+/** 物料 name 是 uuid，人读标签是 display_name。 */
 function displayName(item: MaterialsV1Aggregate): string {
-  return item.material.display_name || item.material.name;
+  return materialLabel(item.material);
 }
 
 function matchesFilter(item: MaterialsV1Aggregate, keyword: string): boolean {
-  const m = item.material;
-  return [m.name, m.display_name ?? "", m.resource_id, m.class_name, m.barcode, m.material_uuid]
-    .some((value) => value.toLowerCase().includes(keyword));
+  return materialMatches(item.material, keyword);
 }
 
 function subtreeMatches(item: MaterialsV1Aggregate, keyword: string): boolean {
@@ -358,8 +358,11 @@ function instantiableClass(template: MaterialsV1Template | null): MaterialsV1Reg
   return registryClasses.value.find((item) => item.registry_class === template.name) ?? null;
 }
 
-/** 已有实例名集合（去重、避免重复命名）。 */
-const existingNames = computed(() => new Set(aggregates.value.map((item) => item.material.name)));
+/**
+ * 已占用的名字（去重、避免重复命名）：显示名与 resource_id。出库时显示名同时作 PLR 根名、
+ * resource_id 由它派生且必须唯一（物料 name 是 uuid，不参与去重）。
+ */
+const existingNames = computed(() => new Set(aggregates.value.flatMap((item) => [materialLabel(item.material), item.material.resource_id])));
 
 /**
  * 缺省实例名 = 资源类名 + 两位序号，从该类现有实例数量往后编（tips_rack_03…），
@@ -513,7 +516,7 @@ function openEdit() {
   if (!selected.value) return;
   const m = selected.value.material;
   editForm.value = {
-    display_name: m.display_name ?? m.name,
+    display_name: materialLabel(m),
     barcode: m.barcode,
     description: m.description,
     lifecycle_status: m.lifecycle_status,
@@ -1328,7 +1331,7 @@ const selectedDevice = computed(() => rootDeviceOf(selected.value));
 
         <NForm v-if="inboundKind === 'instance'" label-placement="top" size="small" style="margin-top: 10px">
           <div class="form-row">
-            <NFormItem label="实例名（末尾序号会按件数顺延）" style="flex: 2">
+            <NFormItem label="显示名（末尾序号会按件数顺延）" style="flex: 2">
               <NInput v-model:value="instantiateForm.name" placeholder="例如 demo_tips_24_01" />
             </NFormItem>
             <NFormItem label="件数" style="flex: 1">

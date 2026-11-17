@@ -1,5 +1,6 @@
 /** 物料位点几何：按 pose 摆放位点并标出占用者（装配视图用）。 */
 import type { MaterialsV1Aggregate, MaterialsV1Site } from "@openlab/protocol";
+import { materialLabel } from "./material-label";
 
 export interface MapSite {
   key: string;
@@ -37,7 +38,7 @@ export function mapSites(item: MaterialsV1Aggregate, byUuid: Map<string, Materia
     const cols = Math.max(1, Math.floor(w / (sw + 10)));
     return {
       key: `${item.material.material_uuid}:${site.site_uuid}`,
-      ownerName: item.material.display_name || item.material.name,
+      ownerName: materialLabel(item.material),
       site,
       x: poseValue(pose, "position", "x") ?? 10 + (index % cols) * (sw + 10),
       y: poseValue(pose, "position", "y") ?? 10 + Math.floor(index / cols) * (sh + 10),

@@ -156,7 +156,12 @@ export interface MaterialsV1IdentityWrite {
   resource_id: string;
   parent_material_uuid?: string | null;
   lot_uuid?: string | null;
-  name: string;
+  /**
+   * 物料 `name` 恒等于 `material_uuid`，由权威写入：可以不给；给 UUID 即身份（须与 material_uuid 一致），
+   * 给旧式标签则迁到 `display_name`（为空时）与 PLR 键 `config.name`（缺失时）。
+   */
+  name?: string;
+  /** 人读标签；为空时权威依次回退旧名、PLR 键、resource_id。 */
   display_name?: string;
   description?: string;
   /** `device` 表示设备行；其余为 registry resource_type（plate / well / tip_rack …）。 */
@@ -179,8 +184,9 @@ export interface MaterialsV1Identity {
   resource_id: string;
   parent_material_uuid?: string | null;
   lot_uuid?: string | null;
+  /** 恒等于 `material_uuid`（所有物料，包括设备）；不是给人看的名字。 */
   name: string;
-  /** 展示名；权威保证非空（缺省与 name 一致）。 */
+  /** 人读标签（孔位是 ordering 标识如 "A1"）；显示 / 排序 / 搜索都用它，`?name=` 筛选也按它匹配。 */
   display_name?: string;
   description: string;
   resource_type: string;
@@ -279,8 +285,8 @@ export interface MaterialsV1TreeCreate {
   nodes: MaterialsV1NodeCreate[];
 }
 
+/** 标识字段局部更新；`name`（= uuid）不可修改，改人读标签用 `display_name`。 */
 export interface MaterialsV1Patch {
-  name?: string;
   display_name?: string;
   description?: string;
   machine_name?: string;

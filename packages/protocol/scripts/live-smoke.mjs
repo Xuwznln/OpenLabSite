@@ -477,18 +477,27 @@ if (doWrite) {
       return wf.uuid;
     });
   }
-  await step("inventory commands: instantiate → patch → move → delete; rejected → business error", async () => {
+  await step("inventory commands: instantiate (display_name) → patch → move → delete; rejected → failure envelope", async () => {
     const classes = await api.materialsV1.registryClasses();
     const roots = await api.inventory.instances({ rootsOnly: true });
     const preferred = classes.find((c) => /tip/i.test(c.registry_class)) ?? classes[0];
     if (!preferred) throw new Error("registry 没有可实例化的资源类");
-    const created = await api.inventory.instantiate(preferred.registry_class, `smoke_${Date.now().toString(36)}`);
+    const label = `smoke_${Date.now().toString(36)}`;
+    const created = await api.inventory.instantiate(preferred.registry_class, label);
     const uuid = created.data.root_material_uuid;
+    // 物料 name = uuid；人读标签落在 display_name
+    const root = created.data.nodes.find((node) => node.material.material_uuid === uuid);
+    if (root?.material.name !== uuid || root.material.display_name !== label) {
+      throw new Error(`实例化后应 name = uuid、display_name = ${label}，实际 name=${root?.material.name} display_name=${root?.material.display_name}`);
+    }
     const barcode = `SMOKE-${Date.now().toString(36).toUpperCase()}`;
-    const patched = await api.inventory.patch(uuid, { barcode });
+    const patched = await api.inventory.patch(uuid, { barcode, display_name: `${label}_renamed` });
     if (patched.data.material.barcode !== barcode) throw new Error("条码没有写入");
+    if (patched.data.material.display_name !== `${label}_renamed` || patched.data.material.name !== uuid) throw new Error("display_name 没有写入或 name 被改动");
     const detail = await api.inventory.instance(uuid);
     if (detail.barcode !== barcode) throw new Error("/inventory/instances 读不到新条码");
+    const byLabel = await api.inventory.instances({ name: `${label}_renamed` });
+    if (!byLabel.some((item) => item.material.material_uuid === uuid)) throw new Error("?name= 没有按 display_name 筛到物料");
     let moved = "未移动（没有空位点）";
     const vacant = roots.flatMap((root) => root.sites.filter((site) => !site.occupied_material_uuid).map((site) => ({ root, site })))[0];
     if (vacant) {
@@ -504,7 +513,7 @@ if (doWrite) {
       throw new Error("移动到不存在的库位应是失败信封（error.details.command_id）");
     }
     const removed = await api.inventory.remove(uuid, true);
-    return `${preferred.registry_class} → ${uuid.slice(0, 8)} · 条码 ${barcode} · ${moved} · 被拒命令 ${rejected.code}/${rejected.symbol} · 删除 ${removed.data.deleted_material_uuids.length} 节点`;
+    return `${preferred.registry_class} → ${uuid.slice(0, 8)}（name = uuid，display_name = ${label}_renamed）· 条码 ${barcode} · ${moved} · 被拒命令 ${rejected.code}/${rejected.symbol} · 删除 ${removed.data.deleted_material_uuids.length} 节点`;
   });
   await step("registry pending batch apply / dismiss (only when nothing is pending)", async () => {
     const status = await api.registry.status();

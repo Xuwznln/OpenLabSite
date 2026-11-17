@@ -19,6 +19,7 @@ import type { MaterialsV1Aggregate } from "@openlab/protocol";
 import StatusPill from "./StatusPill.vue";
 import { useConnectionStore } from "../stores/connection";
 import { describeError } from "../features/errors";
+import { materialLabel } from "../features/material-label";
 
 const props = defineProps<{ show: boolean; initialCode?: string }>();
 const emit = defineEmits<{ (e: "update:show", v: boolean): void }>();
@@ -88,7 +89,7 @@ function recordScan(action: ScanMode, barcode: string, material: MaterialsV1Aggr
 }
 
 function displayName(item: MaterialsV1Aggregate): string {
-  return item.material.display_name || item.material.name || item.material.template_name || "未命名物料";
+  return materialLabel(item.material) || item.material.template_name || "未命名物料";
 }
 
 /** 实例所在位置：父物料（设备 / 台面）名，根层 = 在库。 */

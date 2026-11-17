@@ -135,7 +135,9 @@ describe("UniLabOS 四库 v1 浏览器接口", () => {
     expect(data.effect_key.startsWith("put_data:")).toBe(true);
     expect(position.operation).toBe("put_position");
     expect(position.target_uuid).toBe(DUMMY_ID);
-    expect(patch).toMatchObject({ operation: "patch_material", target_uuid: DUMMY_ID, payload: { barcode: "BC-9", name: null } });
+    expect(patch).toMatchObject({ operation: "patch_material", target_uuid: DUMMY_ID, payload: { barcode: "BC-9", display_name: null } });
+    // 物料 name = uuid、不可修改：MaterialPatch 没有 name 字段，带上会被 1000 拒绝
+    expect(patch.payload).not.toHaveProperty("name");
     const substances = data.payload.substances as Record<string, unknown>[];
     expect(substances[0]!.chemical_uuid).toBe("c1");
     expect(substances[1]).toHaveProperty("chemical_uuid", null);
@@ -186,7 +188,8 @@ describe("UniLabOS 四库 v1 浏览器接口", () => {
       operation: "instantiate_material",
       // 微后端契约（KNOWN_ACTOR_TYPES）：浏览器 / 操作员写操作显式携带 human，不依赖默认值 edge
       actor_type: "human",
-      payload: { registry_class: "PRCXI_1000uL_Tips", name: "tips-1", barcode: "BC-1" },
+      // 实例化发人读标签 display_name（同时作 PLR 根名）；物料 name 由权威写成 uuid
+      payload: { registry_class: "PRCXI_1000uL_Tips", display_name: "tips-1", barcode: "BC-1" },
     });
     expect(body).not.toHaveProperty("target_uuid");
 
