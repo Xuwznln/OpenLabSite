@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { BackendBusinessError } from "../src/common";
 import { createDebugApi } from "../src/debug";
 import { createGraphsV1Api } from "../src/graphs-v1";
 import { createDeviceStateApi } from "../src/device-state";
@@ -37,7 +38,7 @@ describe("UniLabOS 四库 v1 浏览器接口", () => {
   it("覆盖 inventory 全部读写操作：读走 /inventory/*，写一律 POST /inventory/commands", async () => {
     const mock = createMockHttp();
     const api = createInventoryApi(mock.http);
-    const completed = { status: 200, data: { command_id: "c", status: "completed", result: { protocol_version: "materials.v1" } } };
+    const completed = { status: 200, data: { code: 0, data: { command_id: "c", status: "completed", result: { protocol_version: "materials.v1" } } } };
     const write = <T>(run: () => Promise<T>) => () => {
       mock.nextResponse = completed;
       return run();
@@ -110,7 +111,7 @@ describe("UniLabOS 四库 v1 浏览器接口", () => {
     const mock = createMockHttp();
     const api = createInventoryApi(mock.http);
     const completed = () => {
-      mock.nextResponse = { status: 200, data: { command_id: "c", status: "completed", result: { data: {} } } };
+      mock.nextResponse = { status: 200, data: { code: 0, data: { command_id: "c", status: "completed", result: { data: {} } } } };
     };
     completed();
     await api.putData(DUMMY_ID, {
@@ -148,7 +149,7 @@ describe("UniLabOS 四库 v1 浏览器接口", () => {
     const mock = createMockHttp();
     const api = createInventoryApi(mock.http);
     const ok = () => {
-      mock.nextResponse = { status: 200, data: { command_id: "c", status: "completed", result: { data: {} } } };
+      mock.nextResponse = { status: 200, data: { code: 0, data: { command_id: "c", status: "completed", result: { data: {} } } } };
     };
     ok();
     await api.move({ material_uuid: "m", destination_site_uuid: "s" });
@@ -165,12 +166,15 @@ describe("UniLabOS 四库 v1 浏览器接口", () => {
     });
   });
 
-  it("库存命令使用 materials.v1 幂等信封；裸结果 completed 解出 MutationResult，rejected 抛业务错误", async () => {
+  it("库存命令使用 materials.v1 幂等信封；完成信封解出 MutationResult，失败信封抛 InventoryCommandRejectedError", async () => {
     const mock = createMockHttp();
     const api = createInventoryApi(mock.http);
     mock.nextResponse = {
       status: 200,
-      data: { command_id: "cmd-1", status: "completed", result: { protocol_version: "materials.v1", command_uuid: "cmd-1", data: { root_material_uuid: "m" } }, replayed: false },
+      data: {
+        code: 0,
+        data: { command_id: "cmd-1", status: "completed", result: { protocol_version: "materials.v1", command_uuid: "cmd-1", data: { root_material_uuid: "m" } }, replayed: false },
+      },
     };
     const result = await api.instantiate("PRCXI_1000uL_Tips", "tips-1", "BC-1", { commandUuid: "cmd-1" });
     expect(result).toMatchObject({ command_uuid: "cmd-1", data: { root_material_uuid: "m" } });
@@ -188,19 +192,32 @@ describe("UniLabOS 四库 v1 浏览器接口", () => {
 
     mock.nextResponse = {
       status: 200,
-      data: { command_id: "cmd-2", status: "rejected", error: "site occupied", error_code: "conflict:site_occupied", code: 6007 },
+      data: { code: 6007, error: { msg: "site occupied", code: "conflict:site_occupied", details: { command_id: "cmd-2", replayed: true } } },
     };
     const error = await api.move({ material_uuid: "m", destination_site_uuid: "s" }).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(InventoryCommandRejectedError);
-    expect(error).toMatchObject({ code: 6007, symbol: "conflict:site_occupied", message: "site occupied" });
+    expect(error).toMatchObject({
+      code: 6007,
+      symbol: "conflict:site_occupied",
+      message: "site occupied",
+      details: { command_id: "cmd-2", replayed: true },
+      result: { command_id: "cmd-2", status: "rejected", error: "site occupied", error_code: "conflict:site_occupied", code: 6007, replayed: true },
+    });
     expect((error as InventoryCommandRejectedError).isConflict).toBe(true);
 
-    // 原样命令不抛业务拒绝，调用方按 status 判断
-    mock.nextResponse = { status: 200, data: { command_id: "c3", status: "rejected", error: "x", code: 1000 } };
-    await expect(api.command({ command_id: "c3", type: "material.move", payload: {} })).resolves.toMatchObject({ status: "rejected" });
+    // 原样命令不抛拒绝：失败信封还原成 status=rejected 的结果，调用方按 status 判断
+    mock.nextResponse = { status: 200, data: { code: 1000, error: { msg: "x", code: "invalid", details: { command_id: "c3", replayed: false } } } };
+    await expect(api.command({ command_id: "c3", type: "material.move", payload: {} })).resolves.toEqual({
+      command_id: "c3", status: "rejected", error: "x", error_code: "invalid", code: 1000, replayed: false,
+    });
+    // 不是命令拒绝的业务失败（没有 details.command_id，如请求体不是 JSON 对象）照常抛
+    mock.nextResponse = { status: 200, data: { code: 1000, error: { msg: "body: Input should be a valid dictionary" } } };
+    const invalid = await api.command({ command_id: "c4" }).catch((e: unknown) => e);
+    expect(invalid).toBeInstanceOf(BackendBusinessError);
+    expect(invalid).not.toBeInstanceOf(InventoryCommandRejectedError);
 
     // 模板写入带全 ResourceTemplateWrite 字段（命令入口按类型化请求体的完整 dump 比对）
-    mock.nextResponse = { status: 200, data: { command_id: "t0", status: "completed", result: { data: {} } } };
+    mock.nextResponse = { status: 200, data: { code: 0, data: { command_id: "t0", status: "completed", result: { data: {} } } } };
     await api.createTemplate({ name: "tube", resource_type: "container", class_name: "Resource" });
     expect((mock.calls.at(-1)?.data as { payload: unknown }).payload).toEqual({
       template_uuid: null, name: "tube", display_name: null, resource_type: "container", class_name: "Resource", module_name: null,
@@ -208,7 +225,7 @@ describe("UniLabOS 四库 v1 浏览器接口", () => {
     });
 
     // V1 类型化命令
-    mock.nextResponse = { status: 200, data: { command_id: "t1", status: "completed", result: { moved: true } } };
+    mock.nextResponse = { status: 200, data: { code: 0, data: { command_id: "t1", status: "completed", result: { moved: true } } } };
     await expect(api.typedCommand("material.move", { edge_uuid: "m" }, { commandId: "t1", expectedVersion: 3 })).resolves.toEqual({ moved: true });
     expect(mock.calls.at(-1)?.data).toEqual({ command_id: "t1", type: "material.move", payload: { edge_uuid: "m" }, expected_version: 3 });
 

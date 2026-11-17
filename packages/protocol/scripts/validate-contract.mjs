@@ -87,18 +87,9 @@ if (sse.join("\0") !== ["/api/v1/events", "/api/v1/materials/events"].join("\0")
   fail(`unexpected SSE catalog: ${sse.join(", ")}`);
 }
 
-// 不包信封的路由按 V1 设计固定：探针、库存命令入口、进程管理；其余全部是 V1 信封。
-const RAW_OPERATIONS = [
-  "system.health",
-  "system.readiness",
-  "inventory.commands.submit",
-  "process-management.snapshot",
-  "process-management.operations.submit",
-  "process-management.operations.get",
-  "process-management.logs",
-];
-const raw = OPERATIONS.filter((operation) => operation.raw).map((operation) => operation.id).sort();
-if (raw.join("\0") !== [...RAW_OPERATIONS].sort().join("\0")) fail(`unexpected raw (non-envelope) operations: ${raw.join(", ")}`);
+// 全部 JSON 路由都是 V1 信封（探针、库存命令入口、/v1/* 进程管理也不例外）；只有 SSE 与文件下载不包信封。
+const raw = OPERATIONS.filter((operation) => "raw" in operation).map((operation) => operation.id);
+if (raw.length) fail(`every catalog route is a V1 envelope, but these declare raw: ${raw.join(", ")}`);
 
 if (SERVER_DATABASE_KEYS.join("\0") !== ["runtime", "materials", "telemetry", "history"].join("\0")) {
   fail("server database keys drift from the four-database layout");

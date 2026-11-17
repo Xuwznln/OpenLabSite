@@ -164,7 +164,7 @@ describe("system 协议与传输层", () => {
       expect(new BackendBusinessError({ code, error: { msg: "x" } }).isNotFound, String(code)).toBe(true);
     }
     expect(isBackendEnvelope({ code: 0, data: [] })).toBe(true);
-    // 带 code 字段的业务 DTO（如库存命令裸结果）不是信封
+    // 带 code 字段的业务 DTO（除 code / data / error 外还有别的键）不是信封
     expect(isBackendEnvelope({ command_id: "c", status: "rejected", code: 4001 })).toBe(false);
   });
 
@@ -213,16 +213,33 @@ describe("system 协议与传输层", () => {
     expect(parseRetryAfter(undefined)).toBeUndefined();
   });
 
-  it("health / readiness 是裸 JSON；readiness 503 返回同形状正文", async () => {
+  it("health / readiness 也是信封；readiness 503 + 5001 返回 error.details 里的摘要", async () => {
     const mock = createMockHttp();
     const api = createSystemApi(mock.http);
-    mock.nextResponse = { status: 200, data: { status: "ok", scheduler: "ready", scheduler_mode: "local", execution: "ready" } };
+    mock.nextResponse = { status: 200, data: { code: 0, data: { status: "ok", scheduler: "ready", scheduler_mode: "local", execution: "ready" } } };
     await expect(api.health()).resolves.toMatchObject({ scheduler_mode: "local", execution: "ready" });
     mock.nextResponse = {
       status: 503,
-      data: { status: "starting", phase: "host_restarting", scheduler: "local", execution: "restarting", reasons: ["Host 子进程未接入控制面"] },
+      data: {
+        code: 5001,
+        error: {
+          msg: "Host 子进程未接入控制面",
+          code: "not_ready",
+          details: { status: "starting", phase: "host_restarting", scheduler: "local", execution: "restarting", reasons: ["Host 子进程未接入控制面"] },
+        },
+      },
     };
     await expect(api.readiness()).resolves.toMatchObject({ status: "starting", phase: "host_restarting", execution: "restarting" });
+  });
+
+  it("未匹配的路由是 404 + 信封 4001（ApiError，按「不支持」降级）", async () => {
+    const mock = createMockHttp();
+    const api = createSystemApi(mock.http);
+    mock.nextResponse = { status: 404, data: { code: 4001, error: { msg: "Not Found" } } };
+    const error = await api.restartStatus().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: 404, businessCode: 4001, message: "Not Found" });
+    expect(isCapabilityUnavailable(error)).toBe(true);
   });
 
   it("网络层失败归一为 ApiError(status=0)", async () => {
@@ -380,7 +397,7 @@ describe("system 协议与传输层", () => {
     ]);
   });
 
-  it("覆盖 process-management 域：/v1 路由裸 JSON，失败是 HTTP 状态 + {error:{code,message}}", async () => {
+  it("覆盖 process-management 域：/v1 路由也是信封，V1 符号码在 error.code", async () => {
     const mock = createMockHttp();
     const api = createProcessManagementApi(mock.http);
     const called = await collectCalls(mock, {
@@ -392,13 +409,18 @@ describe("system 协议与传输层", () => {
     expect(called).toEqual(catalogOps("process-management"));
     expect(mock.calls[1]?.data).toEqual({ parameters: {}, operationId: "op-1", command: "scheduler.drain" });
 
-    mock.nextResponse = { status: 409, data: { error: { code: "revision_conflict", message: "快照修订已变化" } } };
+    mock.nextResponse = { status: 200, data: { code: 3003, error: { msg: "快照修订已变化", code: "revision_conflict" } } };
     const error = await api.submitOperation({ operationId: "op-2", command: "workspace.restart", expectedRevision: 1 }).catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(ApiError);
-    expect(error).toMatchObject({ status: 409, message: "快照修订已变化" });
-    // 裸 JSON 成功正文即使形似信封也原样返回
-    mock.nextResponse = { status: 202, data: { schemaVersion: "unilab-workspace-host/v1", operationId: "op-3", phase: "accepted" } };
+    expect(error).toBeInstanceOf(BackendBusinessError);
+    expect(error).toMatchObject({ code: 3003, symbol: "revision_conflict", message: "快照修订已变化" });
+    expect((error as BackendBusinessError).isConflict).toBe(true);
+    // 提交操作是 HTTP 202 + 成功信封
+    mock.nextResponse = { status: 202, data: { code: 0, data: { schemaVersion: "unilab-workspace-host/v1", operationId: "op-3", phase: "accepted" } } };
     await expect(api.submitOperation({ operationId: "op-3", command: "scheduler.resume" })).resolves.toMatchObject({ operationId: "op-3" });
+    mock.nextResponse = { status: 200, data: { code: 4001, error: { msg: "操作不存在", code: "operation_not_found" } } };
+    const missing = await api.operation("op-x").catch((e: unknown) => e);
+    expect(missing).toMatchObject({ code: 4001, symbol: "operation_not_found" });
+    expect((missing as BackendBusinessError).isNotFound).toBe(true);
   });
 });
 

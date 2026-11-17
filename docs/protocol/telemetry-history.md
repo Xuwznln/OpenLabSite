@@ -66,8 +66,9 @@ Host 的统一 append-only 历史流（history.db）。V1 合同把 `/api/v1/his
 ## 4. V1 进程管理（`process-management` 域，`/v1/*`）
 
 原 V1 Workspace Host 合同，挂在调度权威的管理应用上（`server/api/process_management.py`）。路径**不带 `/api` 前缀**，
-成功是**裸 JSON**，失败是 HTTP 状态 + `{"error": {"code", "message", "details?"}}`（不存在 404、`operation_conflict` /
-`revision_conflict` 409、其余 400、日志暂不可读 503 `component_unavailable`），SDK 抛 `ApiError`。
+与其它路由一样是 V1 信封：成功 `{code: 0, data}`（提交操作 HTTP 202），失败 HTTP 200 + `{code, error: {msg, code, details?}}`，
+V1 符号码在 `error.code`（`operation_not_found` 4001、`operation_conflict` / `revision_conflict` 3003、`component_unavailable`
+5001、其余 1000），SDK 抛 `BackendBusinessError`（`symbol` 即符号码）；未知 `/v1/*` 路径 404 + 4001。
 
 | 方法 | 路径 | SDK | 说明 |
 | --- | --- | --- | --- |

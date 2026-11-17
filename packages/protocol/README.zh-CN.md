@@ -81,7 +81,8 @@ try {
 
 全部 `/api/v1` JSON 路由都是 V1 信封（`{ code, data }` / `{ code, error: { msg, code?, details? } }`），
 传输层统一解包，客户端方法直接返回 `data`；`code != 0` 即使 HTTP 200 也抛 `BackendBusinessError`。
-只有 `/health`、`/readiness`、`POST /inventory/commands` 与 `/v1/*` 进程管理路由不包信封。
+`/health`、`/readiness`、`POST /inventory/commands`（被拒是带 `error.details.command_id` 的失败信封）与 `/v1/*`
+进程管理路由同样是信封；只有事件流与文件下载不包信封。
 
 `127.0.0.1:8002` 是调用方机器上的后端管理 API，不是 HostLink 设备通信端口。
 能力是否可用取决于后端版本、进程角色和当前运行状态。

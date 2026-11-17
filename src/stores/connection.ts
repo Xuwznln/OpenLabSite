@@ -1,7 +1,7 @@
 /**
  * 连接管理：后端地址（localStorage 持久化）+ 健康轮询 + 进程角色识别。
  *
- * `/api/v1/health`（V1 裸 JSON）同时给出两个维度，页面据此决定哪些能力可用：
+ * `/api/v1/health`（V1 信封）同时给出两个维度，页面据此决定哪些能力可用：
  * - `scheduler_mode`：local = 本进程持有 Workflow Authority；remote = 已接入远端调度权威，
  *   工作流写入口不在本进程（V1 的 `scheduler` 字段是 ready / disabled）；
  * - `execution`：ready = 本进程带设备执行面（HostNode、遥测、人工决策）；restarting = Host

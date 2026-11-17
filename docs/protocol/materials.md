@@ -67,15 +67,17 @@ dev 时代按操作分路由的读写（`/materials/templates`、`/instances`、
 
 ## 3. 写接口：`POST /inventory/commands`
 
-所有物料写请求都提交到这一个入口，按 V1 原样返回**裸结果**（不包信封，业务拒绝也是 HTTP 200）：
+所有物料写请求都提交到这一个入口，与其它路由一样走 V1 信封：完成是成功信封，被拒（含同一 `command_id` 的拒绝重放）
+是 HTTP 200 的失败信封：
 
 ```json
-{ "command_id": "<command_uuid>", "status": "completed", "result": { "…": "MutationResult" }, "replayed": false }
-{ "command_id": "<command_uuid>", "status": "rejected", "error": "…", "error_code": "conflict:site_occupied", "code": 6007 }
+{ "code": 0, "data": { "command_id": "<command_uuid>", "status": "completed", "result": { "…": "MutationResult" }, "replayed": false } }
+{ "code": 6007, "error": { "msg": "…", "code": "conflict:site_occupied", "details": { "command_id": "<command_uuid>", "replayed": false } } }
 ```
 
-SDK 的写方法在 `status != "completed"` 时抛 `InventoryCommandRejectedError`（继承 `BackendBusinessError`，
-`code` = 业务码，`symbol` = `error_code`，`isConflict` / `isNotFound` 照常可用）；`inventory.command(body)` 原样返回裸结果。
+SDK 的写方法在被拒时抛 `InventoryCommandRejectedError`（继承 `BackendBusinessError`，`code` = 业务码，
+`symbol` = 拒绝码，`details.command_id` / `replayed`，`isConflict` / `isNotFound` 照常可用）；`inventory.command(body)`
+不抛拒绝，把失败信封还原成 `{command_id, status: "rejected", error, error_code, code, replayed}` 返回。
 
 dev 变更的正文仍是 `InventoryMutation`（materials.v1 幂等信封），原路径参数放在顶层 `target_uuid`：
 

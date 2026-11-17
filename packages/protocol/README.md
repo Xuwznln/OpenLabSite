@@ -83,8 +83,9 @@ try {
 
 Every `/api/v1` JSON route returns a V1 envelope (`{ code, data }` / `{ code, error: { msg, code?, details? } }`);
 the transport unwraps it, so client methods resolve to `data`. A non-zero `code` rejects with `BackendBusinessError`
-(also on HTTP 200). The only raw routes are `/health`, `/readiness`, `POST /inventory/commands` and the
-process-management routes under `/v1/*`.
+(also on HTTP 200). Every JSON route is an envelope, including `/health`, `/readiness`, `POST /inventory/commands`
+(a rejection is a failure envelope with `error.details.command_id`) and the process-management routes under `/v1/*`;
+only event streams and file downloads are not.
 
 The default endpoint is the backend management API on the caller's computer, not the HostLink device port.
 Availability depends on the backend build, process role, and runtime state.

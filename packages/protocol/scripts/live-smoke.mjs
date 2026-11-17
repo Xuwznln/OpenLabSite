@@ -10,10 +10,10 @@
  *
  * 读路径：每个域的列表接口都要 2xx + 信封 code 0，且形状符合类型的关键字段。
  * --write：写请求不需要令牌；逐步 / V1 暂停任务；Workflow 定义增删；
- * 库存命令出库一件物料、改条码、移动到空位点、删除，被拒命令映射为业务错误；
+ * 库存命令出库一件物料、改条码、移动到空位点、删除，被拒命令是失败信封（InventoryCommandRejectedError）；
  * 对在线设备提交一个 always_free 动作并等待任务终态。
  */
-import { createEdgeApi, BackendBusinessError, isCapabilityUnavailable } from "../dist/index.js";
+import { createEdgeApi, ApiError, BackendBusinessError, InventoryCommandRejectedError, isCapabilityUnavailable } from "../dist/index.js";
 
 const args = process.argv.slice(2);
 const flagValue = (name) => {
@@ -269,6 +269,15 @@ await step("system.resetPreview", async () => {
   expectKeys(preview, ["supported", "pending", "confirmation_token", "backup_path", "detail"], "reset");
 });
 
+await step("envelope: unmatched route → 404 + 4001", async () => {
+  // 未匹配的路由（含 /v1/* 与已删除的 lab 布局路由）由应用级兜底返回信封，保留 404
+  const missing = await createEdgeApi(baseUrl).http.request({ method: "GET", path: "/api/v1/__openlab_smoke_missing__" }).then(() => null, (error) => error);
+  if (!(missing instanceof ApiError) || missing.status !== 404 || missing.businessCode !== 4001) {
+    throw new Error(`应为 404 + 4001，实际 ${missing?.status ?? "成功"} / ${missing?.businessCode}`);
+  }
+  return `404 + ${missing.businessCode}: ${missing.message}`;
+});
+
 await step("system.readiness", async () => {
   const readiness = await api.system.readiness();
   expectKeys(readiness, ["status", "capabilities", "phase", "workflowRuntime", "scheduler", "execution", "reasons"], "readiness");
@@ -423,7 +432,7 @@ await step("labV1.profile / layoutView (grid)", async () => {
   if (grid) expectKeys(grid, ["layout_key", "revision", "cell_size", "zones", "walls", "create_time", "update_time"], "grid");
   return `lab=${profile.name} placements=${view.placements.length} grid=${grid ? `r${grid.revision} zones=${grid.zones.length}` : "无"}`;
 });
-await step("processManagement.snapshot (/v1, 裸 JSON)", async () => {
+await step("processManagement.snapshot (/v1, envelope)", async () => {
   const snapshot = await api.processManagement.snapshot();
   expectKeys(snapshot, ["schemaVersion", "revision", "components"], "process snapshot");
   return `${snapshot.schemaVersion} revision=${snapshot.revision} components=${Object.values(snapshot.components).map((c) => `${c.name}:${c.phase}`).join(" ")}`;
@@ -479,7 +488,9 @@ if (doWrite) {
       }
     }
     const rejected = await api.inventory.move({ material_uuid: uuid, destination_site_uuid: crypto.randomUUID() }).then(() => null, (error) => error);
-    if (!(rejected instanceof BackendBusinessError)) throw new Error("移动到不存在的库位应被拒绝为业务错误");
+    if (!(rejected instanceof InventoryCommandRejectedError) || typeof rejected.details?.command_id !== "string") {
+      throw new Error("移动到不存在的库位应是失败信封（error.details.command_id）");
+    }
     const removed = await api.inventory.remove(uuid, true);
     return `${preferred.registry_class} → ${uuid.slice(0, 8)} · 条码 ${barcode} · ${moved} · 被拒命令 ${rejected.code}/${rejected.symbol} · 删除 ${removed.data.deleted_material_uuids.length} 节点`;
   });

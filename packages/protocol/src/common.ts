@@ -1,6 +1,6 @@
 export const OPENLAB_PROTOCOL_VERSION = "3.0.0" as const;
 export const OPENLAB_API_PREFIX = "/api/v1" as const;
-/** V1 进程管理路由（原 Workspace Host 合同）不带 `/api` 前缀，成功是裸 JSON。 */
+/** V1 进程管理路由（原 Workspace Host 合同）不带 `/api` 前缀，与其它路由一样是 V1 信封。 */
 export const OPENLAB_PROCESS_MANAGEMENT_PREFIX = "/v1" as const;
 
 export type JsonPrimitive = string | number | boolean | null;
@@ -49,7 +49,7 @@ export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
  * - `driver-packages`    驱动包安装台账、目录、随包图（仅 Host）
  * - `device-processes`   受管本机 Slave 子进程（仅 Host）
  * - `lab-v1`             实验室档案 / 布局网格 / 分区 / 摆放（V1 lab 合同）
- * - `process-management` V1 进程管理（`/v1/snapshot|operations|logs`，裸 JSON）
+ * - `process-management` V1 进程管理（`/v1/snapshot|operations|logs`）
  * - `debug`              四库 SQLite 只读浏览
  */
 export type ProtocolDomain =
@@ -87,19 +87,18 @@ export interface OperationContract {
    * - `any`：两种角色都挂载。
    */
   role: "host" | "backend" | "any";
-  /** 按 V1 设计不包信封的路由（探针、库存命令、进程管理）；缺省即 V1 信封。 */
-  raw?: true;
 }
 
 // ---------------------------------------------------------------------------
-// V1 信封：全部 `/api/v1` JSON 路由都是 `{code, data}` / `{code, error: {msg, code?, details?}}`。
+// V1 信封：全部 JSON 路由（`/api/v1/*`、`/v1/*` 进程管理、健康 / 就绪探针、库存命令）都是
+// `{code, data}` / `{code, error: {msg, code?, details?}}`；只有 SSE 与文件下载不包信封。
 //
 // - HTTP 200 + code 0：成功，传输层解包返回 `data`（无数据的命令可省略 data）；
 // - HTTP 200 + code != 0：业务失败，抛 BackendBusinessError（code / symbol / details）；
-// - 例外仍用 HTTP 状态码：全量重置维护闸门 503 + 5001，未挂载的路由 404，服务端缺陷 500，
-//   统一抛 ApiError（status + 信封里的业务码）；管理 API 不鉴权，没有 401；
-// - 不包信封的路由（`/health`、`/readiness`、`POST /inventory/commands`、`/v1/*` 进程管理、
-//   SSE）在请求上标 `raw: true`，原样返回正文。
+// - 例外仍用 HTTP 状态码：全量重置维护闸门与 `/readiness` 未就绪 503 + 5001，未匹配的路由
+//   404 + 4001（方法不对 405 + 1001），服务端缺陷 500，统一抛 ApiError（status + 信封里的业务码）；
+//   管理 API 不鉴权，没有 401；
+// - 非 JSON 正文（文件下载）在请求上标 `raw: true`，原样返回。
 // ---------------------------------------------------------------------------
 
 export interface BackendErrorPayload {
@@ -291,7 +290,7 @@ export interface RequestConfig {
   params?: Record<string, string | number | boolean | readonly (string | number)[] | null | undefined>;
   body?: unknown;
   timeoutMs?: number;
-  /** 该路由按 V1 设计不包信封：原样返回正文（2xx），非 2xx 仍抛 ApiError。 */
+  /** 正文不是信封（文件下载等）：原样返回（2xx），非 2xx 仍抛 ApiError。目录里的 JSON 路由都不用它。 */
   raw?: boolean;
   /** 额外请求头（如 `Idempotency-Key`）。 */
   headers?: Record<string, string>;
@@ -482,7 +481,7 @@ export interface UnavailableDevice {
   supported_backends: string[];
 }
 
-/** GET /api/v1/health：存活探针，恒 HTTP 200 的裸 JSON（不包信封）。 */
+/** GET /api/v1/health：存活探针，恒 HTTP 200，信封 `data`。 */
 export interface HealthResponse {
   status: string;
   /** V1：本进程是否承载调度器（`ready`）或纯执行面（`disabled`）。 */
@@ -507,9 +506,10 @@ export interface RuntimeCapabilities {
 }
 
 /**
- * GET /api/v1/readiness：就绪探针（不包信封）。能接收并执行任务时 HTTP 200，否则 503；两种情况
- * 正文形状相同。V1 字段 `status` / `capabilities` / `phase` / `workflowRuntime`，dev 探针摘要
- * `scheduler` / `execution` / `reasons` 作为扩展字段保留。`/health` 只说明进程存活。
+ * GET /api/v1/readiness：就绪探针。能接收并执行任务时 HTTP 200 + `{code: 0, data: <摘要>}`；未就绪时
+ * HTTP 503 + `{code: 5001, error: {msg, code: "not_ready", details: <摘要>}}`，两种情况的摘要形状相同。
+ * V1 字段 `status` / `capabilities` / `phase` / `workflowRuntime`，dev 探针摘要 `scheduler` / `execution` /
+ * `reasons` 作为扩展字段保留。`/health` 只说明进程存活。
  */
 export interface ReadinessResponse {
   status: "ready" | "starting" | "failed" | (string & {});
@@ -691,22 +691,35 @@ export interface RuntimeLogBatch {
   pid: number | null;
 }
 
+/** 未就绪 503 信封里的就绪摘要（`error.details`）；没有摘要（维护闸门）时为 null。 */
+function readinessSummary(body: ProtocolErrorBody | undefined): ReadinessResponse | null {
+  const error = body?.error;
+  const details = error && typeof error === "object" ? (error.details as Partial<ReadinessResponse> | undefined) : undefined;
+  if (!details || typeof details.status !== "string") return null;
+  return {
+    ...(details as ReadinessResponse),
+    status: details.status,
+    scheduler: String(details.scheduler ?? ""),
+    execution: String(details.execution ?? ""),
+    reasons: Array.isArray(details.reasons) ? details.reasons.map(String) : [],
+  };
+}
+
 export function createSystemApi(http: HttpTransport) {
   return {
     resetPreview: () => http.request<ResetPreview>({ method: "GET", path: "/api/v1/reset" }),
     requestReset: (body: { confirmation_token: string; confirmation: string }) =>
       http.request<ResetPreview>({ method: "POST", path: "/api/v1/reset", body, timeoutMs: 150_000 }),
-    /** GET /api/v1/health —— 裸 JSON，不包信封 */
+    /** GET /api/v1/health —— 存活探针（信封） */
     health: (options: HealthRequestOptions = {}) =>
       http.request<HealthResponse>({
         method: "GET",
         path: "/api/v1/health",
         timeoutMs: options.timeoutMs ?? 4_000,
-        raw: true,
       }),
     /**
-     * GET /api/v1/readiness —— 裸 JSON；503 是「尚未就绪」的正常回答，返回同形状正文而不是抛错；
-     * 其他非 2xx（含不认识的 503 正文，如全量重置维护闸门的信封）仍抛 ApiError。
+     * GET /api/v1/readiness —— 503 + 5001（`error.code = "not_ready"`）是「尚未就绪」的正常回答：返回
+     * `error.details` 里同形状的摘要而不是抛错；其他非 2xx（含没有摘要的 503，如全量重置维护闸门）仍抛 ApiError。
      */
     readiness: async (options: HealthRequestOptions = {}): Promise<ReadinessResponse> => {
       try {
@@ -714,19 +727,10 @@ export function createSystemApi(http: HttpTransport) {
           method: "GET",
           path: "/api/v1/readiness",
           timeoutMs: options.timeoutMs ?? 4_000,
-          raw: true,
         });
       } catch (error) {
-        const body = error instanceof ApiError ? (error.body as Partial<ReadinessResponse> | undefined) : undefined;
-        if (error instanceof ApiError && error.status === 503 && typeof body?.status === "string") {
-          return {
-            ...(body as ReadinessResponse),
-            status: body.status,
-            scheduler: String(body.scheduler ?? ""),
-            execution: String(body.execution ?? ""),
-            reasons: Array.isArray(body.reasons) ? body.reasons.map(String) : [],
-          };
-        }
+        const summary = error instanceof ApiError && error.status === 503 ? readinessSummary(error.body) : null;
+        if (summary) return summary;
         throw error;
       }
     },

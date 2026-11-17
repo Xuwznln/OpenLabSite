@@ -44,7 +44,7 @@ unilab 调度权威 :8002（unilab --port，浏览器只连这一个地址）
         └─ unilabos_data/device_processes.json  受管设备进程规格（+ 子进程运行态）
 ```
 
-同一套路由挂载在两种进程角色上，`GET /api/v1/health`（裸 JSON）告诉浏览器连的是谁：
+同一套路由挂载在两种进程角色上，`GET /api/v1/health` 告诉浏览器连的是谁：
 
 | 字段 | 取值 | 含义 |
 | --- | --- | --- |
@@ -67,13 +67,13 @@ unilab 调度权威 :8002（unilab --port，浏览器只连这一个地址）
 
 | 域 | 路径前缀 | 存储 | 客户端 | 角色 |
 | --- | --- | --- | --- | --- |
-| `system` | `/api/v1/health` `/readiness`（裸 JSON） `/ping` `/hostlink/*` `/scheduler/resources` `/restart` `/reset` | — | `createSystemApi` | any / host |
+| `system` | `/api/v1/health` `/readiness` `/ping` `/hostlink/*` `/scheduler/resources` `/restart` `/reset` | — | `createSystemApi` | any / host |
 | `runtime-v1` | `/api/v1/runtime/*` | Host runtime.db | `createRuntimeV1Api` | any |
 | `workflow` | `/api/v1/workflows*` `/workflow-*` `/experiment-operation-categories*` `/authoring/*` `/device-action-runs` `/events` | runtime.db | `createWorkflowBackendApi` | any |
 | `run-history` | `/api/v1/history/workflows*` `/history/jobs` | runtime.db 视图 | `createRunHistoryApi` | any |
 | `scheduler` | `/api/v1/monitor/snapshot` `/timeline` `/scheduler/*` `/reschedule` | 调度器 | `createSchedulerApi` | any |
 | `registry` | `/api/v1/registry/*` | runtime.db | `createRegistryApi` | any |
-| `inventory` | `/api/v1/inventory/*`；**写一律 `POST /inventory/commands`（裸结果）** | materials.db | `createInventoryApi` | any |
+| `inventory` | `/api/v1/inventory/*`；**写一律 `POST /inventory/commands`** | materials.db | `createInventoryApi` | any |
 | `materials-v1` | `/api/v1/materials/*`（dev 独有：树、registry 资源类、拓扑边写、设备通知、执行读、`events`） | materials.db | `createMaterialsV1Api` | any |
 | `graphs-v1` | `/api/v1/graphs*` | materials.db | `createGraphsV1Api` | any |
 | `chemicals-v1` | `/api/v1/chemicals*` | materials.db | `createChemicalsV1Api` | any |
@@ -84,10 +84,10 @@ unilab 调度权威 :8002（unilab --port，浏览器只连这一个地址）
 | `driver-packages` | `/api/v1/driver-packages*` | `unilabos_data/driver_packages/` 源码树 + 台账 JSON | `createDriverPackagesApi` | host |
 | `device-processes` | `/api/v1/device-processes*` | 规格 JSON + 子进程 | `createDeviceProcessesApi` | host |
 | `lab-v1` | `/api/v1/lab/*` | materials.db（档案 / 分区 / 摆放）+ runtime.db（网格） | `createLabV1Api` | any |
-| `process-management` | `/v1/snapshot` `/v1/operations*` `/v1/logs/{component}`（无 `/api` 前缀，裸 JSON） | runtime.db | `createProcessManagementApi` | any |
+| `process-management` | `/v1/snapshot` `/v1/operations*` `/v1/logs/{component}`（无 `/api` 前缀） | runtime.db | `createProcessManagementApi` | any |
 | `debug` | `/api/v1/debug/databases*` | 四库只读 | `createDebugApi` | any |
 
-除标注「裸 JSON / 裸结果」的路由外，全部 `/api/v1` JSON 路由都是 V1 信封 `{code, data}`，传输层统一解包。
+全部 JSON 路由（含探针、库存命令与 `/v1/*` 进程管理）都是 V1 信封 `{code, data}`，传输层统一解包；只有 SSE 与文件下载不包信封。
 信封、业务码、5001 重试的精确定义见 [conventions.md §5](./conventions.md#5-响应信封与错误)。
 
 ### 2.1 浏览器暂未采用的 V1 控制台面
@@ -166,7 +166,7 @@ Host 子进程启动 / 重启期间 Host 专有路由返回 HTTP 200 + 信封 50
 
 ```bash
 pnpm --filter @openlab/protocol openapi:sync   # 调微后端导出器刷新 OpenAPI 快照并重生成类型（UNILABOS_PYTHON 指定解释器）
-pnpm run protocol:check     # tsc + 目录校验（域覆盖、角色、SSE 清单、裸 JSON 清单、目录 ↔ OpenAPI 导出对账、控制面 / 暂未采用清单）
+pnpm run protocol:check     # tsc + 目录校验（域覆盖、角色、SSE 清单、无 raw 声明、目录 ↔ OpenAPI 导出对账、控制面 / 暂未采用清单）
 pnpm run protocol:test      # 客户端方法 ↔ 目录双向比对、V1 信封解包、5001 重试、不带鉴权头、库存命令、版本一致、快照元信息
 pnpm --filter @openlab/protocol smoke -- http://127.0.0.1:8002 --write
                             # 对着真实微后端跑通全部读路径与关键写流程（--restart 另测 Host 重启期间的 5001 退避）

@@ -9,16 +9,16 @@
  *
  * - `role` 标注挂载角色：`host` 只在设备执行进程可用，`backend` 只在 `--role backend` 调度权威进程
  *   可用，`any` 两者皆有（默认拓扑里 Host 专有路由经调度权威代理，Host 不在线时返回 5001）。
- * - 除 `raw: true` 的路由外全部是 V1 信封 `{code, data}` / `{code, error}`。
+ * - 全部是 V1 信封 `{code, data}` / `{code, error}`（含探针、库存命令与 `/v1/*` 进程管理；只有 SSE 不包信封）。
  */
 import type { OperationContract } from "./common.js";
 
 export const OPERATIONS = [
-  // ── system：诊断路由（server/api/runtime/diagnostics.py）；health / readiness 不包信封 ──
+  // ── system：诊断路由（server/api/runtime/diagnostics.py） ──
   { id: "system.reset.preview", domain: "system", method: "GET", path: "/api/v1/reset", summary: "全量重置范围及确认令牌", mutates: false, role: "any" },
   { id: "system.reset.request", domain: "system", method: "POST", path: "/api/v1/reset", summary: "停机归档全部业务数据", mutates: true, role: "any" },
-  { id: "system.health", domain: "system", method: "GET", path: "/api/v1/health", summary: "存活探针（裸 JSON）：scheduler ready/disabled、scheduler_mode local/remote、execution ready/restarting/disabled", mutates: false, role: "any", raw: true },
-  { id: "system.readiness", domain: "system", method: "GET", path: "/api/v1/readiness", summary: "就绪探针（裸 JSON）：200 就绪 / 503 未就绪，同形状正文（V1 status/capabilities/phase/workflowRuntime + dev scheduler/execution/reasons）", mutates: false, role: "any", raw: true },
+  { id: "system.health", domain: "system", method: "GET", path: "/api/v1/health", summary: "存活探针：scheduler ready/disabled、scheduler_mode local/remote、execution ready/restarting/disabled", mutates: false, role: "any" },
+  { id: "system.readiness", domain: "system", method: "GET", path: "/api/v1/readiness", summary: "就绪探针：200 就绪 / 503 + 5001 未就绪，摘要在 data / error.details（V1 status/capabilities/phase/workflowRuntime + dev scheduler/execution/reasons）", mutates: false, role: "any" },
   { id: "system.ping", domain: "system", method: "GET", path: "/api/v1/ping", summary: "HTTP ping-pong：回显客户端时间戳并附服务端时钟（链路时延 / 时钟偏差）", mutates: false, role: "any" },
   { id: "system.hostlink.peers", domain: "system", method: "GET", path: "/api/v1/hostlink/peers", summary: "HostLink 组网：host/slave 角色、在线 peer 与设备档案", mutates: false, role: "any" },
   { id: "system.scheduler.resources", domain: "system", method: "GET", path: "/api/v1/scheduler/resources", summary: "本机调度资源快照（5001 = 调度权威在远端）", mutates: false, role: "any" },
@@ -163,7 +163,7 @@ export const OPERATIONS = [
   { id: "registry.reports.list", domain: "registry", method: "GET", path: "/api/v1/registry/reports", summary: "Edge 上报批次统计", mutates: false, role: "any" },
   { id: "registry.workflow-templates.list", domain: "registry", method: "GET", path: "/api/v1/registry/workflow-templates", summary: "生效的设备包 @workflow 工作流模板（角色占位，插入画布时绑定设备）", mutates: false, role: "any" },
 
-  // ── inventory：V1 Edge 库存操作面；写入一律 POST /inventory/commands（裸结果） ──
+  // ── inventory：V1 Edge 库存操作面；写入一律 POST /inventory/commands ──
   { id: "inventory.health", domain: "inventory", method: "GET", path: "/api/v1/inventory/health", summary: "库存面健康与账本序号", mutates: false, role: "any" },
   { id: "inventory.instances.list", domain: "inventory", method: "GET", path: "/api/v1/inventory/instances", summary: "物料聚合列表（limit 截断；all=true 全量）", mutates: false, role: "any" },
   { id: "inventory.instances.get", domain: "inventory", method: "GET", path: "/api/v1/inventory/instances/{edge_uuid}", summary: "物料聚合 + 关系 + 内容物", mutates: false, role: "any" },
@@ -182,7 +182,7 @@ export const OPERATIONS = [
   { id: "inventory.outbox.events", domain: "inventory", method: "GET", path: "/api/v1/inventory/outbox/events", summary: "未确认投递的账本事件", mutates: false, role: "any" },
   { id: "inventory.sync-cursors", domain: "inventory", method: "GET", path: "/api/v1/inventory/sync/cursors", summary: "账本同步游标", mutates: false, role: "any" },
   { id: "inventory.commands.processed", domain: "inventory", method: "GET", path: "/api/v1/inventory/commands/processed", summary: "已处理命令（类型化命令 + materials.v1 变更）", mutates: false, role: "any" },
-  { id: "inventory.commands.submit", domain: "inventory", method: "POST", path: "/api/v1/inventory/commands", summary: "库存写入唯一入口（materials.v1 变更信封或 V1 类型化命令，裸结果）", mutates: true, role: "any", raw: true },
+  { id: "inventory.commands.submit", domain: "inventory", method: "POST", path: "/api/v1/inventory/commands", summary: "库存写入唯一入口（materials.v1 变更信封或 V1 类型化命令；被拒是失败信封）", mutates: true, role: "any" },
   { id: "inventory.ingress.list", domain: "inventory", method: "GET", path: "/api/v1/inventory/ingress-reservations", summary: "工站入站库位预留列表", mutates: false, role: "any" },
   { id: "inventory.ingress.reserve", domain: "inventory", method: "POST", path: "/api/v1/inventory/ingress-reservations", summary: "预留入站库位（幂等）", mutates: true, role: "any" },
   { id: "inventory.ingress.get", domain: "inventory", method: "GET", path: "/api/v1/inventory/ingress-reservations/{reservation_uuid}", summary: "入站预留详情", mutates: false, role: "any" },
@@ -281,11 +281,11 @@ export const OPERATIONS = [
   { id: "lab-v1.assembly", domain: "lab-v1", method: "GET", path: "/api/v1/lab/assembly/{subject_id}", summary: "实例的装配视图", mutates: false, role: "any" },
   { id: "lab-v1.demo", domain: "lab-v1", method: "POST", path: "/api/v1/lab/demo", summary: "写入演示分区与摆放", mutates: true, role: "any" },
 
-  // ── process-management：V1 进程管理（/v1/*，裸 JSON，错误为 HTTP 状态 + {error:{code,message}}） ──
-  { id: "process-management.snapshot", domain: "process-management", method: "GET", path: "/v1/snapshot", summary: "进程快照（authority / Host / 受管进程）", mutates: false, role: "any", raw: true },
-  { id: "process-management.operations.submit", domain: "process-management", method: "POST", path: "/v1/operations", summary: "受理进程管理操作（HTTP 202，幂等 operationId）", mutates: true, role: "any", raw: true },
-  { id: "process-management.operations.get", domain: "process-management", method: "GET", path: "/v1/operations/{operation_id}", summary: "进程管理操作状态", mutates: false, role: "any", raw: true },
-  { id: "process-management.logs", domain: "process-management", method: "GET", path: "/v1/logs/{component}", summary: "组件日志尾部", mutates: false, role: "any", raw: true },
+  // ── process-management：V1 进程管理（/v1/*，信封；V1 符号码在 error.code） ──
+  { id: "process-management.snapshot", domain: "process-management", method: "GET", path: "/v1/snapshot", summary: "进程快照（authority / Host / 受管进程）", mutates: false, role: "any" },
+  { id: "process-management.operations.submit", domain: "process-management", method: "POST", path: "/v1/operations", summary: "受理进程管理操作（HTTP 202，幂等 operationId）", mutates: true, role: "any" },
+  { id: "process-management.operations.get", domain: "process-management", method: "GET", path: "/v1/operations/{operation_id}", summary: "进程管理操作状态", mutates: false, role: "any" },
+  { id: "process-management.logs", domain: "process-management", method: "GET", path: "/v1/logs/{component}", summary: "组件日志尾部", mutates: false, role: "any" },
 
   // ── debug：四库只读浏览 ──
   { id: "debug.databases.list", domain: "debug", method: "GET", path: "/api/v1/debug/databases", summary: "四库文件状态与每张表行数", mutates: false, role: "any" },

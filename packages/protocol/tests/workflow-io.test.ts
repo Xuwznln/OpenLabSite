@@ -160,23 +160,22 @@ describe("chemicals-v1 化学品定义", () => {
 });
 
 describe("system.readiness 就绪探针", () => {
-  it("200 与 503 都返回同形状正文；不认识的 503 与其他错误照常抛", async () => {
+  it("200 与 503 都返回同形状摘要（data / error.details）；没有摘要的 503 与其他错误照常抛", async () => {
     const mock = createMockHttp();
     const api = createSystemApi(mock.http);
     const ready = { status: "ready", scheduler: "local", execution: "ready", reasons: [] };
-    mock.nextResponse = { status: 200, data: ready };
+    mock.nextResponse = { status: 200, data: { code: 0, data: ready } };
     await expect(api.readiness()).resolves.toEqual(ready);
     expect(mock.calls[0]).toMatchObject({ method: "GET", url: "http://edge.local/api/v1/readiness", timeout: 4_000 });
 
-    mock.nextResponse = {
-      status: 503,
-      data: { status: "not_ready", scheduler: "local", execution: "starting", reasons: ["执行适配器尚未注册（设备初始化中）"] },
-    };
-    await expect(api.readiness()).resolves.toMatchObject({ status: "not_ready", execution: "starting", reasons: [expect.any(String)] });
+    const starting = { status: "starting", scheduler: "local", execution: "starting", reasons: ["执行适配器尚未注册（设备初始化中）"] };
+    mock.nextResponse = { status: 503, data: { code: 5001, error: { msg: starting.reasons[0], code: "not_ready", details: starting } } };
+    await expect(api.readiness()).resolves.toMatchObject({ status: "starting", execution: "starting", reasons: [expect.any(String)] });
 
-    mock.nextResponse = { status: 503, data: { detail: "maintenance" } };
+    // 全量重置维护闸门：503 + 5001，没有摘要
+    mock.nextResponse = { status: 503, data: { code: 5001, error: { msg: "维护中" } } };
     await expect(api.readiness()).rejects.toBeInstanceOf(ApiError);
-    mock.nextResponse = { status: 404, data: { detail: "Not Found" } };
+    mock.nextResponse = { status: 404, data: { code: 4001, error: { msg: "Not Found" } } };
     await expect(api.readiness({ timeoutMs: 1_000 })).rejects.toMatchObject({ status: 404 });
     expect(mock.calls.at(-1)?.timeout).toBe(1_000);
   });

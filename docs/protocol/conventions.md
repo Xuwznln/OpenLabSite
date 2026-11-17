@@ -118,10 +118,9 @@ V1 合同里**业务结果看信封 `code`，不看 HTTP 状态**：业务失败
 | --- | --- | --- |
 | 200 | 读成功；同步写成功；**业务失败**（信封 `code != 0`）；Host 暂不可用（信封 5001 + `Retry-After`） | 信封 |
 | 201 | 同步创建了新资源 / 受理了新命令（`POST /workflow-tasks`、任务命令、干预决策首次提交） | 信封 |
-| 202 | 已接受、异步执行（`POST /driver-packages/install`、`DELETE /driver-packages/{name}`、`POST /v1/operations`） | 信封 / 裸 JSON |
-| 404 | **路由未在本进程挂载**；`/v1/*` 的资源不存在 | FastAPI `{"detail": "Not Found"}` / `{"error": {...}}` |
-| 409 / 400 | 只用于 `/v1/*` 进程管理（`operation_conflict` / `revision_conflict` / 其余） | `{"error": {"code", "message", "details?"}}` |
-| 503 | 进程级维护闸门（全量重置进行中）；`/readiness` 未就绪；`/v1/logs` 暂不可读 | 信封 5001 / readiness 同形状正文 |
+| 202 | 已接受、异步执行（`POST /driver-packages/install`、`DELETE /driver-packages/{name}`、`POST /v1/operations`） | 信封 |
+| 404 / 405 | **路由未在本进程挂载**（含已删除的路由、未知 `/v1/*` 路径）/ 方法不对 | 信封 4001 / 1001（应用级兜底） |
+| 503 | 进程级维护闸门（全量重置进行中）；`/readiness` 未就绪 | 信封 5001（readiness 的摘要在 `error.details`） |
 | 500 | 服务端缺陷（未登记的异常） | 非信封 |
 
 约定：
@@ -246,21 +245,24 @@ V1 合同：**全部 `/api/v1` JSON 路由都是 V1 信封**（`server/api/envel
 ### 5.3 仍用 HTTP 状态表达的情形
 
 - 全量重置维护闸门：HTTP 503 + 信封 5001；
-- 路由未在本进程挂载：HTTP 404 + FastAPI `{"detail": "Not Found"}`；
+- `/readiness` 未就绪：HTTP 503 + 信封 5001（`error.code = "not_ready"`，摘要在 `error.details`）；
+- 路由未匹配：HTTP 404 + 信封 4001（方法不对 405 + 1001）；
 - 服务端缺陷：HTTP 500。
 
 这些抛 `ApiError`，正文里的业务码在 `ApiError.businessCode`。
 
-### 5.4 不包信封的路由（`OperationContract.raw`）
+### 5.4 信封覆盖面
 
-| 路由 | 正文 | 失败 |
+**全部 JSON 路由都是信封**，没有例外清单（`catalog.ts` 不再有 `raw` 标记，校验脚本据此拒绝任何 `raw` 声明）：
+
+| 路由 | 成功 | 失败 |
 | --- | --- | --- |
-| `GET /api/v1/health` | 裸 JSON（`status` / `scheduler` / `scheduler_mode` / `execution` / `unavailable_devices?`） | — |
-| `GET /api/v1/readiness` | 裸 JSON；就绪 200、未就绪 503，两者正文同形状 | SDK 把 503 当正常回答返回正文 |
-| `POST /api/v1/inventory/commands` | 裸结果 `{command_id, status, result \| error, error_code, code?, replayed}`；业务拒绝也是 HTTP 200 | `status != "completed"` → `InventoryCommandRejectedError`（`code` / `symbol = error_code`） |
-| `/v1/snapshot` `/v1/operations[/{id}]` `/v1/logs/{component}` | 裸 JSON（提交操作 HTTP 202） | HTTP 状态 + `{"error": {"code", "message", "details?"}}` → `ApiError` |
+| `GET /api/v1/health` | `data` = `status` / `scheduler` / `scheduler_mode` / `execution` / `unavailable_devices?`（恒 HTTP 200） | — |
+| `GET /api/v1/readiness` | HTTP 200 + `data` = 就绪摘要 | HTTP 503 + 5001，摘要在 `error.details`；SDK 把它当正常回答返回摘要 |
+| `POST /api/v1/inventory/commands` | `data` = `{command_id, status: "completed", result, replayed}` | HTTP 200 + `{code: <业务码>, error: {msg, code: <error_code>, details: {command_id, replayed}}}` → `InventoryCommandRejectedError`（§5.6） |
+| `/v1/snapshot` `/v1/operations[/{id}]` `/v1/logs/{component}` | `data`（提交操作 HTTP 202） | HTTP 200 + 信封，V1 符号码（`operation_not_found` / `operation_conflict` / `revision_conflict` / `component_unavailable` …）在 `error.code` → `BackendBusinessError.symbol` |
 
-SSE 与文件下载同样不包信封。
+只有 SSE 与文件下载不包信封（`RequestConfig.raw` 留给后者，目录里的 JSON 路由都不用它）。
 
 ### 5.5 Host 暂不可用：5001 + `Retry-After`
 
@@ -272,7 +274,7 @@ driver-packages / device-processes …）由调度权威转交给 Host 子进程
   跨源时浏览器读不到 `Retry-After`，按 1 s）；重试用尽仍是 5001 时抛出，页面按「暂不可用」降级，
   下一轮轮询自然收敛；
 - **写请求从不自动重试**：5001 直接抛给页面，由用户确认后用原幂等键重试；
-- 已知缺口：后端 CORS 未 `expose` `Retry-After`，跨源页面只能用缺省等待。
+- 后端 CORS `expose_headers` 含 `Retry-After`，跨源页面也能按建议间隔等待。
 
 ### 5.6 库存写入：`POST /inventory/commands`
 
@@ -319,7 +321,7 @@ driver-packages / device-processes …）由调度权威转交给 Host 子进程
 | --- | --- | --- |
 | `ApiError` | 网络失败（`status=0`）或非 2xx | `status`、`body`、`businessCode`、`retryAfterMs`、`isNetwork`、`isUnsupported`（404/503） |
 | `BackendBusinessError` | 信封 `code != 0` | `code`、`symbol`、`details`、`httpStatus`、`retryAfterMs`、`isNotFound`、`isConflict`、`isInvalidInput`、`isOperationNotAllowed`、`isUnavailable` |
-| `InventoryCommandRejectedError` | 库存命令 `status != "completed"`（继承 `BackendBusinessError`） | `result`（裸结果） |
+| `InventoryCommandRejectedError` | 库存命令被拒（失败信封带 `error.details.command_id`，继承 `BackendBusinessError`） | `result`（还原的拒绝结果）、`details.command_id` / `replayed` |
 | `TaskCommandRejectedError` | 任务命令投影 `status = "rejected"`（继承 `BackendBusinessError`，code 3003） | `command`、`reason`（`result.reason`） |
 
 页面层只依赖这些类与 `isCapabilityUnavailable(error)`；`describeError()` 负责成文案。
@@ -392,7 +394,7 @@ GET /api/v1/readiness → 200 | 503 { "status": "ready" | "starting" | "failed",
   这两个头被忽略；业务码 1002 随之删除。访问控制交给网络边界（局域网 / 反向代理）。
 - OpenLab 接受落地页链接 `#/?backend=<地址>` 导入后端地址（导入后从地址栏去掉）。
 - CORS 默认放行所有来源（`BasicConfig.cors_allow_origins` 可收窄），允许头含 `Idempotency-Key`、
-  `X-Workflow-Filename`；`Retry-After` 未列入 expose（§5.5）。
+  `X-Workflow-Filename`；`expose_headers` 含 `Retry-After`（§5.5）。
 - 页面由 HTTPS 站点（GitHub Pages）托管、微后端是 `http://` 时，浏览器按混合内容规则处理：
   - `http://127.0.0.1` / `localhost` 是「可信来源」，Chrome / Edge / Firefox 放行，Safari 拦截；
   - `http://192.168.x.x` 等局域网地址默认拦截。用户可在浏览器「网站设置 → 不安全内容 → 允许」
@@ -433,7 +435,7 @@ GET /api/v1/readiness → 200 | 503 { "status": "ready" | "starting" | "failed",
    `openapi/unilabos-openapi.json` 与 `src/generated/openapi.ts`，二者随包提交）；
 4. `packages/protocol/src/<domain>.ts` 的类型与方法（方法名 = 资源 + 动作，驼峰；有生成类型时
    请求体优先复用 `OpenApiComponents["schemas"][…]`）；
-5. `catalog.ts` 登记（`id` = `<domain>.<resource>.<action>`，`role`、`mutates` 正确，不包信封的加 `raw: true`）；
+5. `catalog.ts` 登记（`id` = `<domain>.<resource>.<action>`，`role`、`mutates` 正确）；
    浏览器不该调用的新路由登记到 `scripts/validate-contract.mjs` 的 `CONTROL_PLANE_OPERATIONS`，浏览器可调用但
    OpenLabSite 暂不使用的登记到 `UNADOPTED_GROUPS`（附理由）；
 6. 域覆盖测试（客户端 ↔ 目录双向比对）；
@@ -442,7 +444,7 @@ GET /api/v1/readiness → 200 | 503 { "status": "ready" | "starting" | "failed",
 
 `pnpm run protocol:check` 强制：域必须在白名单；`id` 必须以域名为前缀；路径前缀为 `/api/v1/`
 （`process-management` 为 `/v1/`）；GET / SSE 不得 `mutates: true`；同一 `方法 + 路径` 只能登记一次；
-`raw` 操作恰为固定清单（health / readiness / inventory.commands.submit / 四条进程管理）；目录 ⊆ OpenAPI 导出且角色一致；
+没有任何操作声明 `raw`（全部 JSON 路由都是信封）；目录 ⊆ OpenAPI 导出且角色一致；
 OpenAPI 导出 = 目录 ∪ 控制面清单 ∪ 暂未采用清单（多一条、少一条都失败）；三份清单互不重叠。
 
 页面侧红线（见 README §6）：只经 `api.domains.*` 调用；不手写 `/api/v1/…`；不改写状态词汇；
@@ -470,6 +472,6 @@ OpenAPI 导出 = 目录 ∪ 控制面清单 ∪ 暂未采用清单（多一条�
 | Backend（调度权威） | `--role backend` 进程或云端；持有 Workflow Authority |
 | 权威（Authority） | 某类事实的唯一写入口与真相来源（物料权威、Graph Authority、Workflow Authority、Registry Authority） |
 | 域（domain） | 一组路由 + 一份客户端文件 + 一段目录；对应 `unilabos/server/api/` 的一个模块 |
-| V1 信封 / 裸 JSON | §5 的响应形态 |
+| V1 信封 | §5 的响应形态（全部 JSON 路由） |
 | 长操作 | 202 + operation 资源 + 轮询（§6） |
 | 失效通知 | SSE 事件，只表示"某物变了"，不带正文（§7） |

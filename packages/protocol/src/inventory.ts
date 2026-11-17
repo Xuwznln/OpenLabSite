@@ -5,14 +5,15 @@
  *   （`{instances: [...]}`、`{lots: [...]}`），并附 V1 的标识别名（`edge_uuid` / `lot_id` /
  *   `template_id` / `reservation_id`）。本客户端把列表的具名数组取出来直接返回数组。
  * - 列表默认 `limit=500` 截断；浏览器要全集时传 `all: true`（dev 扩展，与旧 `/materials/instances` 等价）。
- * - **`POST /inventory/commands` 是全部库存写入的唯一入口**，按 V1 原样返回裸结果
- *   `{command_id, status, result | error, error_code, code, replayed}`（不包信封，业务拒绝也是 HTTP 200）。
+ * - **`POST /inventory/commands` 是全部库存写入的唯一入口**，与其它路由一样走 V1 信封：完成为
+ *   `{code: 0, data: {command_id, status: "completed", result, replayed}}`；被拒（含同一 command_id 的拒绝重放）为
+ *   HTTP 200 + `{code: <业务码>, error: {msg, code: <error_code>, details: {command_id, replayed}}}`。
  *   两类命令共用：dev `materials.v1` 幂等变更信封（`protocol_version` / `command_uuid` / `operation`，
  *   原路径参数放在顶层 `target_uuid`），以及 V1 类型化命令（`type` + `command_id` + `payload`）。
- *   `status !== "completed"` 时客户端抛 {@link InventoryCommandRejectedError}。
+ *   写方法在被拒时抛 {@link InventoryCommandRejectedError}；`command()` 把拒绝还原成 `status: "rejected"` 的结果。
  * - `/inventory/ingress-reservations` 是工站入站库位预留（信封路由）。
  */
-import { BackendBusinessError, type HttpTransport, type JsonObject, type JsonValue } from "./common.js";
+import { BackendBusinessError, type BackendErrorInit, type HttpTransport, type JsonObject, type JsonValue } from "./common.js";
 import {
   materialsMutation,
   newCommandUuid,
@@ -126,7 +127,10 @@ export interface InventorySyncCursor {
   latest_sequence: number;
 }
 
-/** `POST /inventory/commands` 的裸结果（V1 原样，不包信封）。 */
+/**
+ * `POST /inventory/commands` 的命令结果：完成时是信封 `data`；被拒时由失败信封还原
+ * （`error` = `error.msg`，`error_code` = `error.code`，`code` = 业务码，`command_id` / `replayed` 取自 `error.details`）。
+ */
 export interface InventoryCommandResult<T = JsonValue> {
   command_id: string;
   status: "completed" | "rejected" | (string & {});
@@ -139,18 +143,38 @@ export interface InventoryCommandResult<T = JsonValue> {
   replayed?: boolean;
 }
 
-/** 库存命令被拒（`status !== "completed"`）：业务码 / 符号码与信封错误同口径。 */
+/** 库存命令被拒：业务码 / 符号码与信封错误同口径，`result` 是还原出的拒绝结果。 */
 export class InventoryCommandRejectedError extends BackendBusinessError {
   readonly result: InventoryCommandResult<unknown>;
 
-  constructor(result: InventoryCommandResult<unknown>) {
-    super({
-      code: typeof result.code === "number" ? result.code : 1,
-      error: { msg: result.error || `库存命令被拒（${result.status}）`, ...(result.error_code ? { code: result.error_code } : {}) },
-    });
+  constructor(result: InventoryCommandResult<unknown>, init: BackendErrorInit = {}) {
+    super(
+      {
+        code: typeof result.code === "number" ? result.code : 1,
+        error: {
+          msg: result.error || `库存命令被拒（${result.status}）`,
+          ...(result.error_code ? { code: result.error_code } : {}),
+          details: { command_id: result.command_id, replayed: Boolean(result.replayed) },
+        },
+      },
+      init,
+    );
     this.name = "InventoryCommandRejectedError";
     this.result = result;
   }
+}
+
+/** 失败信封是不是一条库存命令的拒绝（`error.details.command_id` 存在）；是则还原成拒绝结果。 */
+export function inventoryCommandRejection(error: unknown): InventoryCommandResult<never> | null {
+  if (!(error instanceof BackendBusinessError) || typeof error.details?.command_id !== "string") return null;
+  return {
+    command_id: error.details.command_id,
+    status: "rejected",
+    error: error.message,
+    ...(error.symbol ? { error_code: error.symbol } : {}),
+    code: error.code,
+    replayed: Boolean(error.details.replayed),
+  };
 }
 
 /** V1 类型化命令（`reagent.dispense`、`inventory.*`、`material.*`、`content.*`、`source.*`）。 */
@@ -249,12 +273,30 @@ export function materialPositionWrite(value: MaterialsV1PositionWrite): JsonObje
 export function createInventoryApi(http: HttpTransport) {
   const base = "/api/v1/inventory";
 
-  /** 统一命令入口（裸结果）；不抛业务拒绝，调用方按 `status` 判断。 */
-  const command = <T = JsonValue>(body: JsonObject | object) =>
-    http.request<InventoryCommandResult<T>>({ method: "POST", path: `${base}/commands`, body, raw: true });
+  const submit = <T>(body: JsonObject | object) =>
+    http.request<InventoryCommandResult<T>>({ method: "POST", path: `${base}/commands`, body });
 
+  /** 统一命令入口：拒绝还原成 `status: "rejected"` 的结果而不抛；其他业务失败 / 传输失败照常抛。 */
+  async function command<T = JsonValue>(body: JsonObject | object): Promise<InventoryCommandResult<T>> {
+    try {
+      return await submit<T>(body);
+    } catch (error) {
+      const rejected = inventoryCommandRejection(error);
+      if (rejected) return rejected;
+      throw error;
+    }
+  }
+
+  /** 写方法：完成返回 `result`；被拒抛 InventoryCommandRejectedError（保留原信封的 HTTP 状态）。 */
   async function completed<T>(body: object): Promise<T> {
-    const result = await command<T>(body);
+    let result: InventoryCommandResult<T>;
+    try {
+      result = await submit<T>(body);
+    } catch (error) {
+      const rejected = inventoryCommandRejection(error);
+      if (rejected) throw new InventoryCommandRejectedError(rejected, { status: (error as BackendBusinessError).httpStatus });
+      throw error;
+    }
     if (!result || result.status !== "completed") throw new InventoryCommandRejectedError(result ?? { command_id: "", status: "rejected" });
     return result.result as T;
   }
@@ -393,7 +435,7 @@ export function createInventoryApi(http: HttpTransport) {
       }),
 
     // ── 写：统一命令入口 ──────────────────────────────────────────
-    /** 原样提交一条命令，返回裸结果（不抛业务拒绝）。 */
+    /** 原样提交一条命令，返回命令结果（拒绝还原为 `status: "rejected"`，不抛）。 */
     command,
     /** V1 类型化命令；被拒抛 InventoryCommandRejectedError。 */
     typedCommand: <T = JsonObject>(type: string, payload: JsonObject, options: InventoryTypedCommandOptions = {}) =>
