@@ -23,8 +23,9 @@
 
 **SDK 名称与 HTTP 协议版本分开管理。** npm 包名保持 `@openlab/protocol`，
 现有入口 `createEdgeApi` 保持兼容；它访问的是后端 API，不负责设备驱动、调度或数据库访问。
-3.x 面向 Uni-Lab-OS V1.0 合同（统一分支 0.13 发布线）：V1 响应信封、管理 API 不鉴权，
-物料写入只有 `POST /api/v1/inventory/commands` 一个入口。
+4.x 面向合并进 `dev` 的 Uni-Lab-OS 统一核心（V1.0 合同，0.13 发布线）：全部 JSON 路由都是 V1 信封、管理 API 不鉴权、
+物料 `name` = 物料 uuid（人读标签是 `display_name`）、注册表只来自 Host 上报，物料写入只有
+`POST /api/v1/inventory/commands` 一个入口。合并前的统一分支请用 3.x。
 
 ## 安装与运行环境
 

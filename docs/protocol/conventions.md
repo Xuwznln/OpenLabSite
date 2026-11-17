@@ -426,7 +426,7 @@ GET /api/v1/readiness → 200 | 503 { "status": "ready" | "starting" | "failed",
 
 一次变更集必须同时包含：
 
-1. 微后端路由（`unilabos/server/api/…`，用 `envelope_router` 创建，不包信封的端点标 `@raw_response`）与
+1. 微后端路由（`unilabos/server/api/…`，用 `envelope_router` 创建；只有文件下载等非 JSON 端点标 `@raw_response`）与
    服务层错误映射（`envelope.py` 业务码，§5.2）；角色专属路由登记到 `unilabos/server/openapi_export.py` 的前缀表；
    请求 / 响应声明 Pydantic 模型；
 2. 后端测试（`tests/server/`）；

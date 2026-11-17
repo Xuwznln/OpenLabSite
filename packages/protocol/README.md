@@ -24,8 +24,10 @@ and automated tests without depending on Vue or application state management.
 
 The package name remains `@openlab/protocol`, and the existing `createEdgeApi` entry point is preserved.
 It accesses backend APIs; it does not execute device drivers, schedule workflows, or access databases directly.
-Version 3.x targets the Uni-Lab-OS V1.0 API contract (the unified 0.13 line): V1 response envelopes, no
-authentication on the management API, and `POST /api/v1/inventory/commands` as the single material write entry point.
+Version 4.x targets the unified Uni-Lab-OS core as merged into `dev` (V1.0 API contract, the 0.13 line): V1 response
+envelopes on every JSON route, no authentication on the management API, material `name` = material uuid with
+`display_name` as the label, a registry that comes only from Host reports, and `POST /api/v1/inventory/commands` as the
+single material write entry point. Use 3.x for the pre-merge unified branch.
 
 ## Installation and requirements
 

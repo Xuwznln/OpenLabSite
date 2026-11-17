@@ -1,5 +1,65 @@
 # Changelog
 
+## 4.0.0：跟上合并进 dev 的 Uni-Lab-OS 核心（破坏性）
+
+面向合并进 Uni-Lab-OS `dev` 的统一核心（deepmodeling/Uni-Lab-OS#361 squash 合并后的 `dev`，unilabos 0.13.0rc1）。
+3.0.0 之后核心又做了一轮协议简化，本版逐条跟上；合并前的统一分支请继续用 3.x。
+
+### 不再鉴权
+
+- 控制面 token 与 V1 工站 api_key 都已在核心删除：移除 `HttpTransportOptions.getToken` / `ControlTokenProvider`、
+  `CONTROL_TOKEN_HEADER`（`X-UniLab-Token`）、`CONTROL_TOKEN_REJECTED_CODE`、`ApiError.isControlTokenRejected` 与业务码
+  `BACKEND_BUSINESS_CODES.unauthorized`（1002）。请求不带任何凭据；live smoke 去掉 `--token` / `OPENLAB_CONTROL_TOKEN`。
+
+### 全部 JSON 路由都是 V1 信封
+
+- `/health`、`/readiness`、`POST /inventory/commands`、`/v1/*` 进程管理不再是裸 JSON，`OperationContract.raw` 删除，
+  `validate-contract.mjs` 拒绝任何 `raw` 声明（`RequestConfig.raw` 只留给文件下载）。
+- `system.readiness()`：未就绪是 HTTP 503 + `{code: 5001, error: {code: "not_ready", details: <摘要>}}`，返回摘要；
+  没有摘要的 503（全量重置维护闸门）照常抛 `ApiError`。
+- 库存命令：完成是成功信封 `data = {command_id, status, result, replayed}`；被拒是 HTTP 200 失败信封
+  （`error.code` = 拒绝码，`error.details` = `{command_id, replayed}`）。写方法抛 `InventoryCommandRejectedError`
+  （`code` / `symbol` / `details` / `result`）；`inventory.command()` 把拒绝还原成 `status: "rejected"` 的结果；
+  新增 `inventoryCommandRejection(error)`。
+- 进程管理失败是 `BackendBusinessError`，V1 符号码在 `symbol`（4001 / 3003 / 5001 / 1000）。
+- 未匹配的路由是 404 + 信封 4001（405 + 1001），`ApiError.businessCode` 可读；CORS 暴露 `Retry-After`。
+
+### 物料 name = uuid
+
+- 物料 `name` 恒等于 `material_uuid`，人读标签是 `display_name`（PLR 键在 `config.name`）。`inventory.patch()` 不再发
+  `name`（`MaterialPatch` 已没有它，多带会被 1000 拒绝），`MaterialsV1Patch.name` 删除；
+  `inventory.instantiate(registryClass, displayName, barcode?)` 发 `display_name`；`MaterialsV1IdentityWrite.name` 改为可选。
+- `?name=` 筛选与根物料排序按 `display_name`。工作流参数里的物料引用写 `{id: resource_id, uuid}`，不要再写物料 `name`。
+
+### 实验室布局删除
+
+- 核心删除了 `/lab/profile`（GET / PUT）、`/lab/layout`、`/lab/zones`、`/lab/placements` 及其表（回 404）。`lab-v1` 只剩
+  `warehouse()` / `assembly()` / `seedDemo()`（`seeded` 计数 `LabV1DemoCounts`）；`profile` / `updateProfile` / `layoutView` /
+  `layout` / `saveLayout` / `resetLayout` / 分区 / 摆放方法与 `LabV1Layout` / `LabV1Profile` / `LabV1Zone` 等类型删除。
+
+### 注册表只来自 Host 上报
+
+- 新增 `registry.status()`（`GET /registry/status`：是否已上报、最近一次上报、挂起数、单机判定 `acceptance`、跨机器
+  Slave）、`applyPending(names?)` / `dismissPending(names?)`（批量接受 / 忽略，空即全部）、`remoteSlaves()`、
+  `forgetRemoteSlave(machineName)`；新增类型 `RegistryStatus` / `RegistryAcceptance` / `RegistryRemoteSlave` /
+  `RegistryPendingBatchResult` / `RegistryPendingChange` / `RegistryPendingReason` / `RegistryAcceptRule`。
+- `RegistryEntrySummary` / `RegistryPendingImpact` 增加 `pending_change` / `pending_reason` / 驱动包版本；上报统计增加
+  `auto_accepted` 与 `acceptance`。
+- `RegistryWorkflowTemplateNode.kind` 增加 `condition` / `material_io` / `group`，另有 `condition_guards`；模板增加
+  `resource_scopes`（`ctx.lock`）与 `io`。
+
+### 目录与契约校验
+
+- 快照由核心 `python -m unilabos.server.openapi_export` 重新导出：355 条操作 = 237 浏览器目录 + 36 控制面 + 82 暂未采用。
+  相对 3.0.0：删除 7 条 lab 布局路由；新增 9 条，其中浏览器目录 5 条（`registry.status.get`、`registry.pending.apply|dismiss`、
+  `registry.slaves.list|delete`），控制面 4 条（`POST /registry/slaves`：Host 补报 Slave；`POST /materials/links/ensure`：
+  Host 开机对齐拓扑边；`POST /inventory/material-sanity`：调度器派发前物料健全性检查；
+  `POST /inventory/material-io/check`：调度器在人工物料确认前试运行，参数是解析完引用的节点参数 + 本次 attempt 身份，
+  浏览器拿不到）。
+- 路径参数命名允许人可读的 `machine_name`。
+- live smoke：未匹配路由 404 + 4001、已删除的 lab 路由 404、注册表状态与批量确认、实例化后 `name = uuid` 且
+  `display_name` 是标签、`?name=` 按显示名筛到。
+
 ## 3.0.0：对齐 Uni-Lab-OS V1.0 合同（破坏性）
 
 面向 Uni-Lab-OS 统一分支（dev 架构 + V1.0 API 合同，deepmodeling/Uni-Lab-OS#361，0.13.0rc1）。dev 时代的路径、
