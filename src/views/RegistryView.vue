@@ -2,10 +2,10 @@
 /**
  * 注册表（Registry Authority）：条目级注册表版本管理。
  *
- * 只在 `--role backend` 调度权威进程可用：Edge 每次刷新全量上报模板定义，
- * 字段变化的条目自增版本；被活跃 workflow 节点引用的 action 删除/变化时挂起
- * 为 pending，在这里「升级」或「忽略」；也可以把历史版本还原为新的生效版本。
- * 纯 Host 进程没有本域（404），页面给出明确降级说明。
+ * 跟随调度权威：目录只来自 Host 上报（权威不自己扫描）。新增 / 变化 / Host 不再上报的条目先挂起，
+ * 单机部署（上报 Host 与权威同机、没有跨机器 Slave）或驱动包版本升高时自动生效；否则在这里逐条或
+ * 一键「接受」/「忽略」。也可以把历史版本还原为新的生效版本，删除不再使用的跨机器 Slave 记录。
+ * 接入远端调度权威的受控 Edge 没有本域（404），页面给出明确降级说明。
  */
 import { computed, h, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
@@ -34,8 +34,15 @@ import {
   type RegistryEntryVersion,
   type RegistryPendingImpact,
   type RegistryReport,
+  type RegistryStatus,
   isCapabilityUnavailable,
 } from "@openlab/protocol";
+import {
+  acceptanceSummary,
+  pendingBatchMessage,
+  pendingChangeLabel,
+  pendingReasonLabel,
+} from "../features/registry-pending";
 import PageHeader from "../components/PageHeader.vue";
 import { describeError } from "../features/errors";
 import { useConnectionStore } from "../stores/connection";
@@ -47,6 +54,8 @@ const message = useMessage();
 const entries = ref<RegistryEntrySummary[]>([]);
 const impacts = ref<RegistryPendingImpact[]>([]);
 const reports = ref<RegistryReport[]>([]);
+/** 目录状态（是否已上报、单机判定、跨机器 Slave）；旧后端没有该路由时为 null。 */
+const status = ref<RegistryStatus | null>(null);
 const loading = ref(false);
 const loaded = ref(false);
 const lastError = ref("");
@@ -62,10 +71,11 @@ async function refresh() {
   if (!conn.online || unsupported.value) return;
   loading.value = true;
   const api = conn.api.domains.registry;
-  const [entryResult, impactResult, reportResult] = await Promise.allSettled([
+  const [entryResult, impactResult, reportResult, statusResult] = await Promise.allSettled([
     api.entries(statusFilter.value ? { status: statusFilter.value } : {}),
     api.pendingImpacts(),
     api.reports({ page: 1, page_size: 20 }),
+    api.status(),
   ]);
   if (entryResult.status === "fulfilled") {
     entries.value = entryResult.value.entries;
@@ -77,6 +87,8 @@ async function refresh() {
   }
   if (impactResult.status === "fulfilled") impacts.value = impactResult.value.impacts;
   if (reportResult.status === "fulfilled") reports.value = reportResult.value.reports;
+  status.value = statusResult.status === "fulfilled" ? statusResult.value : null;
+  if (status.value) conn.registryPendingCount = status.value.pending_count;
   loading.value = false;
   loaded.value = true;
 }
@@ -97,6 +109,10 @@ const counts = computed(() => ({
   removed: entries.value.filter((entry) => entry.status.includes("removed")).length,
   unusable: entries.value.filter((entry) => entry.status.includes("unusable")).length,
 }));
+
+/** 挂起总数：状态接口给的是全量（列表可能按状态过滤过）。 */
+const pendingCount = computed(() => status.value?.pending_count ?? counts.value.pending);
+const acceptance = computed(() => (status.value ? acceptanceSummary(status.value.acceptance) : null));
 
 function fmtMs(value?: number | null): string {
   if (!value) return "—";
@@ -123,10 +139,10 @@ async function apply(name: string) {
   busy.value = `apply:${name}`;
   try {
     await conn.api.domains.registry.applyEntry(name);
-    message.success(`已升级 ${name}`);
+    message.success(`已接受 ${name} 的变更`);
     await refresh();
   } catch (error) {
-    message.error(`升级失败：${describe(error)}`);
+    message.error(`接受失败：${describe(error)}`);
   } finally {
     busy.value = "";
   }
@@ -136,10 +152,40 @@ async function dismiss(name: string) {
   busy.value = `dismiss:${name}`;
   try {
     await conn.api.domains.registry.dismissEntry(name);
-    message.success(`已忽略 ${name} 的挂起版本`);
+    message.success(`已忽略 ${name} 的挂起变更`);
     await refresh();
   } catch (error) {
     message.error(`忽略失败：${describe(error)}`);
+  } finally {
+    busy.value = "";
+  }
+}
+
+/** 一键接受 / 忽略全部挂起的变更（names 为空 = 全部，由权威逐条执行）。 */
+async function settleAll(action: "apply" | "dismiss") {
+  busy.value = `all:${action}`;
+  try {
+    const api = conn.api.domains.registry;
+    const result = action === "apply" ? await api.applyPending() : await api.dismissPending();
+    const text = pendingBatchMessage(action, result);
+    if (result.failed.length) message.warning(text, { duration: 8_000 });
+    else message.success(text);
+    await refresh();
+  } catch (error) {
+    message.error(`${action === "apply" ? "接受" : "忽略"}失败：${describe(error)}`);
+  } finally {
+    busy.value = "";
+  }
+}
+
+async function forgetSlave(machineName: string) {
+  busy.value = `slave:${machineName}`;
+  try {
+    await conn.api.domains.registry.forgetRemoteSlave(machineName);
+    message.success(`已删除跨机器 Slave 记录 ${machineName}`);
+    await refresh();
+  } catch (error) {
+    message.error(`删除失败：${describe(error)}`);
   } finally {
     busy.value = "";
   }
@@ -215,6 +261,20 @@ const entryColumns: DataTableColumns<RegistryEntrySummary> = [
   { title: "生效版本", key: "active_version", width: 90, render: (row) => (row.active_version === null ? "—" : `v${row.active_version}`) },
   { title: "挂起版本", key: "pending_version", width: 90, render: (row) => (row.pending_version === null ? "—" : `v${row.pending_version}`) },
   {
+    title: "挂起的变更",
+    key: "pending_change",
+    width: 150,
+    render: (row) => {
+      const change = pendingChangeLabel(row.pending_change);
+      if (!change) return h("span", { class: "dim" }, "—");
+      const reason = pendingReasonLabel(row.pending_reason);
+      return h("span", { title: reason }, [
+        h(NTag, { size: "small", bordered: false, type: row.pending_change === "remove" ? "error" : "warning" }, { default: () => change }),
+        row.pending_package_version ? h("span", { class: "dim mono pkg" }, ` ${row.pending_package_version}`) : null,
+      ]);
+    },
+  },
+  {
     title: "冲突",
     key: "pending_conflicts",
     minWidth: 200,
@@ -229,14 +289,14 @@ const entryColumns: DataTableColumns<RegistryEntrySummary> = [
     key: "ops",
     width: 150,
     render: (row) =>
-      row.pending_version === null
+      !row.status.includes("pending")
         ? h("span", { class: "dim" }, "—")
         : h(NSpace, { size: 4 }, {
             default: () => [
-              h(NButton, { size: "tiny", type: "primary", loading: busy.value === `apply:${row.name}`, onClick: () => apply(row.name) }, { default: () => "升级" }),
+              h(NButton, { size: "tiny", type: "primary", loading: busy.value === `apply:${row.name}`, onClick: () => apply(row.name) }, { default: () => "接受" }),
               h(NPopconfirm, { onPositiveClick: () => dismiss(row.name) }, {
                 trigger: () => h(NButton, { size: "tiny", loading: busy.value === `dismiss:${row.name}` }, { default: () => "忽略" }),
-                default: () => "忽略后生效版本不变，挂起版本保留在历史中。",
+                default: () => "忽略后生效版本不变，挂起版本保留在历史中；Host 再报同一内容会再次挂起。",
               }),
             ],
           }),
@@ -254,6 +314,7 @@ const reportColumns: DataTableColumns<RegistryReport> = [
   { title: "移除", key: "removed", width: 70, render: (row) => row.summary.counts.removed },
   { title: "复活", key: "revived", width: 70, render: (row) => row.summary.counts.revived },
   { title: "不可用", key: "unusable", width: 80, render: (row) => h("span", { class: row.summary.counts.unusable ? "err" : "" }, String(row.summary.counts.unusable)) },
+  { title: "自动接受", key: "auto_accepted", width: 90, render: (row) => row.summary.counts.auto_accepted ?? "—" },
   { title: "未变化", key: "unchanged", width: 80, render: (row) => row.summary.counts.unchanged },
 ];
 
@@ -266,7 +327,7 @@ onMounted(() => void refresh());
   <div class="page">
     <PageHeader
       title="注册表"
-      :subtitle="unsupported ? 'Registry Authority 仅在 --role backend 调度权威进程提供' : `${counts.total} 个条目 · ${counts.pending} 个挂起 · ${counts.removed} 个已移除 · ${counts.unusable} 个不可用`"
+      :subtitle="unsupported ? '当前进程没有 Registry Authority' : `${counts.total} 个条目 · ${pendingCount} 个挂起 · ${counts.removed} 个已移除 · ${counts.unusable} 个不可用`"
     >
       <template #actions>
         <NInput v-model:value="keyword" size="small" clearable placeholder="搜索条目" style="width: 200px" />
@@ -283,16 +344,61 @@ onMounted(() => void refresh());
     </div>
     <div v-else-if="unsupported" class="degraded">
       <span class="degraded-title">当前进程没有 Registry Authority</span>
-      你连接的是设备执行进程（Host）。注册表版本、挂起冲突与升级确认由
-      <code>unilab --role backend</code> 进程持有；把连接地址切到该进程即可使用本页。
-      Edge 上报的模板定义在 Host 上仍可在「物料 → 模板目录」中查看。
+      你连接的进程接入了远端调度权威，注册表版本与挂起确认由调度权威持有（默认 <code>unilab</code> 或
+      <code>unilab --role backend</code>）；把连接地址切到调度权威即可使用本页。
     </div>
 
     <template v-else>
       <NAlert v-if="lastError" type="error" closable @close="lastError = ''">{{ lastError }}</NAlert>
 
-      <NAlert v-if="impacts.length" type="warning" :bordered="false" title="有挂起的注册表变更影响到已保存的工作流节点">
-        以下条目的动作定义发生变化或被删除，受影响的节点在升级前会保持旧定义。请逐条确认「升级」或「忽略」。
+      <div v-if="status && !status.reported" class="degraded">
+        <span class="degraded-title">Host 尚未上报注册表</span>
+        调度权威不自己扫描注册表，目录只来自 Host 上报。Host 启动后会自动上报（失败会后台重试）；在此之前设备目录、
+        节点模板与工作流编译都没有可用条目。
+      </div>
+
+      <div v-if="status" class="registry-status">
+        <div class="status-cell">
+          <span class="status-label">接受规则</span>
+          <span :class="acceptance?.tone === 'warn' ? 'warn' : 'ok'">{{ acceptance?.title }}</span>
+          <span class="dim">{{ acceptance?.detail }}</span>
+        </div>
+        <div class="status-cell">
+          <span class="status-label">生效 / 挂起</span>
+          <span class="mono">{{ status.active_count }} / {{ status.pending_count }}</span>
+          <span class="dim">最近上报 {{ status.last_report ? fmtMs(status.last_report.created_at_ms) : "—" }}</span>
+        </div>
+        <div class="status-cell slaves">
+          <span class="status-label">跨机器 Slave</span>
+          <span v-if="!status.remote_slaves.length" class="dim">没有（单机部署）</span>
+          <span v-for="slave in status.remote_slaves" :key="slave.machine_name" class="slave">
+            <span class="mono">{{ slave.machine_name }}</span>
+            <span class="dim">最近 {{ fmtMs(slave.last_seen_at_ms) }}</span>
+            <NPopconfirm @positive-click="forgetSlave(slave.machine_name)">
+              <template #trigger>
+                <NButton size="tiny" quaternary :loading="busy === `slave:${slave.machine_name}`">删除记录</NButton>
+              </template>
+              确认这台 Slave 不再使用？删除后若它再次接入会被重新记下。
+            </NPopconfirm>
+          </span>
+        </div>
+      </div>
+
+      <NAlert v-if="pendingCount" type="warning" :bordered="false" :title="`有 ${pendingCount} 个注册表变更等待确认`">
+        <div class="pending-bar">
+          <span>
+            {{ acceptance?.pendingHint }}
+            受影响的工作流节点在接受前保持旧定义。
+          </span>
+          <span class="spacer" />
+          <NButton size="small" type="primary" :loading="busy === 'all:apply'" :disabled="Boolean(busy)" @click="settleAll('apply')">全部接受</NButton>
+          <NPopconfirm @positive-click="settleAll('dismiss')">
+            <template #trigger>
+              <NButton size="small" :loading="busy === 'all:dismiss'" :disabled="Boolean(busy)">全部忽略</NButton>
+            </template>
+            忽略后生效版本不变；Host 再报同一内容会再次挂起。
+          </NPopconfirm>
+        </div>
       </NAlert>
 
       <NTabs v-model:value="tab" type="line" size="small">
@@ -302,8 +408,8 @@ onMounted(() => void refresh());
               {{ option[1] }}
             </NButton>
           </NSpace>
-          <NEmpty v-if="loaded && !entries.length" description="尚无注册表条目：Edge 启动后会全量上报模板定义" style="padding: 48px 0" />
-          <NDataTable v-else :columns="entryColumns" :data="visibleEntries" :loading="loading" size="small" :scroll-x="1100" :row-key="(row: RegistryEntrySummary) => row.name" />
+          <NEmpty v-if="loaded && !entries.length" description="尚无注册表条目：Host 启动后会上报模板定义" style="padding: 48px 0" />
+          <NDataTable v-else :columns="entryColumns" :data="visibleEntries" :loading="loading" size="small" :scroll-x="1250" :row-key="(row: RegistryEntrySummary) => row.name" />
         </NTabPane>
         <NTabPane name="impacts" :tab="`挂起影响（${impacts.length}）`">
           <NEmpty v-if="!impacts.length" description="没有挂起条目影响到工作流节点" style="padding: 48px 0" />
@@ -312,8 +418,9 @@ onMounted(() => void refresh());
               <div class="impact-head">
                 <a class="link mono" @click="openDetail(impact.name)">{{ impact.name }}</a>
                 <NTag size="small" type="warning" :bordered="false">v{{ impact.active_version ?? "—" }} → v{{ impact.pending_version }}</NTag>
+                <span v-if="pendingChangeLabel(impact.pending_change)" class="dim">{{ pendingChangeLabel(impact.pending_change) }}</span>
                 <span class="spacer" />
-                <NButton size="tiny" type="primary" :loading="busy === `apply:${impact.name}`" @click="apply(impact.name)">升级</NButton>
+                <NButton size="tiny" type="primary" :loading="busy === `apply:${impact.name}`" @click="apply(impact.name)">接受</NButton>
                 <NButton size="tiny" :loading="busy === `dismiss:${impact.name}`" @click="dismiss(impact.name)">忽略</NButton>
               </div>
               <div class="impact-conflicts">
@@ -332,7 +439,7 @@ onMounted(() => void refresh());
         </NTabPane>
         <NTabPane name="reports" :tab="`上报批次（${reports.length}）`">
           <NEmpty v-if="!reports.length" description="尚无上报批次" style="padding: 48px 0" />
-          <NDataTable v-else :columns="reportColumns" :data="reports" size="small" :scroll-x="1000" :row-key="(row: RegistryReport) => row.report_id" />
+          <NDataTable v-else :columns="reportColumns" :data="reports" size="small" :scroll-x="1100" :row-key="(row: RegistryReport) => row.report_id" />
         </NTabPane>
       </NTabs>
     </template>
@@ -342,9 +449,21 @@ onMounted(() => void refresh());
         <NEmpty v-if="!detail && !detailLoading" description="读取失败" />
         <template v-else-if="detail">
           <NSpace size="small" style="margin-bottom: 12px">
-            <NTag v-for="status in detail.status" :key="status" size="small" :bordered="false" :type="STATUS_TYPE[status]">{{ STATUS_LABEL[status] }}</NTag>
+            <NTag v-for="item in detail.status" :key="item" size="small" :bordered="false" :type="STATUS_TYPE[item]">{{ STATUS_LABEL[item] }}</NTag>
             <span class="dim">template_uuid <span class="mono">{{ detail.template_uuid }}</span></span>
           </NSpace>
+          <div v-if="pendingChangeLabel(detail.pending_change)" class="block">
+            <div class="block-title">挂起的变更</div>
+            <div>
+              {{ pendingChangeLabel(detail.pending_change) }}
+              <span v-if="detail.pending_package_version" class="mono">（驱动包 {{ detail.pending_package_version }}）</span>
+              <span class="dim"> · {{ pendingReasonLabel(detail.pending_reason) }}</span>
+            </div>
+          </div>
+          <div v-if="detail.package" class="block">
+            <div class="block-title">驱动包</div>
+            <span class="mono">{{ detail.package }} {{ detail.package_version }}</span>
+          </div>
           <div v-if="detail.pending_conflicts.length" class="block">
             <div class="block-title">挂起冲突</div>
             <ul class="affected">
@@ -420,6 +539,55 @@ onMounted(() => void refresh());
 .conflicts {
   color: #b45309;
   font-size: 12px;
+}
+
+.ok {
+  color: #0b7a55;
+  font-weight: 700;
+}
+
+.pkg {
+  font-size: 11px;
+}
+
+.registry-status {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.status-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: var(--panel);
+  font-size: 12.5px;
+}
+
+.status-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6e7580;
+}
+
+.slave {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pending-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .impacts {

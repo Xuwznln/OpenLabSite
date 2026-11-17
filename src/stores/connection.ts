@@ -7,7 +7,8 @@
  * - `execution`：ready = 本进程带设备执行面（HostNode、遥测、人工决策）；restarting = Host
  *   子进程重启中；disabled = 纯调度权威进程（`unilab --role backend`）。
  *
- * Registry Authority 只在 backend 角色进程挂载，用一次 GET 探测并缓存结果。
+ * Registry Authority 跟随调度权威挂载，用一次 GET 探测并缓存结果；可用时每 30 秒读一次
+ * `/registry/status` 的挂起数（跨机器部署时注册表变更要人工确认），侧栏据此显示角标。
  *
  * health 在线后再读 `/api/v1/readiness`（能否接收并执行任务：设备初始化 / Host 重启期间
  * `starting`，HTTP 503）；旧后端 404 时记为不支持，之后不再探测（换地址时重置）。
@@ -173,6 +174,9 @@ export const useConnectionStore = defineStore("connection", () => {
   const checking = ref(false);
   const lastCheckedAt = ref(0);
   const registrySupport = ref<CapabilityState>("unknown");
+  /** 注册表挂起待确认的变更数（注册表页确认后也会就地更新）。 */
+  const registryPendingCount = ref(0);
+  let registryStatusAt = 0;
   const readiness = ref<ReadinessResponse | null>(null);
   const readinessSupport = ref<ReadinessSupport>("unknown");
   /** 连接状态里的就绪口径（胶囊文案 / 颜色 / 原因）。 */
@@ -253,12 +257,27 @@ export const useConnectionStore = defineStore("connection", () => {
 
   let registryProbePending = false;
 
+  /** 挂起数节流读取（30 秒一次）；读不到时保留上次值。 */
+  async function refreshRegistryPending(force = false) {
+    if (registrySupport.value !== "available") return;
+    if (!force && Date.now() - registryStatusAt < 30_000) return;
+    registryStatusAt = Date.now();
+    const url = baseUrl.value;
+    try {
+      const status = await api.value.domains.registry.status();
+      if (url === baseUrl.value) registryPendingCount.value = status.pending_count;
+    } catch {
+      /* 旧后端没有 /registry/status 或暂不可用：不显示角标 */
+    }
+  }
+
   async function probeRegistry() {
     if (registryProbePending || registrySupport.value !== "unknown") return;
     registryProbePending = true;
     try {
       await api.value.domains.registry.entries();
       registrySupport.value = "available";
+      void refreshRegistryPending(true);
     } catch (error) {
       if (isCapabilityUnavailable(error)) {
         registrySupport.value = "unsupported";
@@ -294,6 +313,7 @@ export const useConnectionStore = defineStore("connection", () => {
       if (online.value) {
         rememberRecent(baseUrl.value);
         void probeRegistry();
+        void refreshRegistryPending();
         await checkReadiness();
       } else {
         readiness.value = null;
@@ -360,6 +380,8 @@ export const useConnectionStore = defineStore("connection", () => {
     health.value = null;
     online.value = false;
     registrySupport.value = "unknown";
+    registryPendingCount.value = 0;
+    registryStatusAt = 0;
     readiness.value = null;
     readinessSupport.value = "unknown";
     if (pollTimer === null) return;
@@ -382,6 +404,7 @@ export const useConnectionStore = defineStore("connection", () => {
     schedulerLocal,
     executionReady,
     registrySupport,
+    registryPendingCount,
     readiness,
     readinessSupport,
     readinessState,

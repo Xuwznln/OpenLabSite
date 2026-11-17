@@ -295,6 +295,13 @@ onUnmounted(() => {
                     {{ alertBadge }}
                   </span>
                   <span
+                    v-if="item.key === 'registry' && conn.registryPendingCount"
+                    class="nav-badge"
+                    :title="`${conn.registryPendingCount} 个注册表变更等待确认`"
+                  >
+                    {{ conn.registryPendingCount }}
+                  </span>
+                  <span
                     v-if="item.key === 'status-incidents' && decisions.activeIncidentCount"
                     class="nav-badge nav-badge-hold"
                   >
