@@ -138,7 +138,7 @@ V1 合同里**业务结果看信封 `code`，不看 HTTP 状态**：业务失败
 | `command_id` | `POST /inventory/commands` 的 V1 类型化命令 | 同 id 同请求重放首次结果（完成或拒绝），同 id 不同请求 3003 |
 | `idempotency_key`（请求体） | 任务创建、任务命令、入口参数修改、人工确认（`decision_idempotency_key`） | 同键同语义只生效一次；同键不同内容 1000 / 3003 |
 | `Idempotency-Key`（请求头） | 干预决策（必填）、动作异常决策（可选） | 201 新决策 / 200 重放；未投递 3003，用同一键重试 |
-| `revision` 乐观锁 | Workflow Graph / IO / 发布 / 组合调用；实验室布局网格；Registry 条目；`/v1/operations` 的 `expectedRevision` | 不匹配 → 业务码 3003（`/v1/*` 为 409 `revision_conflict`） |
+| `revision` 乐观锁 | Workflow Graph / IO / 发布 / 组合调用；Registry 条目；`/v1/operations` 的 `expectedRevision` | 不匹配 → 业务码 3003（`/v1/*` 的 `error.code` 为 `revision_conflict`） |
 | `expected_revision`（可选） | 任务命令 | 给出时按 `control_revision` 校验，不符 3003 |
 | `preconditions[]` / `expected_version` | materials.v1 变更信封 / 类型化命令 / 化学品 | `expected_version` / `expected_state_hash` 不满足即拒绝 |
 | 名称去重 | 受管进程 `launch`、图 upsert | 同名视为同一资源：更新而非新建 |
@@ -159,8 +159,7 @@ V1 合同里**业务结果看信封 `code`，不看 HTTP 状态**：业务失败
 ### 4.2 时间
 
 - V1 合同对外的时间字段是 **ISO 8601 UTC 毫秒字符串**（`2026-11-12T08:00:00.000Z`）：Workflow Authority
-  （`create_time`、`started_at`、`opened_at`、`deadline_at`）、实验室布局网格（`create_time` / `update_time`）、
-  进程管理（`submittedAt` 等）。
+  （`create_time`、`started_at`、`opened_at`、`deadline_at`）、进程管理（`submittedAt` 等）。
 - dev 原样保留的 DTO 仍是 `*_at_ms`：**UTC epoch 毫秒整数**（`/inventory/*` 读到的物料 / 批次 / 账本、
   telemetry、`/edge/history`）。持续时间用 `*_ms` / `*_s` 显式带单位（`timeout_ms`、`heartbeat_interval`
   这种无单位名属历史例外）。

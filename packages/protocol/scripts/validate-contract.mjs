@@ -127,14 +127,21 @@ const CONTROL_PLANE_OPERATIONS = new Set([
   "POST /api/v1/edge/history/payloads",
   // 物料权威 ↔ Host 同步与物理执行结算（调度器）
   "POST /api/v1/materials/changes/ack",
+  // Host 启动时把开机图的拓扑边对齐进权威（端点不在权威的边跳过）
+  "POST /api/v1/materials/links/ensure",
+  // 调度器 ↔ 物料权威：派发前物料健全性检查（只读事实）、人工装入 / 取走 / 补量确认前的试运行
+  // （参数是解析完引用的节点参数 + 本次 attempt 的 task_uuid / job_uuid，浏览器拿不到）
+  "POST /api/v1/inventory/material-sanity",
+  "POST /api/v1/inventory/material-io/check",
   "POST /api/v1/materials/snapshots/compare",
   "POST /api/v1/materials/executions/prepare",
   "POST /api/v1/materials/executions/validate",
   "POST /api/v1/materials/executions/settle",
   "POST /api/v1/materials/executions/{}/release",
-  // 注册表上报（Host 启动时）
+  // 注册表上报（Host 启动时；Slave 接入时补报跨机器 Slave）
   "GET /api/v1/registry/digest",
   "POST /api/v1/registry/reports",
+  "POST /api/v1/registry/slaves",
   "POST /api/v1/resource-templates",
   // V1 工站调用（工站 → 调度权威发起工作流），浏览器不调
   "POST /api/v1/station/workflow-invocations",

@@ -7,7 +7,7 @@
 视角，`python -m unilabos.server.openapi_export` 离线导出两种角色的路由全集（带 `x-openlab-role`）。
 导出快照提交在协议包（`packages/protocol/openapi/unilabos-openapi.json`）并生成 TypeScript 类型；
 `catalog.ts` 登记浏览器会调用的子集，契约校验保证目录 ⊆ 导出、导出 = 目录 ∪ 控制面清单 ∪「浏览器暂未采用」
-清单（当前快照 unilabos 0.13.0rc1：353 条操作 = 239 浏览器 + 32 控制面 + 82 暂未采用）；
+清单（当前快照 unilabos 0.13.0rc1：355 条操作 = 237 浏览器 + 36 控制面 + 82 暂未采用）；
 协议测试把客户端方法与目录双向比对。任一环变更必须同一变更集内对齐
 （[conventions.md §11](./conventions.md#11-契约治理新增或修改一个端点)）。
 
@@ -21,7 +21,7 @@
 | [telemetry-history.md](./telemetry-history.md) | `telemetry-v1`、`device-state`、`history-v1`（`/edge/history`）、`debug`、`process-management` | 域契约 |
 | [decisions.md](./decisions.md) | 状态告警、动作异常（V1 error-decisions）与工作流干预 | 域契约 |
 | [driver-packages.md](./driver-packages.md) | 驱动包安装 / 目录 / 随包图、受管设备进程 | 域契约 |
-| [lab.md](./lab.md) | `lab-v1`：实验室档案、布局网格（`PUT /lab/profile` 的 `grid`，revision 乐观锁）、分区与摆放 | 域契约 |
+| [lab.md](./lab.md) | `lab-v1`：仓储聚合、组合视图、演示数据（档案 / 布局 / 分区 / 摆放已在核心删除） | 域契约 |
 | [logs.md](./logs.md) | Host / 受管 Slave / 外部 Slave 有界增量实时日志（system 域） | 域契约 |
 | [`packages/protocol/README.md`](../../packages/protocol/README.md) | 协议包的安装、用法、边界与发布流程 | 包文档 |
 | [`packages/protocol/CHANGELOG.md`](../../packages/protocol/CHANGELOG.md) | 协议包版本、兼容矩阵 | 发布记录 |
@@ -35,7 +35,7 @@
 unilab 调度权威 :8002（unilab --port，浏览器只连这一个地址）
    ├─ runtime.db    Workflow 定义 / Graph / Task / Node Job / 干预 / Authoring / 运行历史视图
    │                Registry Authority；进程管理状态（/v1/*）
-   ├─ materials.db  资源模板 / 物料聚合 / 位点 / 拓扑边 / 图快照 / 批次 / 预留 / 内容物 / 账本 / 实验室布局
+   ├─ materials.db  资源模板 / 物料聚合 / 位点 / 拓扑边 / 图快照 / 批次 / 预留 / 内容物 / 账本
    └─ Host 子进程（不监听端口）：Host 专有路由由权威经控制 WS 转交（edge_proxy），Host 不在线时 200 + 5001
         ├─ runtime.db    Backend 会话 / 执行 endpoint / 命令 / 执行 job / outbox
         ├─ telemetry.db  设备最新状态 + 追加遥测事件（/telemetry、/device-state）
@@ -83,7 +83,7 @@ unilab 调度权威 :8002（unilab --port，浏览器只连这一个地址）
 | `decisions` | `/api/v1/status-incidents*` `/error-decisions*` | 内存 / runtime.db | `createDecisionsApi` | host |
 | `driver-packages` | `/api/v1/driver-packages*` | `unilabos_data/driver_packages/` 源码树 + 台账 JSON | `createDriverPackagesApi` | host |
 | `device-processes` | `/api/v1/device-processes*` | 规格 JSON + 子进程 | `createDeviceProcessesApi` | host |
-| `lab-v1` | `/api/v1/lab/*` | materials.db（档案 / 分区 / 摆放）+ runtime.db（网格） | `createLabV1Api` | any |
+| `lab-v1` | `/api/v1/lab/warehouse` `/lab/assembly/{id}` `/lab/demo` | materials.db | `createLabV1Api` | any |
 | `process-management` | `/v1/snapshot` `/v1/operations*` `/v1/logs/{component}`（无 `/api` 前缀） | runtime.db | `createProcessManagementApi` | any |
 | `debug` | `/api/v1/debug/databases*` | 四库只读 | `createDebugApi` | any |
 
@@ -160,7 +160,6 @@ Host 子进程启动 / 重启期间 Host 专有路由返回 HTTP 200 + 信封 50
   不轮询；列表场景用缺省的目录模式（`include_definition=false`）。
 - 物料写入只经 `inventory.*` 写方法（内部提交 `POST /inventory/commands`）；不手拼变更信封。
 - 浏览器只读的外部资源（驱动包索引）由 `features/` 层负责，不进协议包。
-- 人工标注类数据（实验室布局）也走微后端（`lab-v1`），读取失败明确报错，不退回 localStorage 或自动迁移。
 
 ## 7. 验证门槛
 

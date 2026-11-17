@@ -42,7 +42,7 @@ It brings device actions, materials, workflow execution, exception handling, and
 | 🧪 | Device operation | Inspect devices and live properties, fill in action parameters, and submit individual actions |
 | 📦 | Material management | Register stock, mount, move, and transfer materials across devices; inspect sites and inventory |
 | 🧩 | Workflow authoring | Arrange experimental steps on a canvas, submit runs, and track node progress |
-| 🗺️ | Laboratory layout | Explore device and material placement; configure areas, walls, and assemblies |
+| 🧱 | Labware assembly | Inspect how plates, racks, and wells sit on devices in a 2.5D assembly view |
 | 🔔 | Exceptions and intervention | Review status alerts and resolve action errors using options provided by the backend |
 | 🔎 | Traceability and diagnostics | Inspect execution history, live logs, registry entries, and runtime state |
 

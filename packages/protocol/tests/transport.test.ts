@@ -364,37 +364,20 @@ describe("system 协议与传输层", () => {
     expect(mock.calls.some((call) => call.url.endsWith("/logs"))).toBe(false);
   });
 
-  it("覆盖 lab-v1 域全部 HTTP 操作；网格经 PUT /lab/profile 的 grid 原样携带 revision 乐观锁", async () => {
+  it("覆盖 lab-v1 域全部 HTTP 操作：只剩仓储、组合视图与演示数据（档案 / 布局 / 分区 / 摆放已删除）", async () => {
     const mock = createMockHttp();
     const api = createLabV1Api(mock.http);
-    const write = { revision: 3, cell_size: 100, zones: [{ id: "prep", name: "样品制备区", color: "#2e5bff", cells: ["0,0"] }], walls: ["1,1"] };
     const called = await collectCalls(mock, {
-      profile: () => api.profile(),
-      updateProfile: () => api.updateProfile({ name: "实验室 A" }),
-      layoutView: () => api.layoutView(),
       warehouse: () => api.warehouse(),
-      upsertZone: () => api.upsertZone({ zone_id: "z1", name: "台面" }),
-      deleteZone: () => api.deleteZone(DUMMY_ID),
-      upsertPlacement: () => api.upsertPlacement({ subject_id: "s1", zone_id: "z1" }),
-      deletePlacement: () => api.deletePlacement(DUMMY_ID),
       assembly: () => api.assembly(DUMMY_ID),
       seedDemo: () => api.seedDemo(),
     });
     expect(called).toEqual(catalogOps("lab-v1"));
+    expect(Object.keys(api).sort()).toEqual(["assembly", "seedDemo", "warehouse"]);
+    expect(OPERATIONS.some((operation) => /\/lab\/(profile|layout|zones|placements)/.test(operation.path))).toBe(false);
 
-    mock.calls.length = 0;
-    const grid = { ...write, layout_key: "default", create_time: "", update_time: "" };
-    mock.nextResponse = { status: 200, data: { code: 0, data: { zones: [], placements: [], storage_summary: {}, grid } } };
-    await expect(api.layout()).resolves.toEqual(grid);
-    mock.nextResponse = { status: 200, data: { code: 0, data: { name: "x", grid: { ...grid, revision: 4 } } } };
-    await expect(api.saveLayout(write)).resolves.toMatchObject({ revision: 4 });
-    mock.nextResponse = { status: 200, data: { code: 0, data: { name: "x", grid: { ...grid, revision: 0 } } } };
-    await api.resetLayout();
-    expect(mock.calls.map((call) => [call.method, call.url, call.data])).toEqual([
-      ["GET", "http://edge.local/api/v1/lab/layout", undefined],
-      ["PUT", "http://edge.local/api/v1/lab/profile", { grid: write }],
-      ["PUT", "http://edge.local/api/v1/lab/profile", { grid: null }],
-    ]);
+    mock.nextResponse = { status: 200, data: { code: 0, data: { seeded: { zones: 0, templates: 2, instances: 0, placements: 0, lots: 3 } } } };
+    await expect(api.seedDemo()).resolves.toEqual({ seeded: { zones: 0, templates: 2, instances: 0, placements: 0, lots: 3 } });
   });
 
   it("覆盖 process-management 域：/v1 路由也是信封，V1 符号码在 error.code", async () => {

@@ -71,6 +71,26 @@ describe("registry 协议客户端 ↔ catalog 契约", () => {
         mock.nextResponse = ok({ templates: [] });
         return api.workflowTemplates();
       },
+      applyPending: () => {
+        mock.nextResponse = ok({ entries: [], failed: [] });
+        return api.applyPending();
+      },
+      dismissPending: () => {
+        mock.nextResponse = ok({ entries: [], failed: [] });
+        return api.dismissPending(["pump"]);
+      },
+      status: () => {
+        mock.nextResponse = ok({ reported: false, last_report: null, active_count: 0, pending_count: 0 });
+        return api.status();
+      },
+      remoteSlaves: () => {
+        mock.nextResponse = ok({ slaves: [], acceptance: { single_machine: true, reason: "", reporter_machine_id: "", remote_slaves: [] } });
+        return api.remoteSlaves();
+      },
+      forgetRemoteSlave: () => {
+        mock.nextResponse = ok({ machine_name: DUMMY_ID, remaining: [] });
+        return api.forgetRemoteSlave(DUMMY_ID);
+      },
     });
     // 数字段（版本号）归一成 `{}` 后应与 catalog 完全一致
     const normalized = new Set(
@@ -110,5 +130,33 @@ describe("registry 协议客户端 ↔ catalog 契约", () => {
     await expect(api.applyEntry("pump")).rejects.toBeInstanceOf(
       BackendBusinessError,
     );
+  });
+
+  it("批量接受 / 忽略带 names（空即全部）；状态与跨机器 Slave 原样解包", async () => {
+    const mock = createMockHttp();
+    const api = createRegistryApi(mock.http);
+    mock.nextResponse = ok({ entries: [], failed: [{ name: "x", error: "entry x has no pending version" }] });
+    await expect(api.applyPending()).resolves.toMatchObject({ failed: [{ name: "x" }] });
+    mock.nextResponse = ok({ entries: [], failed: [] });
+    await api.dismissPending(["pump", "stirrer"]);
+    expect(mock.calls.map((call) => [call.method, call.url, call.data])).toEqual([
+      ["POST", "http://edge.local/api/v1/registry/pending/apply", { names: [] }],
+      ["POST", "http://edge.local/api/v1/registry/pending/dismiss", { names: ["pump", "stirrer"] }],
+    ]);
+
+    const status = {
+      reported: true,
+      last_report: { report_id: 3, created_at_ms: 1, edge_uuid: "e", counts: { total: 2, pending: 1 } },
+      active_count: 1,
+      pending_count: 1,
+      machine_id: "m-authority",
+      acceptance: { single_machine: false, reason: "cross-machine-slave", reporter_machine_id: "m-authority", remote_slaves: ["bench-2"] },
+      remote_slaves: [{ machine_name: "bench-2", machine_id: "m-2", edge_uuid: "e", first_seen_at_ms: 1, last_seen_at_ms: 2 }],
+    };
+    mock.nextResponse = ok(status);
+    await expect(api.status()).resolves.toEqual(status);
+    mock.nextResponse = { status: 200, data: { code: 4001, error: { msg: "remote slave bench-9 not found" } } };
+    await expect(api.forgetRemoteSlave("bench-9")).rejects.toMatchObject({ code: 4001 });
+    expect(mock.calls.at(-1)).toMatchObject({ method: "DELETE", url: "http://edge.local/api/v1/registry/slaves/bench-9" });
   });
 });

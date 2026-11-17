@@ -401,9 +401,13 @@ await step("workflowBackend.latestPublications", async () => {
   for (const item of publications) expectKeys(item, ["uuid", "workflow_uuid", "revision", "contract_digest", "inputs", "outputs"], "publication");
   return `${publications.length} published workflow(s)`;
 }, { optional: true });
-await step("registry.entries", async () => {
-  const { entries } = await api.registry.entries();
-  return `${entries.length} entries`;
+await step("registry.entries / status / remoteSlaves", async () => {
+  const [{ entries }, status, slaves] = await Promise.all([api.registry.entries(), api.registry.status(), api.registry.remoteSlaves()]);
+  expectKeys(status, ["reported", "last_report", "active_count", "pending_count", "machine_id", "acceptance", "remote_slaves"], "registry status");
+  expectKeys(status.acceptance, ["single_machine", "reason", "reporter_machine_id", "remote_slaves"], "acceptance");
+  const pending = entries.filter((entry) => entry.status.includes("pending"));
+  if (pending.length !== status.pending_count) throw new Error(`挂起数不一致：entries=${pending.length} status=${status.pending_count}`);
+  return `${entries.length} entries · reported=${status.reported} pending=${status.pending_count} single_machine=${status.acceptance.single_machine} remote_slaves=${slaves.slaves.length}`;
 }, { optional: true });
 await step("decisions.incidents / errorDecisions", async () => {
   const [incidents, errors] = await Promise.all([api.decisions.incidents(), api.decisions.errorDecisions()]);
@@ -424,13 +428,21 @@ await step("deviceProcesses.list / deviceClasses", async () => {
   return `processes=${listing.processes.length} running=${listing.processes.filter((p) => p.status === "running").length} classes=${classes.length}`;
 }, { optional: true });
 
-await step("labV1.profile / layoutView (grid)", async () => {
-  const [profile, view] = await Promise.all([api.labV1.profile(), api.labV1.layoutView()]);
-  expectKeys(profile, ["name", "domain", "pack", "grid"], "lab profile");
-  expectKeys(view, ["zones", "placements", "storage_summary"], "lab layout view");
-  const grid = profile.grid;
-  if (grid) expectKeys(grid, ["layout_key", "revision", "cell_size", "zones", "walls", "create_time", "update_time"], "grid");
-  return `lab=${profile.name} placements=${view.placements.length} grid=${grid ? `r${grid.revision} zones=${grid.zones.length}` : "无"}`;
+await step("labV1.warehouse; deleted lab profile / layout / zones / placements → 404", async () => {
+  const warehouse = await api.labV1.warehouse();
+  const probe = createEdgeApi(baseUrl).http;
+  const deleted = [];
+  for (const [method, path] of [
+    ["GET", "/api/v1/lab/profile"],
+    ["GET", "/api/v1/lab/layout"],
+    ["POST", "/api/v1/lab/zones"],
+    ["DELETE", "/api/v1/lab/placements/smoke"],
+  ]) {
+    const error = await probe.request({ method, path, ...(method === "POST" ? { body: {} } : {}) }).then(() => null, (e) => e);
+    if (!(error instanceof ApiError) || error.status !== 404) throw new Error(`${method} ${path} 应已删除（404），实际 ${error?.status ?? "成功"}`);
+    deleted.push(`${method} ${path.replace("/api/v1", "")}`);
+  }
+  return `warehouse keys=${Object.keys(warehouse).join(",")}；已删除：${deleted.join("、")}`;
 });
 await step("processManagement.snapshot (/v1, envelope)", async () => {
   const snapshot = await api.processManagement.snapshot();
@@ -494,6 +506,13 @@ if (doWrite) {
     const removed = await api.inventory.remove(uuid, true);
     return `${preferred.registry_class} → ${uuid.slice(0, 8)} · 条码 ${barcode} · ${moved} · 被拒命令 ${rejected.code}/${rejected.symbol} · 删除 ${removed.data.deleted_material_uuids.length} 节点`;
   });
+  await step("registry pending batch apply / dismiss (only when nothing is pending)", async () => {
+    const status = await api.registry.status();
+    if (status.pending_count) return `有 ${status.pending_count} 个挂起条目，留给用户确认，跳过`;
+    const [applied, dismissed] = [await api.registry.applyPending(), await api.registry.dismissPending()];
+    if (applied.entries.length || dismissed.entries.length) throw new Error("没有挂起条目时批量确认不应改动任何条目");
+    return `apply → ${applied.entries.length}/${applied.failed.length}，dismiss → ${dismissed.entries.length}/${dismissed.failed.length}`;
+  }, { optional: true });
   if (executionReady && schedulerLocal) {
     await step("ad-hoc device action → terminal", async () => {
       const endpoints = await api.runtimeV1.endpoints();

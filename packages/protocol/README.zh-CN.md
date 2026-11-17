@@ -167,7 +167,7 @@ type InstallRequest = OpenApiComponents["schemas"]["DriverPackageInstallRequest"
 | `telemetryV1` / `deviceState` / `historyV1` | 遥测、V1 设备状态视图与 Host 历史（`/edge/history`） |
 | `decisions` | 状态告警与动作异常处理 |
 | `driverPackages` / `deviceProcesses` | 驱动包与受管设备进程 |
-| `labV1` / `processManagement` / `debug` | 实验室档案与布局网格；V1 进程管理（`/v1/*`）；只读数据库诊断 |
+| `labV1` / `processManagement` / `debug` | 仓储聚合、组合视图与演示数据（档案 / 布局路由已删除）；V1 进程管理（`/v1/*`）；只读数据库诊断 |
 
 具体角色、字段和路由以 [协议规范](../../docs/protocol/README.md) 及随包 OpenAPI 快照为准。
 操作目录是契约描述，不替代后端权限检查。

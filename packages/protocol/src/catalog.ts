@@ -157,8 +157,13 @@ export const OPERATIONS = [
   { id: "registry.pending-impacts.list", domain: "registry", method: "GET", path: "/api/v1/registry/pending-impacts", summary: "挂起条目影响面：冲突 action 反查受影响 workflow 节点", mutates: false, role: "any" },
   { id: "registry.entry-versions.list", domain: "registry", method: "GET", path: "/api/v1/registry/entries/{name}/versions", summary: "条目版本历史（新在前）", mutates: false, role: "any" },
   { id: "registry.entry-versions.get", domain: "registry", method: "GET", path: "/api/v1/registry/entries/{name}/versions/{version}", summary: "条目单版本全文", mutates: false, role: "any" },
-  { id: "registry.entries.apply", domain: "registry", method: "POST", path: "/api/v1/registry/entries/{name}/apply", summary: "升级：挂起版本切换为生效版本", mutates: true, role: "any" },
-  { id: "registry.entries.dismiss", domain: "registry", method: "POST", path: "/api/v1/registry/entries/{name}/dismiss", summary: "忽略挂起版本（生效版本不动，历史保留）", mutates: true, role: "any" },
+  { id: "registry.entries.apply", domain: "registry", method: "POST", path: "/api/v1/registry/entries/{name}/apply", summary: "接受挂起的变化：挂起版本生效，待确认移除则软移除", mutates: true, role: "any" },
+  { id: "registry.entries.dismiss", domain: "registry", method: "POST", path: "/api/v1/registry/entries/{name}/dismiss", summary: "忽略挂起的变化（生效版本不动，历史保留；Host 再报同一内容会再次挂起）", mutates: true, role: "any" },
+  { id: "registry.pending.apply", domain: "registry", method: "POST", path: "/api/v1/registry/pending/apply", summary: "批量接受挂起的变化（names 为空即全部）", mutates: true, role: "any" },
+  { id: "registry.pending.dismiss", domain: "registry", method: "POST", path: "/api/v1/registry/pending/dismiss", summary: "批量忽略挂起的变化（names 为空即全部）", mutates: true, role: "any" },
+  { id: "registry.status.get", domain: "registry", method: "GET", path: "/api/v1/registry/status", summary: "目录状态：是否已收到 Host 上报、最近一次上报、挂起数、单机判定（规则 B）与跨机器 Slave", mutates: false, role: "any" },
+  { id: "registry.slaves.list", domain: "registry", method: "GET", path: "/api/v1/registry/slaves", summary: "权威记着的跨机器 Slave（规则 B 因它们不成立）", mutates: false, role: "any" },
+  { id: "registry.slaves.delete", domain: "registry", method: "DELETE", path: "/api/v1/registry/slaves/{machine_name}", summary: "删除一条跨机器 Slave 记录（再次接入会重新记下）", mutates: true, role: "any" },
   { id: "registry.entries.restore", domain: "registry", method: "POST", path: "/api/v1/registry/entries/{name}/restore/{version}", summary: "历史版本还原为新的生效版本", mutates: true, role: "any" },
   { id: "registry.reports.list", domain: "registry", method: "GET", path: "/api/v1/registry/reports", summary: "Edge 上报批次统计", mutates: false, role: "any" },
   { id: "registry.workflow-templates.list", domain: "registry", method: "GET", path: "/api/v1/registry/workflow-templates", summary: "生效的设备包 @workflow 工作流模板（角色占位，插入画布时绑定设备）", mutates: false, role: "any" },
@@ -269,17 +274,10 @@ export const OPERATIONS = [
   { id: "device-processes.stop", domain: "device-processes", method: "POST", path: "/api/v1/device-processes/{process_id}/stop", summary: "结束子进程（不触发看护重启）", mutates: true, role: "host" },
   { id: "device-processes.restart", domain: "device-processes", method: "POST", path: "/api/v1/device-processes/{process_id}/restart", summary: "停止后重新拉起", mutates: true, role: "host" },
 
-  // ── lab-v1：实验室档案 / 布局网格 / 分区 / 摆放（V1 lab 合同） ──
-  { id: "lab-v1.profile.get", domain: "lab-v1", method: "GET", path: "/api/v1/lab/profile", summary: "实验室档案（领域包 / 分区种类 / 布局网格 grid）", mutates: false, role: "any" },
-  { id: "lab-v1.profile.put", domain: "lab-v1", method: "PUT", path: "/api/v1/lab/profile", summary: "修改档案；grid 整份替换（revision 乐观锁，过期 3003），grid=null 重置", mutates: true, role: "any" },
-  { id: "lab-v1.layout.get", domain: "lab-v1", method: "GET", path: "/api/v1/lab/layout", summary: "V1 已放置实例视图（zones / placements / storage_summary）+ grid", mutates: false, role: "any" },
+  // ── lab-v1：实验室视图（V1 lab 合同；档案 / 布局 / 分区 / 摆放已在核心删除） ──
   { id: "lab-v1.warehouse", domain: "lab-v1", method: "GET", path: "/api/v1/lab/warehouse", summary: "品类库存聚合", mutates: false, role: "any" },
-  { id: "lab-v1.zones.upsert", domain: "lab-v1", method: "POST", path: "/api/v1/lab/zones", summary: "分区 upsert", mutates: true, role: "any" },
-  { id: "lab-v1.zones.delete", domain: "lab-v1", method: "DELETE", path: "/api/v1/lab/zones/{zone_id}", summary: "删除分区", mutates: true, role: "any" },
-  { id: "lab-v1.placements.upsert", domain: "lab-v1", method: "POST", path: "/api/v1/lab/placements", summary: "摆放 upsert", mutates: true, role: "any" },
-  { id: "lab-v1.placements.delete", domain: "lab-v1", method: "DELETE", path: "/api/v1/lab/placements/{subject_id}", summary: "删除摆放", mutates: true, role: "any" },
-  { id: "lab-v1.assembly", domain: "lab-v1", method: "GET", path: "/api/v1/lab/assembly/{subject_id}", summary: "实例的装配视图", mutates: false, role: "any" },
-  { id: "lab-v1.demo", domain: "lab-v1", method: "POST", path: "/api/v1/lab/demo", summary: "写入演示分区与摆放", mutates: true, role: "any" },
+  { id: "lab-v1.assembly", domain: "lab-v1", method: "GET", path: "/api/v1/lab/assembly/{subject_id}", summary: "实例的组合视图（placement 恒为 null）", mutates: false, role: "any" },
+  { id: "lab-v1.demo", domain: "lab-v1", method: "POST", path: "/api/v1/lab/demo", summary: "写入仓储演示模板与批次（zones / placements 恒为 0）", mutates: true, role: "any" },
 
   // ── process-management：V1 进程管理（/v1/*，信封；V1 符号码在 error.code） ──
   { id: "process-management.snapshot", domain: "process-management", method: "GET", path: "/v1/snapshot", summary: "进程快照（authority / Host / 受管进程）", mutates: false, role: "any" },

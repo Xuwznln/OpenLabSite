@@ -93,7 +93,7 @@ describe("@openlab/protocol 发包形态", () => {
     }
     // 权威分配的身份用 *_uuid；人可读键允许 id / name / 领域名词
     for (const name of paramNames) {
-      expect(name).toMatch(/(_uuid|_id|^name$|^identity$|^version$|^database$|^table$|^resource_id$|^graph_name$|^component$)$/);
+      expect(name).toMatch(/(_uuid|_id|^name$|^identity$|^version$|^database$|^table$|^resource_id$|^graph_name$|^machine_name$|^component$)$/);
     }
   });
 });

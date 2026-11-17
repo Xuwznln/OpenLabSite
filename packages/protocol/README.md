@@ -174,7 +174,7 @@ type InstallRequest = OpenApiComponents["schemas"]["DriverPackageInstallRequest"
 | `telemetryV1` / `deviceState` / `historyV1` | Telemetry, V1 device-state views, and Host history (`/edge/history`) |
 | `decisions` | Status alerts and action-error decisions |
 | `driverPackages` / `deviceProcesses` | Driver packages and managed device processes |
-| `labV1` / `processManagement` / `debug` | Lab profile and layout grid; V1 process management (`/v1/*`); read-only database diagnostics |
+| `labV1` / `processManagement` / `debug` | Warehouse aggregate, assembly view and demo data (the lab profile / layout routes were removed); V1 process management (`/v1/*`); read-only database diagnostics |
 
 Use the [API specification](https://github.com/Xuwznln/OpenLabSite/tree/main/docs/protocol)
 and bundled OpenAPI snapshot for role, field, and route details.

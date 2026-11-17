@@ -347,9 +347,9 @@ watch([() => conn.baseUrl, subjectId], () => {
     <NCard :bordered="false">
       <NSpace align="center" justify="space-between">
         <NSpace align="center">
-          <NButton size="small" quaternary @click="router.push('/lab')">
+          <NButton size="small" quaternary @click="router.push('/inventory')">
             <template #icon><NIcon><ArrowBackOutline /></NIcon></template>
-            返回地图
+            返回物料
           </NButton>
           <span class="asm-title">
             {{ assembly?.root.template_name || subjectId }}

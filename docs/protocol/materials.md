@@ -26,7 +26,7 @@ dev 时代按操作分路由的读写（`/materials/templates`、`/instances`、
   `template_uuid` `template_name` `machine_name` `barcode` `lifecycle_status`
   （`active reserved in_use quarantined consumed retired`）`version`。
 - `position`：`position_x/y/z`（可为 null = 权威中无坐标；三者要么都给要么都空）、`size_width/height/depth`、
-  旋转、`layout`、`cross_section_type`。实验室地图直接用这些字段绘制。
+  旋转、`layout`、`cross_section_type`。装配视图直接用这些字段绘制。
 - `data`：`substances[]`（name / quantity / quantity_unit / physical_state，关联了化学品时还有
   `chemical_uuid` 与只读摘要 `chemical`）、业务 `data`、`content_version`。
 - `sites[]`：`site_uuid` `label` `site_index` `occupied_material_uuid` `pose`

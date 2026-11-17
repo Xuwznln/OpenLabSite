@@ -291,21 +291,38 @@ V1 四通道 SSE `GET /monitor/events` 不进浏览器目录。
 
 ## 4. Registry Authority（跟随调度权威，V1 信封）
 
-Host 启动时经 `POST /api/v1/registry/reports` 全量上报（控制面路由，浏览器不调用；V1 合同把
-`POST /resource-templates` 让给了身份回执）。
-每个模板条目独立维护版本；被活跃 workflow 节点引用的 action 删除/变化时条目挂起为
-`pending`，由前端确认。
+**目录只来自 Host 上报**：调度权威不自己扫描注册表（YAML + AST），Host 启动时先 `GET /registry/digest` 取权威持有的
+内容哈希，再经 `POST /registry/reports` 只为权威没有的哈希附完整定义（两条都是控制面路由，浏览器不调用）。
+全新库在首次上报前目录为空：读接口返回空，工作流编译 / 模板实例化 / 按资源类出库报 `registry_not_reported`（5001），
+`GET /registry/status` 的 `reported = false`。
 
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| GET | `/registry/entries?status=` | 条目状态行（`status[]` 可同时含 `active` `pending` `removed` `unusable`） |
-| GET | `/registry/entries/{name}` | 详情：`active_payload` / `pending_payload` / `pending_conflicts` |
-| GET | `/registry/pending-impacts` | 挂起条目 → 受影响 workflow 节点（画布徽标数据源） |
-| GET | `/registry/entries/{name}/versions[/{version}]` | 版本历史（新在前）/ 单版本全文 |
-| POST | `/registry/entries/{name}/apply` | 升级：挂起版本切换为生效版本 |
-| POST | `/registry/entries/{name}/dismiss` | 忽略挂起版本（生效不变，历史保留） |
-| POST | `/registry/entries/{name}/restore/{version}` | 历史版本还原为新的生效版本 |
-| GET | `/registry/reports` | 上报批次统计（added/updated/pending/removed/revived/unusable） |
+**接受规则**：新增、变化、Host 不再上报（待确认移除）的条目先挂起（`pending_change` = `add` / `update` / `remove`），
+满足其一即自动生效：
+
+- 规则 B（单机部署）：上报 Host 的 `machine_id` 等于权威的，且权威没有记着跨机器 Slave；
+- 规则 A（驱动包升级）：条目所属驱动包版本比已接受内容的高。
+
+都不满足时条目挂起待确认，`pending_reason` 说明原因（`cross-machine-reporter` / `cross-machine-slave`）。被引用 action
+删除 / 变化的冲突明细只附在挂起条目上（`pending_conflicts`），不再决定是否挂起。跨机器 Slave 由 Host 在上报与 Slave
+接入时（`POST /registry/slaves`，控制面）告知，权威持久记下，直到用户确认不再使用后删除。
+
+| 方法 | 路径 | SDK | 说明 |
+| --- | --- | --- | --- |
+| GET | `/registry/status` | `registry.status()` | `reported`、最近一次上报（计数与判定）、`active_count` / `pending_count`、`machine_id`、`acceptance`（规则 B 判定）、`remote_slaves` |
+| GET | `/registry/entries?status=` | `registry.entries()` | 条目状态行（`status[]` 可同时含 `active` `pending` `removed` `unusable`；另有 `pending_change` / `pending_reason` / `package_version` / `pending_package_version`） |
+| GET | `/registry/entries/{name}` | `registry.entry()` | 详情：`active_payload` / `pending_payload` / `pending_conflicts` |
+| GET | `/registry/pending-impacts` | `registry.pendingImpacts()` | 挂起条目 → 受影响 workflow 节点（画布徽标数据源） |
+| GET | `/registry/entries/{name}/versions[/{version}]` | `entryVersions()` / `entryVersion()` | 版本历史（新在前）/ 单版本全文 |
+| POST | `/registry/entries/{name}/apply` | `registry.applyEntry()` | 接受挂起的变化：挂起版本生效，待确认移除则软移除 |
+| POST | `/registry/entries/{name}/dismiss` | `registry.dismissEntry()` | 忽略挂起的变化（生效不变，历史保留；Host 再报同一内容会再次挂起） |
+| POST | `/registry/pending/apply` `/registry/pending/dismiss` | `applyPending(names?)` / `dismissPending(names?)` | 批量接受 / 忽略，`{names}` 为空即全部挂起条目；返回 `{entries, failed}` |
+| POST | `/registry/entries/{name}/restore/{version}` | `registry.restoreEntry()` | 历史版本还原为新的生效版本（显式人工操作，不走接受规则） |
+| GET | `/registry/slaves` | `registry.remoteSlaves()` | 权威记着的跨机器 Slave 与当前判定 |
+| DELETE | `/registry/slaves/{machine_name}` | `registry.forgetRemoteSlave()` | 确认不再使用后删除记录（不存在 4001；该 Slave 再接入会重新记下） |
+| GET | `/registry/reports` | `registry.reports()` | 上报批次统计（added/updated/pending/removed/revived/unusable/auto_accepted） |
+
+默认拓扑（权威 + Host 子进程 + 受管 Slave 同机）规则 B 成立，启动不需要人工确认；跨机器部署时注册表页显示挂起的
+变更并可一键全部接受。
 
 接入远端 Backend 的受控 Edge 返回 404：`stores/connection.ts` 探测一次并把
 `registrySupport` 置为 `unsupported`，注册表页显示降级说明；默认 Host 和

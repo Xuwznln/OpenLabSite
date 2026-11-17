@@ -36,12 +36,6 @@ export const router = createRouter({
       meta: { title: "化学品库", overline: "Chemicals" },
     },
     {
-      path: "/lab",
-      name: "lab",
-      component: () => import("./views/LabMapView.vue"),
-      meta: { title: "实验室地图", overline: "Deck Map" },
-    },
-    {
       path: "/lab/assembly/:id",
       name: "lab-assembly",
       component: () => import("./views/AssemblyView.vue"),

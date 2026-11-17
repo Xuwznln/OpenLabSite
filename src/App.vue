@@ -20,7 +20,6 @@ import {
   HardwareChipOutline,
   LayersOutline,
   LogoGithub,
-  MapOutline,
   PauseCircleOutline,
   PulseOutline,
   ScanOutline,
@@ -81,7 +80,6 @@ const NAV_GROUPS_BASE = [
       { key: "devices", to: "/devices", icon: HardwareChipOutline },
       { key: "inventory", to: "/inventory", icon: CubeOutline },
       { key: "chemicals", to: "/chemicals", icon: FlaskOutline },
-      { key: "lab", to: "/lab", icon: MapOutline },
       { key: "monitor", to: "/monitor", icon: EyeOutline },
     ],
   },
@@ -129,7 +127,8 @@ const navGroups = computed<NavGroup[]>(() =>
 );
 
 const ROUTE_KEYS: Array<[prefix: string, key: string]> = [
-  ["/lab", "lab"],
+  // 组合视图从物料页 / 扫码进入，归在物料导航下
+  ["/lab/assembly", "inventory"],
   ["/workflow-tasks", "workflows"],
   ["/workflows", "workflows"],
   ["/timeline", "timeline"],

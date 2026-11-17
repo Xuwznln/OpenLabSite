@@ -1037,7 +1037,7 @@ export type paths = {
         };
         /**
          * Health
-         * @description 存活探针：恒 HTTP 200 的裸 JSON（与 ``/readiness`` 一样不包信封，探针只看状态码与字段）。
+         * @description 存活探针：恒 HTTP 200，正文是统一信封 ``{"code": 0, "data": {...}}``（探针只看状态码）。
          *
          *     ``unavailable_devices``（dev 扩展，只在非空时出现）：本进程设备 runtime 跳过的设备（设备图里有、
          *     当前 backend 跑不了）及原因。存活探针只读本进程数据、不经控制面问 Host（前端每几秒轮询一次，
@@ -1174,7 +1174,8 @@ export type paths = {
         put?: never;
         /**
          * Post Command
-         * @description 统一库存命令入口（幂等）：成功与业务拒绝都是 HTTP 200 + 裸结果；未知异常照常上抛。
+         * @description 统一库存命令入口（幂等）：完成返回命令结果；业务拒绝是失败信封（``error.code`` 为拒绝码，
+         *     ``error.details`` 带 ``command_id`` / ``replayed``）；未知异常照常上抛。
          */
         post: operations["post_command_api_v1_inventory_commands_post"];
         delete?: never;
@@ -1402,6 +1403,48 @@ export type paths = {
         get: operations["get_lot_api_v1_inventory_lots__lot_id__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/inventory/material-io/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check Material Io
+         * @description 调度器在人工确认前试运行一次（保存点内回滚，不写库）：返回冻结的执行计划；不能执行时按业务码报错
+         *     （库位被占 6007、被其他任务占用 6011 是临时条件，调度器继续排队；其余为合同错误）。
+         */
+        post: operations["check_material_io_api_v1_inventory_material_io_check_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/inventory/material-sanity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Material Sanity
+         * @description 调度器在节点就绪、申请资源前读一次：物料是否还在、生命周期、库位、未结算物理动作占用、占着它的
+         *     库存预留，以及本作业预留的各条分配现状。只读不写；等待还是预检报错由调度器判定。
+         */
+        post: operations["material_sanity_api_v1_inventory_material_sanity_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1658,75 +1701,6 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/lab/layout": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Layout */
-        get: operations["get_layout_api_v1_lab_layout_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/lab/placements": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Post Placement */
-        post: operations["post_placement_api_v1_lab_placements_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/lab/placements/{subject_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /** Delete Placement */
-        delete: operations["delete_placement_api_v1_lab_placements__subject_id__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/lab/profile": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Profile */
-        get: operations["get_profile_api_v1_lab_profile_get"];
-        /** Put Profile */
-        put: operations["put_profile_api_v1_lab_profile_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/lab/warehouse": {
         parameters: {
             query?: never;
@@ -1742,40 +1716,6 @@ export type paths = {
         put?: never;
         post?: never;
         delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/lab/zones": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Post Zone */
-        post: operations["post_zone_api_v1_lab_zones_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/lab/zones/{zone_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /** Delete Zone */
-        delete: operations["delete_zone_api_v1_lab_zones__zone_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2263,6 +2203,28 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/materials/links/ensure": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ensure Links
+         * @description 开机图拓扑边幂等对齐（Host 启动时经物料客户端调用）：端点不在权威的边跳过，不报错。
+         *
+         *     整批在一个写事务里，同步路由放到线程池，不在事件循环上等物料写锁。
+         */
+        post: operations["ensure_links_api_v1_materials_links_ensure_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/materials/notify-device": {
         parameters: {
             query?: never;
@@ -2300,7 +2262,8 @@ export type paths = {
          * @description registry 可实例化资源类目录（前端出库选择器的数据源）。
          *
          *     只列 pylabrobot 类型（可被 /instantiate 实例化）；显示名走 registry
-         *     display_name 约定，缺省回退资源类 id。
+         *     display_name 约定，缺省回退资源类 id。调度权威读 Host 上报的生效条目
+         *     （首次上报前为空），Host 进程读本地扫描（``registry/catalog.py``）。
          */
         get: operations["list_registry_classes_api_v1_materials_registry_classes_get"];
         put?: never;
@@ -2451,11 +2414,12 @@ export type paths = {
         };
         /**
          * Readiness
-         * @description 就绪探针：能接收并执行任务时 HTTP 200，否则 503（Kubernetes readiness 合同）。
+         * @description 就绪探针：能接收并执行任务时 HTTP 200，否则 503（Kubernetes readiness 合同，探针只看状态码）。
          *
          *     与 ``/health``（进程存活，恒 200）不同：Host 子进程启动 / 安静点重启期间、执行适配器
-         *     尚未注册时返回 503；全量重置期间维护闸门同样返回 503。响应只含状态摘要。
-         *     探针按 HTTP 状态码判定，所以本端点不包信封（``raw_response``）。
+         *     尚未注册时返回 503；全量重置期间维护闸门同样返回 503。正文是统一信封：就绪为
+         *     ``{"code": 0, "data": <摘要>}``；未就绪为 ``{"code": 5001, "error": {"msg": <原因>, "code": "not_ready",
+         *     "details": <摘要>}}``（HTTP 503 与 5001 一一对应，维护闸门的 503 正文同样是 5001，只是没有摘要）。
          */
         get: operations["readiness_api_v1_readiness_get"];
         put?: never;
@@ -2730,7 +2694,7 @@ export type paths = {
         put?: never;
         /**
          * Apply Registry Entry
-         * @description 把挂起版本切换为生效版本。
+         * @description 接受挂起的变化：挂起版本切换为生效版本，待确认移除则软移除。
          */
         post: operations["apply_registry_entry_api_v1_registry_entries__name__apply_post"];
         delete?: never;
@@ -2750,7 +2714,7 @@ export type paths = {
         put?: never;
         /**
          * Dismiss Registry Entry
-         * @description 忽略挂起版本（历史保留，生效版本不动）。
+         * @description 忽略挂起的变化（历史保留，生效版本不动；Host 再报同一内容会再次挂起）。
          */
         post: operations["dismiss_registry_entry_api_v1_registry_entries__name__dismiss_post"];
         delete?: never;
@@ -2833,6 +2797,46 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/registry/pending/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Apply Registry Pending
+         * @description 批量接受挂起的变化；``names`` 为空时接受全部。
+         */
+        post: operations["apply_registry_pending_api_v1_registry_pending_apply_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/registry/pending/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dismiss Registry Pending
+         * @description 批量忽略挂起的变化；``names`` 为空时忽略全部。
+         */
+        post: operations["dismiss_registry_pending_api_v1_registry_pending_dismiss_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/registry/reports": {
         parameters: {
             query?: never;
@@ -2851,6 +2855,70 @@ export type paths = {
          * @description Edge 全量上报（条目级替换：变了才升该条目版本，冲突挂起待确认）。
          */
         post: operations["report_resource_templates_api_v1_registry_reports_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/registry/slaves": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Registry Remote Slaves
+         * @description 权威记着的跨机器 Slave（规则 B 因它们不成立）。
+         */
+        get: operations["list_registry_remote_slaves_api_v1_registry_slaves_get"];
+        put?: never;
+        /**
+         * Announce Registry Slaves
+         * @description Host 告知它连着的 Slave（Slave 接入时补报）；跨机器的被记下，规则 B 随之不成立。
+         */
+        post: operations["announce_registry_slaves_api_v1_registry_slaves_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/registry/slaves/{machine_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Forget Registry Remote Slave
+         * @description 删除一条跨机器 Slave 记录（确认不再使用）；该 Slave 再次接入会被重新记下。
+         */
+        delete: operations["forget_registry_remote_slave_api_v1_registry_slaves__machine_name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/registry/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Registry Status
+         * @description 目录状态：是否收到过 Host 上报、最近一次上报的统计与判定、挂起数、跨机器 Slave。
+         */
+        get: operations["get_registry_status_api_v1_registry_status_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -5235,7 +5303,7 @@ export type paths = {
         put?: never;
         /**
          * Preflight Workflow
-         * @description V1：按候选入口参数执行零写入预检；``inventory_bindings`` 原样回显（dev 预检不消费库存绑定）。
+         * @description V1：按候选入口参数与 ``inventory_bindings`` 执行零写入预检；库存检查按绑定的来源报告，绑定原样回显。
          */
         post: operations["preflight_workflow_api_v1_workflows__workflow_uuid__run_preflight_post"];
         delete?: never;
@@ -5328,6 +5396,7 @@ export type paths = {
         /**
          * 有界读取组件日志尾部（V1 进程管理协议）
          * @description 组件：backend / edge / plc / renderer / managed:<process_id>；只读应用选定的日志，不接受路径。
+         *     Host 不在线或日志暂不可读时 5001 ``component_unavailable``，未知组件 1000 ``component_invalid``。
          */
         get: operations["logs_v1_logs__component__get"];
         put?: never;
@@ -5349,7 +5418,8 @@ export type paths = {
         put?: never;
         /**
          * 提交幂等工作区操作（V1 进程管理协议）
-         * @description 受理后进入单一 FIFO 执行通道；同 operationId 同请求重放返回原记录。
+         * @description 受理后进入单一 FIFO 执行通道；同 operationId 同请求重放返回原记录，不同请求 3003
+         *     ``operation_conflict``，``expectedRevision`` 过期 3003 ``revision_conflict``。
          */
         post: operations["submit_v1_operations_post"];
         delete?: never;
@@ -5365,7 +5435,10 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** 查询工作区操作（V1 进程管理协议） */
+        /**
+         * 查询工作区操作（V1 进程管理协议）
+         * @description 不存在时 4001 ``operation_not_found``。
+         */
         get: operations["operation_v1_operations__operation_id__get"];
         put?: never;
         post?: never;
@@ -6222,6 +6295,15 @@ export type components = {
                 [key: string]: unknown;
             };
         };
+        /** Envelope[HealthStatus] */
+        Envelope_HealthStatus_: {
+            /**
+             * Code
+             * @default 0
+             */
+            code: number;
+            data: components["schemas"]["HealthStatus"];
+        };
         /** Envelope[HistoryEventRecord] */
         Envelope_HistoryEventRecord_: {
             /**
@@ -6271,6 +6353,15 @@ export type components = {
              */
             code: number;
             data: components["schemas"]["PayloadObjectRecord"];
+        };
+        /** Envelope[ReadinessStatus] */
+        Envelope_ReadinessStatus_: {
+            /**
+             * Code
+             * @default 0
+             */
+            code: number;
+            data: components["schemas"]["ReadinessStatus"];
         };
         /** Envelope[ResetStatus] */
         Envelope_ResetStatus_: {
@@ -6325,6 +6416,33 @@ export type components = {
              */
             code: number;
             data: components["schemas"]["SchedulerDrainStatus"];
+        };
+        /** Envelope[WorkspaceLogTail] */
+        Envelope_WorkspaceLogTail_: {
+            /**
+             * Code
+             * @default 0
+             */
+            code: number;
+            data: components["schemas"]["WorkspaceLogTail"];
+        };
+        /** Envelope[WorkspaceOperation] */
+        Envelope_WorkspaceOperation_: {
+            /**
+             * Code
+             * @default 0
+             */
+            code: number;
+            data: components["schemas"]["WorkspaceOperation"];
+        };
+        /** Envelope[WorkspaceSnapshot] */
+        Envelope_WorkspaceSnapshot_: {
+            /**
+             * Code
+             * @default 0
+             */
+            code: number;
+            data: components["schemas"]["WorkspaceSnapshot"];
         };
         /**
          * ErrorDecision
@@ -7211,6 +7329,8 @@ export type components = {
             };
             /** Description */
             description?: string | null;
+            /** Display Name */
+            display_name?: string | null;
             /** Meta Data */
             meta_data?: {
                 [key: string]: unknown;
@@ -7417,6 +7537,30 @@ export type components = {
             version: number;
         };
         /**
+         * MaterialIOCheckRequest
+         * @description 工作流人工装入 / 取走 / 补量步骤的试运行：``param`` 是解析完引用的节点参数。
+         */
+        MaterialIOCheckRequest: {
+            /** Job Uuid */
+            job_uuid: string;
+            /** Param */
+            param: {
+                [key: string]: unknown;
+            };
+            /** Task Uuid */
+            task_uuid: string;
+        };
+        /**
+         * MaterialLinksEnsure
+         * @description 开机图拓扑边对齐：node-link link 对象原样提交（端点按 ``source_uuid`` / ``target_uuid``）。
+         */
+        MaterialLinksEnsure: {
+            /** Links */
+            links?: {
+                [key: string]: unknown;
+            }[];
+        };
+        /**
          * MaterialLinkUpsert
          * @description 拓扑边 upsert 请求：两端为已落权威的 material（含设备行）。
          */
@@ -7574,6 +7718,16 @@ export type components = {
             /** Source */
             source?: string | null;
         };
+        /**
+         * MaterialSanityRequest
+         * @description 派发前物料健全性检查要读的物料与本作业的库存预留。
+         */
+        MaterialSanityRequest: {
+            /** Material Uuids */
+            material_uuids?: string[];
+            /** Reservation Uuid */
+            reservation_uuid?: string | null;
+        };
         /** MaterialSnapshot */
         MaterialSnapshot: {
             /** Nodes */
@@ -7679,6 +7833,8 @@ export type components = {
             } | null;
             /** Description */
             description?: string | null;
+            /** Display Name */
+            display_name?: string | null;
             /** Expected Revision */
             expected_revision?: number | null;
             /** Meta Data */
@@ -7769,22 +7925,6 @@ export type components = {
             result: {
                 [key: string]: unknown;
             };
-        };
-        /** ProcessManagementErrorBody */
-        ProcessManagementErrorBody: {
-            error: components["schemas"]["ProcessManagementErrorDetail"];
-        };
-        /** ProcessManagementErrorDetail */
-        ProcessManagementErrorDetail: {
-            /** Code */
-            code: string;
-            /** Details */
-            details?: unknown;
-            /**
-             * Message
-             * @default
-             */
-            message: string;
         };
         /**
          * QuantityConsumptionCorrection
@@ -7992,6 +8132,45 @@ export type components = {
             quantity_unit: string;
             /** Source */
             source?: string | null;
+        };
+        /**
+         * RegistryPendingSelection
+         * @description 批量确认 / 忽略挂起条目：``names`` 为空时作用于全部挂起条目。
+         */
+        RegistryPendingSelection: {
+            /** Names */
+            names?: string[];
+        };
+        /**
+         * RegistrySlave
+         * @description Host 当前连着的一个 Slave：HostLink 节点名 + 它自报的机器标识（旧 Slave 没有）。
+         */
+        RegistrySlave: {
+            /**
+             * Machine Id
+             * @default
+             */
+            machine_id: string;
+            /** Machine Name */
+            machine_name: string;
+        };
+        /**
+         * RegistrySlaveAnnouncement
+         * @description Host 告知权威它连着的 Slave（``POST /api/v1/registry/slaves``）。
+         */
+        RegistrySlaveAnnouncement: {
+            /**
+             * Edge Uuid
+             * @default
+             */
+            edge_uuid: string;
+            /**
+             * Machine Id
+             * @default
+             */
+            machine_id: string;
+            /** Slaves */
+            slaves?: components["schemas"]["RegistrySlave"][];
         };
         /** RelativePositionRequest */
         RelativePositionRequest: {
@@ -8206,7 +8385,7 @@ export type components = {
         ResourceTreeNotifyResult: {
             /**
              * Notified
-             * @description True=设备已确认投影；False=通知失败；null=设备未注册被跳过
+             * @description True=设备已确认投影；False=通知失败或设备没能应用；null=设备未注册被跳过
              */
             notified: boolean | null;
         };
@@ -8655,7 +8834,7 @@ export type components = {
         };
         /**
          * WorkflowInventoryBindingRequest
-         * @description V1：把一个逻辑库存需求绑定到本次任务实际使用的库存实例（dev 预检接收并原样回显）。
+         * @description V1：把一个逻辑库存需求绑定到本次任务实际使用的库存实例（预检按绑定的来源检查并回显）。
          */
         unilabos__server__api__runtime__workflow__WorkflowInventoryBindingRequest__1: {
             /**
@@ -11522,7 +11701,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HealthStatus"];
+                    "application/json": components["schemas"]["Envelope_HealthStatus_"];
                 };
             };
         };
@@ -11721,7 +11900,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["Envelope_Any_"];
                 };
             };
             /** @description Validation Error */
@@ -12016,7 +12195,7 @@ export interface operations {
                 /** @description dev 扩展：不截断（Host 同步全量读取） */
                 all?: boolean;
                 limit?: number;
-                /** @description 按名称精确搜索 */
+                /** @description 按显示名 display_name 精确搜索 */
                 name?: string | null;
                 roots_only?: boolean;
                 status?: string | null;
@@ -12154,6 +12333,72 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Envelope_Any_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    check_material_io_api_v1_inventory_material_io_check_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MaterialIOCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Envelope_Any_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    material_sanity_api_v1_inventory_material_sanity_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MaterialSanityRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -12579,147 +12824,6 @@ export interface operations {
             };
         };
     };
-    get_layout_api_v1_lab_layout_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Envelope_Any_"];
-                };
-            };
-        };
-    };
-    post_placement_api_v1_lab_placements_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Envelope_Any_"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_placement_api_v1_lab_placements__subject_id__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                subject_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Envelope_Any_"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_profile_api_v1_lab_profile_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Envelope_Any_"];
-                };
-            };
-        };
-    };
-    put_profile_api_v1_lab_profile_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Envelope_Any_"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_warehouse_api_v1_lab_warehouse_get: {
         parameters: {
             query?: never;
@@ -12736,72 +12840,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Envelope_Any_"];
-                };
-            };
-        };
-    };
-    post_zone_api_v1_lab_zones_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Envelope_Any_"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_zone_api_v1_lab_zones__zone_id__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                zone_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Envelope_Any_"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -13777,6 +13815,39 @@ export interface operations {
             };
         };
     };
+    ensure_links_api_v1_materials_links_ensure_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MaterialLinksEnsure"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     notify_device_api_v1_materials_notify_device_post: {
         parameters: {
             query?: never;
@@ -14046,17 +14117,15 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ReadinessStatus"];
+                    "application/json": components["schemas"]["Envelope_ReadinessStatus_"];
                 };
             };
-            /** @description Service Unavailable */
+            /** @description 未就绪：信封 5001，error.code = not_ready，error.details 是同样的就绪摘要 */
             503: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": components["schemas"]["ReadinessStatus"];
-                };
+                content?: never;
             };
         };
     };
@@ -14880,6 +14949,72 @@ export interface operations {
             };
         };
     };
+    apply_registry_pending_api_v1_registry_pending_apply_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegistryPendingSelection"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Envelope_Any_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    dismiss_registry_pending_api_v1_registry_pending_dismiss_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegistryPendingSelection"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Envelope_Any_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_registry_reports_api_v1_registry_reports_get: {
         parameters: {
             query?: {
@@ -14913,6 +15048,110 @@ export interface operations {
         };
     };
     report_resource_templates_api_v1_registry_reports_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Envelope_Any_"];
+                };
+            };
+        };
+    };
+    list_registry_remote_slaves_api_v1_registry_slaves_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Envelope_Any_"];
+                };
+            };
+        };
+    };
+    announce_registry_slaves_api_v1_registry_slaves_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegistrySlaveAnnouncement"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Envelope_Any_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    forget_registry_remote_slave_api_v1_registry_slaves__machine_name__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                machine_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Envelope_Any_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_registry_status_api_v1_registry_status_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -20313,16 +20552,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["WorkspaceLogTail"];
-                };
-            };
-            /** @description 参数无效（error.code 如 invalid_request / component_invalid） */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProcessManagementErrorBody"];
+                    "application/json": components["schemas"]["Envelope_WorkspaceLogTail_"];
                 };
             };
             /** @description Validation Error */
@@ -20332,15 +20562,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-            /** @description component_unavailable：Host 不在线或日志暂不可读 */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProcessManagementErrorBody"];
                 };
             };
         };
@@ -20387,25 +20608,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["WorkspaceOperation"];
-                };
-            };
-            /** @description 参数无效（error.code 如 invalid_request / component_invalid） */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProcessManagementErrorBody"];
-                };
-            };
-            /** @description operation_conflict / revision_conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProcessManagementErrorBody"];
+                    "application/json": components["schemas"]["Envelope_WorkspaceOperation_"];
                 };
             };
         };
@@ -20427,25 +20630,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["WorkspaceOperation"];
-                };
-            };
-            /** @description 参数无效（error.code 如 invalid_request / component_invalid） */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProcessManagementErrorBody"];
-                };
-            };
-            /** @description operation_not_found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProcessManagementErrorBody"];
+                    "application/json": components["schemas"]["Envelope_WorkspaceOperation_"];
                 };
             };
             /** @description Validation Error */
@@ -20474,7 +20659,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["WorkspaceSnapshot"];
+                    "application/json": components["schemas"]["Envelope_WorkspaceSnapshot_"];
                 };
             };
         };
