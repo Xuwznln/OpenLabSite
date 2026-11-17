@@ -217,9 +217,23 @@ dev 时代的 `GET /workflow-tasks/{uuid}/interventions`、`GET /workflow-node-j
 
 画布提交流程：`POST /workflows`（或复用已绑定定义 `PUT /workflows/{uuid}`）→
 `PUT /workflows/{uuid}/graph {revision, nodes, edges: []}`（撞 3003 重读 revision 再试一次）→
-`POST /workflow-tasks {execution_kind: "workflow", workflow_uuid}`。本机调度器目前只接线
-`device_action`；其它 executor_kind 的节点图可以保存，但运行会以 `plan_not_executable` 失败，
-前端在提交运行前拦截。参数传递需要 Handle，无模板图只保留顺序连线。
+`POST /workflow-tasks {execution_kind: "workflow", workflow_uuid}`。本机调度器接线
+`device_action`、`loop`、`condition` 与 `material_io`；其它 executor_kind 的节点图可以保存，但运行会以
+`plan_not_executable` 失败，前端在提交运行前拦截。参数传递需要 Handle，无模板图只保留顺序连线。
+
+**源码写出的结构节点**（`@workflow`，`compiler="ast"`）：
+
+| 节点 / 位置 | 来源 | 前端 |
+| --- | --- | --- |
+| `type=loop` | `for i in range(n)`（`count` 可以是 `{kind: "workflow_input", parameter}`，`start` 是 range 起点）、原生 `while <条件>:`（`expression` + 跨轮携带的 `carry` / `carry_next`，进度在节点运行的 `control_data.loop.carry`）、`ctx.loop_for` / `ctx.loop_while` | 只读画布画成循环框，摘要区分固定次数 / 入口参数 / 设备状态 / 条件表达式 / 携带变量 |
+| `type=condition` | 源码 `if`（`{version, expression}`），分支节点在 `execution_policy.condition_guards` 引用它 | 只读画布与详情标「条件」 |
+| `type=material_io` | `ctx.material_io(mode=load\|unload\|refill, mount, site, …)`：调度器在权威侧锁定库位、开人工确认单（与 `manual_confirm` 同一套确认单，出现在异常审批页），确认后一条 `material.io` 库存命令改库存，不派发设备 | 只读画布 / 详情显示模式与库位；编排画布有「人工物料」特殊节点（参数表单，规则同核心 `normalize_material_io_param`），提交为 `type=material_io`，不带 `material_uuid` / `action_name` |
+| `type=group` | `ctx.group` / `ctx.parallel`（`meta_data.group_mode=parallel`），不执行、没有节点运行 | 只读画布不画，成员照常排 |
+| `meta_data.unilab.resource_scopes` | `with ctx.lock(...)`：`{scope_id, resources, node_uuids}` | 节点带「锁」标记 |
+
+条件分支、条件表达式 / 携带变量的 while、按入口参数定轮数的循环、参数里的步骤结果引用（`{kind: "node_output"}`）与
+`ctx.lock` 在编排画布里没有对应写法：这样的已保存工作流不能「复制到画布」（明确报错，避免存回去变了语义），
+这样的设备包模板标「源码写法 · 整体创建」，点击后改走 `POST /workflows/from-template` 由核心按源码实例化。
 
 **人工确认**：Host 把它实现成执行节点（`host_node`，多 Host 时可能有多个）上的动作
 `manual_confirm`（descriptor `node_type=manual_confirm`，always-free，goal

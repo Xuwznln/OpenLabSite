@@ -15,6 +15,7 @@ import {
   templateProcedure,
   templateSource,
   templateStats,
+  TemplateSourceOnlyError,
   type WorkflowTemplate,
 } from "./workflow-templates";
 
@@ -258,5 +259,86 @@ describe("suggestDeviceForRole", () => {
     expect(suggestDeviceForRole(role, devices)).toBe("vacuum_pump_1");
     expect(suggestDeviceForRole(role, ["heater", "Vacuum-A"])).toBe("Vacuum-A");
     expect(suggestDeviceForRole(role, ["heater"])).toBe("");
+  });
+});
+
+describe("设备包模板里的人工物料 / 分组 / 源码写法", () => {
+  const base = { registry_type: "workflow" as const, description: "", tags: [], roles: [
+    { role: "robot", label: "robot", kind: "device" as const, device_id: "robot", matches: ["robot"] },
+  ] };
+
+  it("material_io 展开成可编辑的人工物料节点；ctx.parallel 分组拍平，成员挂回分组的父级", () => {
+    const entry: RegistryWorkflowTemplate = {
+      ...base,
+      id: "pkg.flows:swap",
+      uuid: "11111111-2222-5333-8444-555555555555",
+      display_name: "换盒",
+      nodes: [
+        { key: "step-0", kind: "material_io", name: "人工装入", param: { mode: "load", mount: "deck", site: "A1", resource_template: "tip_box", assignee_user_ids: [] } },
+        { key: "step-1", kind: "group", name: "并行", param: {} },
+        { key: "step-2", kind: "action", role: "robot", action_name: "pick", name: "取", param: {}, parent: "step-1" },
+        { key: "step-3", kind: "action", role: "robot", action_name: "home", name: "回零", param: {}, parent: "step-1" },
+      ],
+      edges: [
+        { source: "step-0", target: "step-2" },
+        { source: "step-0", target: "step-3" },
+      ],
+    };
+    const tpl = templateFromRegistry(entry);
+    expect(tpl.sourceOnly).toBeUndefined();
+    expect(tpl.registryUuid).toBe(entry.uuid);
+    const registry = buildTemplateRegistry([], [tpl]);
+    const graph = expandTemplate(tpl.id, registry);
+    expect(graph.nodes.map((n) => [n.key, n.type, n.parent ?? null])).toEqual([
+      ["step-0", "material_io", null],
+      ["step-2", "action", null],
+      ["step-3", "action", null],
+    ]);
+    expect(graph.nodes[0]).toMatchObject({ name: "人工装入", param: { mode: "load", site: "A1" } });
+    expect(graph.edges.map((e) => `${e.source}->${e.target}`)).toEqual(["step-0->step-2", "step-0->step-3"]);
+    expect(templateProcedure(tpl).map((step) => [step.kind, step.title])).toEqual([
+      ["material_io", "人工装入"],
+      ["action", "取"],
+      ["action", "回零"],
+    ]);
+  });
+
+  it("条件分支 / 表达式 while / 步骤结果引用 / ctx.lock 的模板不展开进画布，改从模板创建", () => {
+    const entry: RegistryWorkflowTemplate = {
+      ...base,
+      id: "pkg.flows:measure",
+      uuid: "11111111-2222-5333-8444-666666666666",
+      display_name: "复测直到达标",
+      nodes: [
+        { key: "step-0", kind: "action", role: "robot", action_name: "probe", name: "测", param: {} },
+        { key: "step-1", kind: "loop", name: "循环", param: { mode: "while", expression: { not: { field: { node_key: "step-0" }, name: "ok" } }, carry: {} } },
+        { key: "step-2", kind: "condition", name: "条件", param: { version: 1, expression: { lit: true } } },
+        { key: "step-3", kind: "action", role: "robot", action_name: "mark", name: "标记", param: { box: { kind: "node_output", node_key: "step-0", data_key: "box" } }, condition_guards: [{ node_key: "step-2", equals: true }] },
+      ],
+      edges: [{ source: "step-0", target: "step-1" }],
+      resource_scopes: [{ scope_id: "独占", kind: "with", resources: ["robot"], node_keys: ["step-0"] }],
+    };
+    const tpl = templateFromRegistry(entry);
+    expect(tpl.sourceOnly).toEqual(["条件表达式 while 循环", "跨轮携带变量的循环", "条件分支（if）", "引用上游步骤结果的参数", "资源锁 ctx.lock"]);
+    const error = (() => {
+      try {
+        expandTemplate(tpl.id, buildTemplateRegistry([], [tpl]));
+      } catch (e) {
+        return e;
+      }
+      return null;
+    })();
+    expect(error).toBeInstanceOf(TemplateSourceOnlyError);
+    expect((error as TemplateSourceOnlyError).templateId).toBe(tpl.id);
+    expect(templateProcedure(tpl).map((step) => step.kind)).toEqual(["action", "loop", "condition", "action"]);
+  });
+
+  it("画布存为模板：人工物料节点带参数原样保存", () => {
+    const tpl = templateFromCanvas({ id: "user-1", name: "我的", description: "" }, [
+      { id: "n1", type: "material_io", data: { label: "补量", param: { mode: "refill", mount: "deck", site: "B1", material: "bottle", reagent: { quantity: 5, quantity_unit: "mL" }, assignee_user_ids: [] } } },
+    ], []);
+    expect(tpl.nodes).toEqual([
+      { key: "n1", kind: "material_io", name: "补量", param: { mode: "refill", mount: "deck", site: "B1", material: "bottle", reagent: { quantity: 5, quantity_unit: "mL" }, assignee_user_ids: [] }, parent: undefined },
+    ]);
   });
 });

@@ -61,6 +61,7 @@ import {
   snapshotWorkflowName,
 } from "../features/task-jobs";
 import { describeLoopProgress } from "../features/workflow-loops";
+import { describeStructuralNode, resourceScopeLabels, structuralKind } from "../features/workflow-node-kinds";
 import type { BackendLoopProgress } from "@openlab/protocol";
 import { beginWorkflowPrint } from "../features/workflow-print";
 import EntryParamFields from "../components/EntryParamFields.vue";
@@ -376,6 +377,13 @@ function focusNode(nodeUuid: string) {
 
 // ── attempt 时间线：同 node 的 job 行按 attempt 分组（§6.3） ──
 
+/** `with ctx.lock(...)`：任务快照里的资源锁作用域（节点 uuid → 作用域文案）。 */
+const lockLabels = computed(() => {
+  const snapshot = task.value?.workflow_snapshot as Record<string, unknown> | undefined;
+  const workflow = snapshot?.workflow as Record<string, unknown> | undefined;
+  return resourceScopeLabels(workflow?.meta_data);
+});
+
 const nodeGroups = computed(() => {
   const groups = new Map<string, BackendWorkflowNodeJob[]>();
   for (const job of jobs.value) {
@@ -401,7 +409,11 @@ const nodeGroups = computed(() => {
               run.status,
             )
           : "";
-      return { nodeUuid, jobs: sorted, run, loopProgress, ...info };
+      const snapshot = snapshotNodes(task.value).find((node) => node.uuid === nodeUuid);
+      // 结构节点（人工物料 / 条件 / 循环）的摘要与所在的 ctx.lock 作用域
+      const structural = snapshot && structuralKind(snapshot.type) ? describeStructuralNode(snapshot) : "";
+      const locks = lockLabels.value.get(nodeUuid) ?? [];
+      return { nodeUuid, jobs: sorted, run, loopProgress, structural, locks, ...info };
     })
     .sort((a, b) => orderOf(a.nodeUuid) - orderOf(b.nodeUuid));
 });
@@ -799,6 +811,8 @@ watch(
           <div class="node-head">
             <span class="node-name">{{ group.nodeName }}</span>
             <span v-if="group.deviceId" class="node-meta mono">{{ group.deviceId }} · {{ group.actionName }}</span>
+            <span v-else-if="group.structural && group.run?.executor_kind !== 'loop'" class="node-meta">{{ group.structural }}</span>
+            <span v-if="group.locks.length" class="node-meta lock-chip" :title="`资源锁 ${group.locks.join('；')}`">锁 · {{ group.locks.join("；") }}</span>
             <span class="node-meta mono dim">node {{ shortId(group.nodeUuid) }}</span>
             <span v-if="group.run" class="node-meta mono dim">#{{ group.run.topological_index + 1 }}</span>
             <span v-if="group.run?.executor_kind === 'loop'" class="node-meta loop-chip">
@@ -1283,6 +1297,13 @@ watch(
   color: #1e40af;
   background: #dbeafe;
   font-family: var(--font-mono);
+}
+
+.lock-chip {
+  color: #92400e;
+  background: #fef3c7;
+  border-radius: 4px;
+  padding: 0 6px;
 }
 
 .loop-chip {

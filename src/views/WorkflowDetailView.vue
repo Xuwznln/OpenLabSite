@@ -40,13 +40,9 @@ import type { WorkflowExecutionMode } from "../features/workflow-execution";
 import { useConnectionStore } from "../stores/connection";
 import { useWorkflowValidationStore } from "../stores/workflow-validation";
 import { useDomainThemeStore } from "../stores/domain-theme";
+import { describeStructuralNode, nodeTypeLabel, resourceScopeLabels } from "../features/workflow-node-kinds";
 
-const NODE_TYPE_LABEL: Record<string, string> = {
-  device_action: "设备动作",
-  workflow: "子流程",
-  manual_confirm: "人工确认",
-  control: "控制",
-};
+/** 节点类型名（含源码写出的循环 / 条件 / 人工物料 / 分组）。 */
 
 /** graph 节点的目标设备写在 meta_data.target_device_id（旧图可能在 param.device_id）。 */
 function nodeDevice(node: BackendWorkflowNode): string {
@@ -89,6 +85,8 @@ const registryActing = ref("");
 
 /** 该定义声明的入口参数与输出（服务端保留的 meta_data.unilab）。 */
 const declaredIo = computed(() => declaredWorkflowIo(graph.value?.workflow));
+/** `with ctx.lock(...)`：节点 uuid → 所在资源锁作用域。 */
+const lockLabels = computed(() => resourceScopeLabels(graph.value?.workflow.meta_data));
 const entryPrompt = createEntryParamsPrompt();
 
 // ── 发布：把当前修订冻结为不可变发布，供其他流程作为子工作流插入 ──
@@ -444,11 +442,12 @@ watch(
               <td class="mono dim">{{ index + 1 }}</td>
               <td>
                 <span class="node-name">{{ node.name }}</span>
+                <NTag v-if="lockLabels.has(node.uuid)" size="tiny" type="warning" :bordered="false" :title="`资源锁 ${lockLabels.get(node.uuid)!.join('；')}`">锁</NTag>
                 <EntityRef :uuid="node.uuid" mono class="node-uuid" />
               </td>
-              <td>{{ NODE_TYPE_LABEL[node.type] ?? node.type }}</td>
+              <td>{{ nodeTypeLabel(node.type) }}</td>
               <td class="mono">{{ nodeDevice(node) || templateNames.get(node.workflow_node_template_uuid ?? '') || '—' }}</td>
-              <td class="mono">{{ node.action_name ?? '—' }}</td>
+              <td class="mono">{{ node.action_name ?? (describeStructuralNode(node) || '—') }}</td>
               <td class="mono param-cell" :title="JSON.stringify(node.param)">{{ paramPreview(node.param) }}</td>
               <td>
                 <NTag

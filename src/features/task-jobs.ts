@@ -6,6 +6,8 @@
  * `meta_data.target_device_id`（旧图可能在 `param.device_id`）。
  */
 import type { BackendWorkflowNodeJob, BackendWorkflowTask } from "@openlab/protocol";
+import { MATERIAL_IO_MODE_LABELS, type MaterialIoMode } from "./material-io";
+import { nodeTypeLabel, structuralKind } from "./workflow-node-kinds";
 
 export interface SnapshotNode {
   uuid: string;
@@ -61,7 +63,10 @@ export function snapshotWorkflowName(task: BackendWorkflowTask | null | undefine
   return text(workflow?.name);
 }
 
-/** 解析一个节点作业属于哪台设备、哪个动作。缺失时回退为快照节点类型 / 短 uuid。 */
+/**
+ * 解析一个节点作业属于哪台设备、哪个动作。缺失时回退为快照节点类型 / 短 uuid。
+ * 结构节点（人工物料 / 条件 / 循环）不在任何设备上执行：设备为空，动作是类型名（人工物料带模式）。
+ */
 export function describeNodeJob(
   task: BackendWorkflowTask | null | undefined,
   job: BackendWorkflowNodeJob,
@@ -69,6 +74,12 @@ export function describeNodeJob(
   const node = snapshotNodes(task).find((item) => item.uuid === job.workflow_node_uuid);
   const meta = asRecord(node?.meta_data);
   const param = asRecord(node?.param) ?? asRecord(job.param);
+  const kind = structuralKind(node?.type);
+  if (kind) {
+    const mode = MATERIAL_IO_MODE_LABELS[param?.mode as MaterialIoMode];
+    const actionName = kind === "material_io" && mode ? `${nodeTypeLabel(kind)} · ${mode}` : nodeTypeLabel(kind);
+    return { deviceId: "", actionName, nodeName: text(node?.name) || actionName };
+  }
   const nodeType = text(node?.action_type) || text(node?.type);
   const deviceId =
     text(meta?.target_device_id) || text(param?.device_id) || text(param?.target_device_id) || job.edge_uuid || nodeType;

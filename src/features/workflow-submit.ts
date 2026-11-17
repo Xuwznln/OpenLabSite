@@ -27,6 +27,7 @@ import type {
 import { ApiError, BackendBusinessError, declaredWorkflowIo } from "@openlab/protocol";
 import { submitWithEntryInput, type EntryInputPrompter } from "./entry-params-prompt";
 import { LOOP_NODE_TYPE, loopSpecFromNodeData, type LoopNodeData } from "./workflow-loops";
+import { MATERIAL_IO_DEFAULT_NAMES, MATERIAL_IO_NODE_TYPE, materialIoParamError } from "./material-io";
 import {
   COMPOSITE_NODE_TYPE,
   collectNodeInputBindings,
@@ -82,14 +83,22 @@ export interface AuthorityGraphBuild {
   uuidByNodeId: Map<string, string>;
   warnings: string[];
   /**
-   * 本机调度器目前只接 `device_action`（其它 executor_kind 会在派发前以 plan_not_executable 失败）。
+   * 本机调度器接 `device_action`、循环、条件与人工物料（其它 executor_kind 会在派发前以 plan_not_executable 失败）。
    * 这里列出不能本地运行的节点，调用方决定：保存定义可以，直接运行要拦。
    */
   notLocallyExecutable: { id: string; name: string; type: string }[];
 }
 
-/** 本机调度器已接线的执行器种类（unilabos scheduler `_build_dag`）：设备动作与循环容器。 */
-export const LOCALLY_EXECUTABLE_KINDS: ReadonlySet<string> = new Set(["device_action", LOOP_NODE_TYPE]);
+/**
+ * 本机调度器已接线的执行器种类：设备动作、循环容器、条件（调度器本地求值）与人工物料（权威侧本地执行，
+ * 停下等人工确认，不派发设备）。
+ */
+export const LOCALLY_EXECUTABLE_KINDS: ReadonlySet<string> = new Set([
+  "device_action",
+  LOOP_NODE_TYPE,
+  "condition",
+  MATERIAL_IO_NODE_TYPE,
+]);
 
 /** Host 自己的执行节点；人工确认等"无设备"动作挂在它上面。 */
 export const HOST_NODE_ID = "host_node";
@@ -429,6 +438,32 @@ export async function buildAuthorityGraph(input: BuildAuthorityGraphInput): Prom
         type: "manual_confirm",
         pose,
         param: { label, prompt },
+        execution_policy: policy,
+        disabled,
+        ...(parentUuid ? { parent_uuid: parentUuid } : {}),
+        meta_data: { editor_node_id: node.id, ...(groupMeta ? { editor_group: groupMeta } : {}) },
+      });
+      continue;
+    }
+    if (node.type === MATERIAL_IO_NODE_TYPE) {
+      const raw = node.data.param;
+      const param = (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {}) as JsonObject;
+      const mode = String(param.mode ?? "");
+      const label =
+        String(node.data.label ?? "").trim() ||
+        MATERIAL_IO_DEFAULT_NAMES[mode as keyof typeof MATERIAL_IO_DEFAULT_NAMES] ||
+        "人工物料";
+      const error = materialIoParamError(param);
+      if (error) throw new SubmitGraphError(`人工物料「${label}」：${error}`);
+      const policy: JsonObject = {};
+      if (dependsOn.length) policy.depends_on = dependsOn;
+      // 调度器在权威侧本地执行、不派发设备：没有 material_uuid / action_name
+      nodes.push({
+        uuid,
+        name: label,
+        type: MATERIAL_IO_NODE_TYPE,
+        pose,
+        param: { ...param },
         execution_policy: policy,
         disabled,
         ...(parentUuid ? { parent_uuid: parentUuid } : {}),

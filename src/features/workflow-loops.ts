@@ -101,6 +101,35 @@ export function describeLoopNode(data: Partial<LoopNodeData>): string {
   return `当 ${subject} ${op === "exists" ? "存在" : op}${rhs} 时重复`;
 }
 
+/**
+ * 后端 LoopSpec 的一句话摘要（模板卡片 / 只读画布 / 详情）：固定次数、按入口参数定轮数、
+ * 设备状态 / 步骤输出条件、源码原生 while 的条件表达式与跨轮携带的变量。
+ */
+export function describeLoopSpec(param: Record<string, unknown> | undefined): string {
+  const mode = String(param?.mode ?? "");
+  const count = param?.count;
+  const carry = param?.carry && typeof param.carry === "object" ? Object.keys(param.carry as Record<string, unknown>) : [];
+  const carried = carry.length ? `（携带 ${carry.join("、")}）` : "";
+  if (mode === "for") {
+    const start = typeof param?.start === "number" && param.start !== 0 ? `，从 ${param.start} 起` : "";
+    if (count && typeof count === "object") {
+      const parameter = String((count as Record<string, unknown>).parameter ?? "");
+      return `重复 ×${parameter || "?"}（入口参数${start}）${carried}`;
+    }
+    return `重复 ×${Number(count ?? 0) || "?"}${start ? `（${start.slice(1)}）` : ""}${carried}`;
+  }
+  if (mode !== "while") return "循环";
+  if (param?.expression !== undefined && !param?.condition) return `条件表达式为真时重复${carried}`;
+  const condition = (param?.condition ?? {}) as Record<string, unknown>;
+  const op = String(condition.op ?? "==");
+  const rhs = op === "exists" ? "" : ` ${JSON.stringify(condition.value ?? null)}`;
+  const subject =
+    condition.source === "device_state"
+      ? `${String(condition.device_id ?? "")}.${String(condition.field ?? "")}`
+      : `步骤输出${condition.data_key ? `.${String(condition.data_key)}` : ""}`;
+  return `当 ${subject} ${op === "exists" ? "存在" : op}${rhs} 时重复${carried}`;
+}
+
 export interface LoopSpecBuild {
   spec: BackendLoopSpec;
   /** 配置不完整时的一句话原因（提交前拦下） */

@@ -41,6 +41,12 @@ const steps = computed(() => templateProcedure(props.template));
               <NTag size="tiny" :bordered="false" type="info">循环</NTag>
               <code class="step-action">{{ step.actionName }}</code>
             </template>
+            <template v-else-if="step.kind === 'material_io' || step.kind === 'condition'">
+              <NTag size="tiny" :bordered="false" :type="step.kind === 'material_io' ? 'success' : 'info'">
+                {{ step.kind === "material_io" ? "人工物料" : "条件" }}
+              </NTag>
+              <code class="step-action">{{ step.actionName }}</code>
+            </template>
             <code v-else class="step-action">{{ step.roleLabel }} / {{ step.actionName }}</code>
           </div>
           <div v-if="step.description" class="step-desc">{{ step.description }}</div>

@@ -2,7 +2,7 @@
 
 export const DRAG_MIME = "application/x-openlab-insert";
 
-export type SpecialKind = "manual" | "slot" | "branch" | "loop";
+export type SpecialKind = "manual" | "slot" | "branch" | "loop" | "material_io";
 
 export type DragPayload =
   | {

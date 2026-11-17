@@ -189,15 +189,24 @@ export interface RegistryWorkflowTemplateRole {
 
 export interface RegistryWorkflowTemplateNode {
   key: string;
-  /** `loop`：循环容器（`with ctx.loop_for / ctx.loop_while`），循环体节点以 `parent` 指向它 */
-  kind: "action" | "slot" | "template" | "loop";
+  /**
+   * `loop`：循环容器（`for` / 原生 `while` / `ctx.loop_for` / `ctx.loop_while`），循环体节点以 `parent` 指向它；
+   * `condition`：源码 `if` 的条件（分支步骤的 `condition_guards` 引用它）；`material_io`：人工装入 / 取走 / 补量；
+   * `group`：`ctx.group` / `ctx.parallel` 的展示分组（成员以 `parent` 指向它，不参与执行依赖）。
+   */
+  kind: "action" | "slot" | "template" | "loop" | "condition" | "material_io" | "group";
   role?: string;
   action_name?: string;
   name?: string;
   /** 这一步做什么 / 操作员该看到什么（`ctx.run(..., description=)`） */
   description?: string;
-  /** action：动作参数；loop：LoopSpec（node_output 条件用 `node_key` 引用模板里的步骤） */
+  /**
+   * action：动作参数；loop：LoopSpec（node_output 条件 / 表达式用 `node_key` 引用模板里的步骤）；
+   * condition：`{version, expression}`；material_io：人工物料参数。步骤结果引用写成 `{kind: "node_output", node_key, data_key}`。
+   */
   param?: JsonObject;
+  /** 分支步骤的条件守卫：`[{node_key, equals}]`（只执行命中的分支） */
+  condition_guards?: JsonObject[];
   inventory_requirements?: JsonObject[];
   /** 所在循环节点的 key；顶层步骤没有 */
   parent?: string;
@@ -230,6 +239,10 @@ export interface RegistryWorkflowTemplate {
   nodes: RegistryWorkflowTemplateNode[];
   edges: Array<{ source: string; target: string }>;
   guide?: RegistryWorkflowTemplateGuide;
+  /** `with ctx.lock(...)` 资源作用域：`{scope_id, kind, resources[角色], node_keys[]}` */
+  resource_scopes?: JsonObject[];
+  /** 入口参数与输出（`input_contract` / `output_contract` / `output_bindings`） */
+  io?: JsonObject;
 }
 
 export function createRegistryApi(http: HttpTransport) {
