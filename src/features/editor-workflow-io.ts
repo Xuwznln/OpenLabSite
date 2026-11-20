@@ -156,15 +156,6 @@ export function inferEntryKind(value: unknown, goalProperty?: unknown): EditorEn
   return "string";
 }
 
-export function emptyValueOf(schema: JsonObject): JsonValue {
-  const kind = entryFieldKind(schema);
-  if (kind === "number" || kind === "integer") return 0;
-  if (kind === "boolean") return false;
-  if (kind === "enum") return enumOptions(schema)[0] ?? "";
-  if (kind === "json") return asRecord(schema)?.type === "array" ? [] : {};
-  return "";
-}
-
 /** 把节点参数设为某个入口参数（写入顶层引用）。返回新的 paramJson。 */
 export function bindParamToEntry(paramJson: string, key: string, parameter: string): string {
   const param = parseParam(paramJson);
@@ -172,10 +163,11 @@ export function bindParamToEntry(paramJson: string, key: string, parameter: stri
   return JSON.stringify(param, null, 2);
 }
 
-/** 解除引用，写回一个静态值。 */
-export function unbindParamFromEntry(paramJson: string, key: string, value: JsonValue): string {
+/** 解除引用，写回一个静态值；没有值（入口参数没有默认值）时删掉这个键，参数留空待填。 */
+export function unbindParamFromEntry(paramJson: string, key: string, value: JsonValue | undefined): string {
   const param = parseParam(paramJson);
-  param[key] = cloneJson(value);
+  if (value === undefined) delete param[key];
+  else param[key] = cloneJson(value);
   return JSON.stringify(param, null, 2);
 }
 

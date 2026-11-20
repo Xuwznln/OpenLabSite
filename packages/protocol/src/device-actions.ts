@@ -187,43 +187,25 @@ export function actionGoalKeys(detail: Pick<DeviceActionSchemaDetail, "schema">)
 }
 
 /**
- * 动作默认参数：goal_default 优先，缺省按 goal schema 的类型给出空值模板。
- * 这是 ad-hoc 设备动作与画布节点新建时的初始 param。
+ * 动作的初始参数（ad-hoc 设备动作与画布节点新建时的 param）：只放后端声明过的默认值——
+ * goal schema 属性的 `default`，再叠加注册表的 `goal_default`（签名默认值 / `@action(goal_default=)`）。
+ * 没有默认值的参数不出现：不替调用方编 0 / "" / {}，必填的由调用方留空并在提交前按
+ * `schema.properties.goal.required` 校验。
  */
 export function actionParameterTemplate(
   detail: Pick<DeviceActionSchemaDetail, "schema" | "goal_default">,
 ): Record<string, unknown> {
-  const goalDefault = asObject(detail.goal_default);
-  if (goalDefault && Object.keys(goalDefault).length) return { ...goalDefault };
   const goal = asObject(asObject(detail.schema?.properties)?.goal);
   const properties = asObject(goal?.properties) ?? {};
   const template: Record<string, unknown> = {};
   for (const [key, raw] of Object.entries(properties)) {
     const prop = asObject(raw);
-    if (prop && "default" in prop) {
-      template[key] = prop.default;
-      continue;
-    }
-    template[key] = emptyValueForSchema(prop);
+    if (prop && "default" in prop) template[key] = cloneJson(prop.default);
   }
+  for (const [key, value] of Object.entries(asObject(detail.goal_default) ?? {})) template[key] = cloneJson(value);
   return template;
 }
 
-function emptyValueForSchema(prop: Record<string, unknown> | null): unknown {
-  const type = Array.isArray(prop?.type) ? prop?.type[0] : prop?.type;
-  switch (type) {
-    case "integer":
-    case "number":
-      return 0;
-    case "boolean":
-      return false;
-    case "array":
-      return [];
-    case "object":
-      return {};
-    case "null":
-      return null;
-    default:
-      return "";
-  }
+function cloneJson<T>(value: T): T {
+  return value === undefined ? value : (JSON.parse(JSON.stringify(value)) as T);
 }

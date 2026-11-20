@@ -64,6 +64,7 @@ const {
   visibleParamFields,
   collapsedParamCount,
   isFieldFocused,
+  fieldRequired,
   fieldMeta,
   updateField,
 } = props.form;
@@ -71,6 +72,15 @@ const {
 /** 字段主标签：驱动 docstring 给的中文名优先，没有就是参数名（路径末段）。 */
 function fieldTitle(path: string): string {
   return fieldMeta(path).title || path;
+}
+
+/** 空字段的提示：不填默认值进去，只说明它是必填还是可不填。 */
+function fieldPlaceholder(field: ParameterField): string {
+  return fieldRequired(field.path) ? "必填" : "可不填";
+}
+
+function numberValue(field: ParameterField): number | null {
+  return typeof field.value === "number" && Number.isFinite(field.value) ? field.value : null;
 }
 
 /** hover 提示：说明 + 参数路径 · 类型，说明缺失时只剩后者。 */
@@ -285,25 +295,31 @@ function renderDeductOption(option: SelectOption): VNodeChild {
               :title="fieldTooltip(field)"
             >
               {{ fieldTitle(field.path) }}
+              <b v-if="fieldRequired(field.path)" class="required" title="必填">*</b>
               <small v-if="fieldMeta(field.path).title">{{ field.path }}</small>
             </span>
             <slot name="field-actions" :field="field" />
             <NInputNumber
               v-if="field.type === 'number'"
-              :value="Number(field.value)"
+              :value="numberValue(field)"
+              :placeholder="fieldPlaceholder(field)"
+              clearable
               size="small"
               class="compact-number"
               @update:value="updateField(field, $event)"
             />
-            <NSwitch
-              v-else-if="field.type === 'boolean'"
-              :value="Boolean(field.value)"
-              size="small"
-              @update:value="updateField(field, $event)"
-            />
+            <template v-else-if="field.type === 'boolean'">
+              <span v-if="typeof field.value !== 'boolean'" class="field-unset">未填</span>
+              <NSwitch
+                :value="field.value === true"
+                size="small"
+                @update:value="updateField(field, $event)"
+              />
+            </template>
             <NInput
               v-else
               :value="String(field.value ?? '')"
+              :placeholder="fieldPlaceholder(field)"
               size="small"
               class="compact-input"
               @update:value="updateField(field, $event)"
@@ -322,6 +338,7 @@ function renderDeductOption(option: SelectOption): VNodeChild {
             <div class="field-id" :title="fieldTooltip(field)">
               <strong :class="{ mono: !fieldMeta(field.path).title }">
                 {{ fieldTitle(field.path) }}
+                <b v-if="fieldRequired(field.path)" class="required" title="必填">*</b>
               </strong>
               <span>
                 <template v-if="fieldMeta(field.path).title">{{ field.path }} · </template>{{ field.type }}
@@ -352,6 +369,7 @@ function renderDeductOption(option: SelectOption): VNodeChild {
           <NInput
             v-else
             :value="String(field.value ?? '')"
+            :placeholder="fieldPlaceholder(field)"
             size="small"
             @update:value="updateField(field, $event)"
           />
@@ -437,6 +455,18 @@ function renderDeductOption(option: SelectOption): VNodeChild {
   margin-left: 4px;
   color: #9aa1aa;
   font: 9.5px var(--font-mono);
+}
+
+.required {
+  margin-left: 2px;
+  color: #b91c1c;
+}
+
+/* 是 / 否参数还没选：开关本身表达不了「未填」，旁边标一下 */
+.field-unset {
+  flex-shrink: 0;
+  color: #b45309;
+  font-size: 10.5px;
 }
 
 /* 参数说明：驱动 docstring 的 Args 注解，单行省略、hover 看全文 */

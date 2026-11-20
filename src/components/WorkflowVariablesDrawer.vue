@@ -420,7 +420,7 @@ function exportTemplate(): void {
                 :checked="Boolean(variable.value)"
                 @change="replaceVariable(variable.id, { value: ($event.target as HTMLInputElement).checked })"
               />
-              {{ variable.value ? "开启" : "关闭" }}
+              {{ typeof variable.value === "boolean" ? (variable.value ? "开启" : "关闭") : "未填" }}
             </label>
             <input
               v-else

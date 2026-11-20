@@ -145,7 +145,7 @@ import {
   setDragPayload,
   type SpecialKind,
 } from "../features/canvas-dnd";
-import { actionSchemaDetailFromCapability, type BackendWorkflowType } from "@openlab/protocol";
+import { actionGoalKeys, actionSchemaDetailFromCapability, type BackendWorkflowType } from "@openlab/protocol";
 import { useActionParamForm } from "../features/action-param-form";
 import {
   actionParamSummary,
@@ -201,7 +201,6 @@ import {
   declarationOf,
   editorIoFromDeclared,
   emptyEditorIo,
-  emptyValueOf,
   entryUsage,
   inferEntryKind,
   mergeTemplateIo,
@@ -3697,7 +3696,8 @@ function evalBranch(data: Record<string, unknown>): boolean | null {
   const variableIdText = String(data.variableId ?? "");
   if (!variableIdText) return null;
   const lhs = variableValueOf(variableIdText);
-  if (lhs === undefined) return null;
+  // 变量不存在或还没填值（null）：不能求值，不拿空值去比较
+  if (lhs === undefined || lhs === null) return null;
   const op = String(data.op ?? "==");
   const rhsRaw = String(data.value ?? "");
   const numeric =
@@ -3759,7 +3759,7 @@ function buildSubmitGraph():
     const verdict = evalBranch(branch.data);
     if (verdict === null) {
       return {
-        error: `条件分支 ${branch.id} 未配置条件或引用的变量不存在，先点击该节点完成配置`,
+        error: `条件分支 ${branch.id} 未配置条件，或引用的变量不存在 / 还没填值，先点击该节点完成配置`,
       };
     }
     const chosenHandle = verdict ? "out-true" : "out-false";
@@ -4481,7 +4481,8 @@ const panelEntryKeyOptions = computed(() => {
   const param = panelParamObject();
   if (!param) return [];
   const bound = new Set(panelEntryRefs.value.map(([key]) => key));
-  return Object.keys(param)
+  // 参数里还没有值的 schema 参数（必填未填）也可以直接改为入口参数
+  return [...new Set([...Object.keys(param), ...actionGoalKeys({ schema: paramForm.schemaDetail.value?.schema ?? null })])]
     .filter((key) => !bound.has(key))
     .map((key) => {
       const title = paramForm.fieldMeta(key).title;
@@ -4536,13 +4537,11 @@ async function bindPanelParamToEntry() {
   message.success(`参数 ${key} 已改为引用入口参数「${name}」：每次运行时填写（可在「入口参数」里改类型 / 默认值）`);
 }
 
+/** 解除入口参数引用：入口参数有默认值就写回它，否则参数留空待填（不编 0 / 空串 / {}）。 */
 function unbindPanelParam(key: string, name: string) {
   const parameter = workflowIo.value?.inputs.find((item) => item.name === name);
-  const value: JsonValue = parameter
-    ? Object.prototype.hasOwnProperty.call(parameter, "default")
-      ? (parameter.default ?? null)
-      : emptyValueOf(parameter.schema)
-    : "";
+  const value: JsonValue | undefined =
+    parameter && Object.prototype.hasOwnProperty.call(parameter, "default") ? (parameter.default ?? null) : undefined;
   try {
     editParam.value = unbindParamFromEntry(editParam.value, key, value);
   } catch {
@@ -4551,7 +4550,11 @@ function unbindPanelParam(key: string, name: string) {
   }
   applyPanelParamToNode();
   commitHistory();
-  message.info(`参数 ${key} 已改回固定值 ${JSON.stringify(value)}`);
+  message.info(
+    value === undefined
+      ? `参数 ${key} 已解除引用，入口参数没有默认值：请在参数里填写`
+      : `参数 ${key} 已改回固定值 ${JSON.stringify(value)}（入口参数的默认值）`,
+  );
 }
 
 // ── 插入已发布的工作流（组合调用） ──

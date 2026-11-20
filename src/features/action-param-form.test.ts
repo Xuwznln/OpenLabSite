@@ -165,3 +165,67 @@ describe("manual_confirm 指派列表语义", () => {
     expect(form.placeholderHasExplicitValue(CONFIRM_FIELD)).toBe(true);
   });
 });
+
+describe("动作参数表单不替没给值的参数编值", () => {
+  /** volume_ml / label / dry 必填且没有默认值；speed 有默认值；solvent 是对象（只能在高级 JSON 里填）。 */
+  const capability = {
+    device_uuid: "reactor",
+    action_name: "aliquot",
+    state: "active",
+    availability: "free",
+    descriptor: {
+      goal_default: { speed: 300 },
+      schema: {
+        properties: {
+          goal: {
+            type: "object",
+            properties: {
+              volume_ml: { type: "number" },
+              label: { anyOf: [{ type: "string" }, { type: "null" }] },
+              dry: { type: "boolean" },
+              solvent: { type: "object" },
+              speed: { type: "integer", default: 300 },
+            },
+            required: ["volume_ml", "label", "dry", "solvent"],
+          },
+        },
+      },
+    },
+  };
+
+  function setupSchema(paramText: string, isFocused?: (path: string) => boolean) {
+    const paramJson = ref(paramText);
+    const form = useActionParamForm({
+      api: () => ({ domains: { runtimeV1: { endpoints: async () => [{ action_capabilities: [capability] }] } } }) as unknown as EdgeApi,
+      device: ref("reactor"),
+      action: ref("aliquot"),
+      paramJson,
+      active: () => true,
+      isFocused,
+    });
+    return { form, paramJson };
+  }
+
+  it("schema 里有、参数里还没有的参数列成空字段（类型取 schema），参数本身不写值", async () => {
+    const { form, paramJson } = setupSchema('{"speed": 300}');
+    await form.reload();
+    expect(form.paramFields.value.map((field) => [field.path, field.type, field.value])).toEqual([
+      ["volume_ml", "number", null],
+      ["label", "string", null],
+      ["dry", "boolean", null],
+      ["speed", "number", 300],
+    ]);
+    expect(JSON.parse(paramJson.value)).toEqual({ speed: 300 });
+    expect([form.fieldRequired("volume_ml"), form.fieldRequired("speed")]).toEqual([true, false]);
+  });
+
+  it("清空字段 = 删掉这个键；折叠时必填的空字段照样显示", async () => {
+    const { form, paramJson } = setupSchema('{"volume_ml": 2, "label": "S-1", "speed": 300}', () => false);
+    await form.reload();
+    form.updateField(form.paramFields.value.find((field) => field.path === "volume_ml")!, null);
+    form.updateField(form.paramFields.value.find((field) => field.path === "label")!, "");
+    expect(JSON.parse(paramJson.value)).toEqual({ speed: 300 });
+    expect(form.visibleParamFields.value.map((field) => field.path)).toEqual(["volume_ml", "label", "dry"]);
+    expect(form.collapsedParamCount.value).toBe(1);
+  });
+});

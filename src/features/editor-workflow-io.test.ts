@@ -31,6 +31,8 @@ describe("画布入口参数的引用", () => {
     const bound = bindParamToEntry('{"volume": 1, "speed": 2}', "volume", "volume");
     expect(JSON.parse(bound)).toEqual({ volume: { kind: "workflow_input", parameter: "volume" }, speed: 2 });
     expect(JSON.parse(unbindParamFromEntry(bound, "volume", 5))).toEqual({ volume: 5, speed: 2 });
+    // 入口参数没有默认值：解除引用后参数留空待填，不编 0 / 空串 / {}
+    expect(JSON.parse(unbindParamFromEntry(bound, "volume", undefined))).toEqual({ speed: 2 });
     expect(() => bindParamToEntry("[1]", "x", "y")).toThrow();
   });
 

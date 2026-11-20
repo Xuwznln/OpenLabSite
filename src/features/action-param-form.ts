@@ -8,7 +8,9 @@
  * - 人工确认指派（unilabos_manual_confirm）：后端没有用户目录，渲染为 tags
  *   自由输入（可从本机最近使用的指派人补全）；
  * - 置顶聚焦：可选 isFocused 回调（编辑器接变量表）；不传则默认全量展示；
- * - 参数写回统一走 paramJson（提交 payload 形状不变）。
+ * - 参数写回统一走 paramJson（提交 payload 形状不变）；
+ * - 不编值：goal schema 里有、参数里还没有的标量 / 列表参数照样列成空字段（类型取 schema），
+ *   清空字段就删掉这个键；必填的空字段折叠时也显示，提交前由 missingParamEntries 拦下。
  */
 import { entryReferencesOf } from "./workflow-io";
 import { computed, ref, watch, type Ref } from "vue";
@@ -27,10 +29,12 @@ import {
   type PlaceholderKind,
 } from "./action-placeholders";
 import {
+  deletePath,
   flattenParameterFields,
   parseNodeParam,
   writePath,
   type ParameterField,
+  type WorkflowVariableType,
 } from "./workflow-variables";
 import { describeError } from "./errors";
 import { materialLabel } from "./material-label";
@@ -120,6 +124,82 @@ export function goalPropertySchema(
     node = next;
   }
   return node;
+}
+
+/** 可空写法（`anyOf: [X, {type: "null"}]` / `type: [X, "null"]`）取非空的那一支。 */
+function nonNullSchema(prop: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (!prop) return null;
+  if (Array.isArray(prop.anyOf)) {
+    const members = prop.anyOf.map(asRecord).filter((member) => member && member.type !== "null");
+    if (members.length === 1) return members[0];
+  }
+  if (Array.isArray(prop.type)) {
+    const types = prop.type.filter((item) => item !== "null");
+    if (types.length === 1) return { ...prop, type: types[0] };
+  }
+  return prop;
+}
+
+/** goal schema 属性 → 平铺字段类型；对象 / 物料引用 / 不认识的形状返回 null（只能在选择器或高级 JSON 里编辑）。 */
+export function parameterFieldType(prop: Record<string, unknown> | null): WorkflowVariableType | null {
+  const schema = nonNullSchema(prop);
+  switch (schema?.type) {
+    case "number":
+    case "integer":
+      return "number";
+    case "boolean":
+      return "boolean";
+    case "string":
+      return "string";
+    case "array": {
+      const itemType = nonNullSchema(asRecord(schema.items))?.type;
+      return itemType === "number" || itemType === "integer" ? "list:number" : "list:string";
+    }
+    default:
+      return null;
+  }
+}
+
+/** schema goal.required 的顶层参数名；schema 不可用时为空集。 */
+export function requiredGoalKeys(detail: DeviceActionSchemaDetail | null): Set<string> {
+  const required = asRecord(asRecord(asRecord(detail?.schema)?.properties)?.goal)?.required;
+  return new Set(Array.isArray(required) ? required.map(String) : []);
+}
+
+/** 空值口径与 missingParamEntries 一致：null / undefined / "" / 空数组。 */
+export function isEmptyParamValue(value: unknown): boolean {
+  return value === null || value === undefined || value === "" || (Array.isArray(value) && value.length === 0);
+}
+
+/**
+ * 表单平铺字段：参数里已有的叶子（值为空时类型按 schema），加上 goal schema 里有、参数里还没有的
+ * 标量 / 列表参数（值为 null = 未填）；按 goal schema 的属性顺序排列，schema 外的键排在后面。
+ * `handled`：已由选择器接管或引用入口参数的顶层参数，不平铺。
+ */
+export function parameterFormFields(
+  detail: DeviceActionSchemaDetail | null,
+  param: Record<string, unknown>,
+  handled: ReadonlySet<string> = new Set(),
+): ParameterField[] {
+  const properties = asRecord(asRecord(asRecord(asRecord(detail?.schema)?.properties)?.goal)?.properties) ?? {};
+  const order = Object.keys(properties);
+  const present = flattenParameterFields(param)
+    .filter((field) => !handled.has(field.path.split(".")[0]))
+    .map((field) =>
+      field.value === null || field.value === undefined
+        ? { ...field, type: parameterFieldType(goalPropertySchema(detail, field.path)) ?? field.type }
+        : field,
+    );
+  const absent = order.flatMap((key): ParameterField[] => {
+    if (handled.has(key) || Object.prototype.hasOwnProperty.call(param, key)) return [];
+    const type = parameterFieldType(asRecord(properties[key]));
+    return type ? [{ path: key, type, value: null }] : [];
+  });
+  const rank = (field: ParameterField) => {
+    const index = order.indexOf(field.path.split(".")[0]);
+    return index < 0 ? order.length : index;
+  };
+  return [...present, ...absent].sort((a, b) => rank(a) - rank(b));
 }
 
 export function parameterFieldMeta(
@@ -678,9 +758,7 @@ export function useActionParamForm(options: ActionParamFormOptions) {
       ...entryBoundParams.value,
     ]);
     try {
-      return flattenParameterFields(parseNodeParam(options.paramJson.value)).filter(
-        (field) => !handled.has(field.path.split(".")[0]),
-      );
+      return parameterFormFields(schemaDetail.value, parseNodeParam(options.paramJson.value), handled);
     } catch {
       return [];
     }
@@ -690,22 +768,37 @@ export function useActionParamForm(options: ActionParamFormOptions) {
     return options.isFocused?.(path) ?? false;
   }
 
-  // 有置顶回调（编辑器）时默认只暴露置顶字段；无回调（设备页）默认全量。
+  const requiredKeys = computed(() => requiredGoalKeys(schemaDetail.value));
+  /** 字段所在的顶层参数是否必填（schema goal.required）。 */
+  function fieldRequired(path: string): boolean {
+    return requiredKeys.value.has(path.split(".")[0]);
+  }
+
+  // 有置顶回调（编辑器）时默认只暴露置顶字段（必填但还空着的也露出来）；无回调（设备页）默认全量。
   const hasFocusConcept = Boolean(options.isFocused);
   const showAllParams = ref(!hasFocusConcept);
   const visibleParamFields = computed<ParameterField[]>(() =>
     showAllParams.value
       ? paramFields.value
-      : paramFields.value.filter((field) => isFieldFocused(field.path)),
+      : paramFields.value.filter(
+          (field) => isFieldFocused(field.path) || (fieldRequired(field.path) && isEmptyParamValue(field.value)),
+        ),
   );
   const collapsedParamCount = computed(
     () => paramFields.value.length - visibleParamFields.value.length,
   );
 
+  /**
+   * 写回一个字段；schema 里声明的顶层参数清空（数字清掉、文本删空）= 删掉这个键，不写空值——字段照样
+   * 按 schema 显示为空。嵌套叶子与 schema 外的键（高级 JSON 里加的）原样写，免得清空时字段从表单里消失。
+   */
   function updateField(field: ParameterField, value: unknown): void {
     try {
       const param = parseNodeParam(options.paramJson.value);
-      writePath(param, field.path, value);
+      const cleared = value === null || value === undefined || (field.type === "string" && value === "");
+      const declaredTopLevel = !field.path.includes(".") && Boolean(goalPropertySchema(schemaDetail.value, field.path));
+      if (cleared && declaredTopLevel) deletePath(param, field.path);
+      else writePath(param, field.path, value ?? null);
       options.paramJson.value = JSON.stringify(param, null, 2);
       options.onParamWritten?.(field.path, value);
     } catch {
@@ -742,6 +835,7 @@ export function useActionParamForm(options: ActionParamFormOptions) {
     visibleParamFields,
     collapsedParamCount,
     isFieldFocused,
+    fieldRequired,
     updateField,
     reload,
   };
