@@ -120,6 +120,8 @@ export function normalizeEditorIo(raw: unknown): EditorWorkflowIo | null {
 export function editorKindOf(schema: JsonObject | null | undefined): EditorEntryKind | "json" {
   const kind: EntryFieldKind = entryFieldKind(schema);
   if (kind === "enum") return enumOptions(schema).every((item) => typeof item === "string") ? "enum" : "json";
+  // 物料（ResourceSlot）只保留权威读到的原样，编辑器不新建
+  if (kind === "resource" || kind === "resources") return "json";
   return kind;
 }
 

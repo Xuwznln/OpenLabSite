@@ -19,7 +19,12 @@ import {
   type JsonValue,
 } from "@openlab/protocol";
 
-export type EntryFieldKind = "number" | "integer" | "string" | "boolean" | "enum" | "json";
+/**
+ * `resource` / `resources`：物料入口参数（值 Schema `{"$slot": "ResourceSlot"}` / 它的数组），表单用与
+ * 节点参数同源的物料选择器，值写成 `{id: resource_id, uuid}`。核心的值 Schema 子集只认
+ * `$slot: ResourceSlot`；Site / 设备在入口参数里就是普通字符串。
+ */
+export type EntryFieldKind = "number" | "integer" | "string" | "boolean" | "enum" | "resource" | "resources" | "json";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -27,10 +32,50 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-/** 合同里的值 Schema → 表单控件种类；enum 优先，其余不认识的形状走 JSON 文本。 */
+function isResourceSlot(schema: unknown): boolean {
+  return asRecord(schema)?.$slot === "ResourceSlot";
+}
+
+/** 物料入口参数的 Schema（可为 `anyOf: [物料, null]`）：单个 → resource，数组 → resources。 */
+function resourceSlotKind(record: Record<string, unknown>): "resource" | "resources" | null {
+  if (isResourceSlot(record)) return "resource";
+  if (record.type === "array" && isResourceSlot(record.items)) return "resources";
+  if (Array.isArray(record.anyOf)) {
+    const members = record.anyOf.filter((member) => asRecord(member)?.type !== "null");
+    const member = asRecord(members[0]);
+    if (members.length === 1 && member) return resourceSlotKind(member);
+  }
+  return null;
+}
+
+/** 物料入口参数的 `allowed_resource_template_uuids`（只供前端筛选；空 = 不限）。 */
+export function allowedResourceTemplates(schema: unknown): string[] {
+  const record = asRecord(schema);
+  if (!record) return [];
+  if (isResourceSlot(record)) {
+    const allowed = record.allowed_resource_template_uuids;
+    return Array.isArray(allowed) ? allowed.filter((item): item is string => typeof item === "string" && item !== "") : [];
+  }
+  if (record.type === "array") return allowedResourceTemplates(record.items);
+  for (const member of Array.isArray(record.anyOf) ? record.anyOf : []) {
+    const found = allowedResourceTemplates(member);
+    if (found.length) return found;
+  }
+  return [];
+}
+
+/** 物料引用的 uuid（`{id, uuid}`）；不是对象或 uuid 为空时返回空串。 */
+function refUuid(value: unknown): string {
+  const uuid = asRecord(value)?.uuid;
+  return typeof uuid === "string" ? uuid.trim() : "";
+}
+
+/** 合同里的值 Schema → 表单控件种类；enum 优先，物料走选择器，其余不认识的形状走 JSON 文本。 */
 export function entryFieldKind(schema: BackendWorkflowValueSchema | null | undefined): EntryFieldKind {
   const record = asRecord(schema) ?? {};
   if (Array.isArray(record.enum) && record.enum.length) return "enum";
+  const slot = resourceSlotKind(record);
+  if (slot) return slot;
   switch (record.type) {
     case "number":
       return "number";
@@ -51,8 +96,15 @@ const KIND_LABEL: Record<EntryFieldKind, string> = {
   string: "文本",
   boolean: "是/否",
   enum: "选项",
+  resource: "物料",
+  resources: "物料（多个）",
   json: "JSON",
 };
+
+/** 物料入口参数（选择器）。 */
+export function isResourceEntryKind(kind: EntryFieldKind): kind is "resource" | "resources" {
+  return kind === "resource" || kind === "resources";
+}
 
 export function schemaTypeLabel(schema: BackendWorkflowValueSchema | null | undefined): string {
   return KIND_LABEL[entryFieldKind(schema)];
@@ -105,7 +157,7 @@ export function taskDeclaredIo(task: BackendWorkflowTask | null | undefined) {
 
 /**
  * 表单值：数字 / 文本 / 选项存原值，`null` = 未填；是/否存 true / false / null；
- * JSON 存文本（提交时解析）。
+ * 物料存引用对象 `{id, uuid}`（多个存数组）；JSON 存文本（提交时解析）。
  */
 export type EntryFormValues = Record<string, unknown>;
 
@@ -116,6 +168,20 @@ function hasDefault(parameter: BackendWorkflowInputParameter): boolean {
 function formValueOf(parameter: BackendWorkflowInputParameter, value: unknown): unknown {
   if (value === undefined || value === null) return null;
   return entryFieldKind(parameter.schema) === "json" ? JSON.stringify(value, null, 2) : value;
+}
+
+/** 物料值：选择器给的引用对象，或（物料目录读不到时）手填的 JSON 文本；必须带 uuid。 */
+function parseResourceRef(raw: unknown): { value: JsonObject } | { error: string } {
+  let value = raw;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return { error: "不是合法 JSON" };
+    }
+  }
+  const record = asRecord(value);
+  return record && refUuid(record) ? { value: record as JsonObject } : { error: "请选择物料" };
 }
 
 /** 初始表单：已有值（任务当前 input）优先，其次合同默认值，否则留空。 */
@@ -132,7 +198,12 @@ export function initialEntryValues(
 }
 
 function isBlank(value: unknown): boolean {
-  return value === null || value === undefined || (typeof value === "string" && value.trim() === "");
+  return (
+    value === null ||
+    value === undefined ||
+    (typeof value === "string" && value.trim() === "") ||
+    (Array.isArray(value) && value.length === 0)
+  );
 }
 
 function sameJson(left: unknown, right: unknown): boolean {
@@ -162,6 +233,26 @@ export function parseEntryValue(
       const options = enumOptions(parameter.schema);
       const hit = options.find((option) => sameJson(option, raw));
       return hit === undefined ? { error: `请选择：${options.map(entryValueText).join(" / ")}` } : { value: hit };
+    }
+    case "resource":
+      return parseResourceRef(raw);
+    case "resources": {
+      let items = raw;
+      if (typeof items === "string") {
+        try {
+          items = JSON.parse(items);
+        } catch {
+          return { error: "不是合法 JSON" };
+        }
+      }
+      if (!Array.isArray(items)) return { error: "请选择物料" };
+      const refs: JsonObject[] = [];
+      for (const item of items) {
+        const parsed = parseResourceRef(item);
+        if ("error" in parsed) return parsed;
+        refs.push(parsed.value);
+      }
+      return { value: refs };
     }
     default: {
       let parsed: unknown;

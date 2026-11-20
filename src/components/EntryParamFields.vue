@@ -1,14 +1,22 @@
 <script setup lang="ts">
 /**
- * 按入口参数合同生成的表单：数字 / 整数 / 文本 / 是否 / 选项，不认识的 Schema 走 JSON 文本。
+ * 按入口参数合同生成的表单：数字 / 整数 / 文本 / 是否 / 选项 / 物料，不认识的 Schema 走 JSON 文本。
+ * 物料（`$slot: ResourceSlot`）用与节点参数浮层同源的物料选择器（features/material-options.ts），
+ * 值写成 `{id: resource_id, uuid}`；物料目录读不到时退回 JSON 文本。
  * 表单值语义见 features/workflow-io.ts（null = 未填；JSON 存文本）。
  */
+import { computed, ref, shallowRef, watch } from "vue";
 import { NInput, NInputNumber, NSelect } from "naive-ui";
-import type { BackendWorkflowInputParameter } from "@openlab/protocol";
+import type { BackendWorkflowInputParameter, MaterialsV1Aggregate } from "@openlab/protocol";
+import { useConnectionStore } from "../stores/connection";
+import { resourceRefLabel, resourceRefUuid, resourceRefValue } from "../features/action-placeholders";
+import { materialOptionsFrom, type MaterialOption } from "../features/material-options";
 import {
+  allowedResourceTemplates,
   entryFieldKind,
   entryValueText,
   enumOptions,
+  isResourceEntryKind,
   schemaTypeLabel,
   type EntryFormValues,
 } from "../features/workflow-io";
@@ -64,6 +72,72 @@ function enumValue(name: string): string | null {
 
 function setEnum(name: string, encoded: string | null) {
   set(name, encoded === null ? null : JSON.parse(encoded));
+}
+
+// ── 物料入口参数：与节点参数浮层同源的物料选择器 ──
+
+const conn = useConnectionStore();
+const materials = shallowRef<readonly MaterialsV1Aggregate[]>([]);
+const materialsLoading = ref(false);
+const materialsError = ref("");
+const needsMaterials = computed(() => props.parameters.some((parameter) => isResourceEntryKind(entryFieldKind(parameter.schema))));
+
+async function loadMaterials() {
+  materialsLoading.value = true;
+  try {
+    materials.value = await conn.api.domains.inventory.instances();
+    materialsError.value = "";
+  } catch {
+    materials.value = [];
+    materialsError.value = "物料列表拉取失败，请按 JSON 填写，如 {\"uuid\": \"…\"}";
+  } finally {
+    materialsLoading.value = false;
+  }
+}
+
+watch(needsMaterials, (need) => {
+  if (need) void loadMaterials();
+}, { immediate: true });
+
+function resourceValues(name: string): unknown[] {
+  const value = values.value[name];
+  return Array.isArray(value) ? value : value === null || value === undefined ? [] : [value];
+}
+
+/** 选项：按 Schema 的模板 allowlist 筛选；当前值不在目录里时补一条「（当前值）」。 */
+function resourceOptions(parameter: BackendWorkflowInputParameter): MaterialOption[] {
+  const options = [...materialOptionsFrom(materials.value, allowedResourceTemplates(parameter.schema)).options];
+  for (const value of resourceValues(parameter.name)) {
+    const uuid = resourceRefUuid(value);
+    if (uuid && !options.some((option) => option.value === uuid)) {
+      options.unshift({ label: `${resourceRefLabel(value) || uuid}（当前值）`, value: uuid });
+    }
+  }
+  return options;
+}
+
+function resourceSelection(parameter: BackendWorkflowInputParameter): string | string[] | null {
+  const uuids = resourceValues(parameter.name).map(resourceRefUuid).filter(Boolean);
+  if (entryFieldKind(parameter.schema) === "resources") return uuids;
+  return uuids[0] ?? null;
+}
+
+function setResource(parameter: BackendWorkflowInputParameter, selected: unknown) {
+  const refs = materialOptionsFrom(materials.value).refs;
+  const previous = new Map(resourceValues(parameter.name).map((value) => [resourceRefUuid(value), value]));
+  // 引用形状与节点参数一致：{id: resource_id, uuid}；目录里没有的（当前值）原样保留
+  const toRef = (value: unknown) => {
+    const uuid = String(value);
+    return refs.has(uuid) ? resourceRefValue({}, { uuid, resourceId: refs.get(uuid)?.resourceId }) : (previous.get(uuid) ?? { uuid });
+  };
+  if (Array.isArray(selected)) set(parameter.name, selected.length ? selected.map(toRef) : null);
+  else set(parameter.name, selected === null || selected === undefined || selected === "" ? null : toRef(selected));
+}
+
+function resourceText(name: string): string {
+  const value = values.value[name];
+  if (value === null || value === undefined) return "";
+  return typeof value === "string" ? value : JSON.stringify(value);
 }
 </script>
 
@@ -122,6 +196,33 @@ function setEnum(name: string, encoded: string | null) {
         size="small"
         @update:value="set(parameter.name, $event)"
       />
+      <template v-else-if="isResourceEntryKind(entryFieldKind(parameter.schema))">
+        <NInput
+          v-if="materialsError"
+          :value="resourceText(parameter.name)"
+          type="textarea"
+          class="mono"
+          :autosize="{ minRows: 1, maxRows: 4 }"
+          :placeholder="`JSON · ${placeholderOf(parameter)}`"
+          :disabled="props.disabled"
+          size="small"
+          @update:value="set(parameter.name, $event)"
+        />
+        <NSelect
+          v-else
+          class="entry-resource"
+          :value="resourceSelection(parameter)"
+          :options="resourceOptions(parameter)"
+          :loading="materialsLoading"
+          :multiple="entryFieldKind(parameter.schema) === 'resources'"
+          :placeholder="`选择物料 · ${placeholderOf(parameter)}`"
+          :disabled="props.disabled"
+          filterable
+          clearable
+          size="small"
+          @update:value="setResource(parameter, $event)"
+        />
+      </template>
       <NInput
         v-else
         :value="String(values[parameter.name] ?? '')"
@@ -135,6 +236,7 @@ function setEnum(name: string, encoded: string | null) {
       />
       <div v-if="props.fieldErrors[parameter.name]" class="entry-error">{{ props.fieldErrors[parameter.name] }}</div>
       <div v-else-if="props.hints[parameter.name]" class="entry-hint">{{ props.hints[parameter.name] }}</div>
+      <div v-else-if="isResourceEntryKind(entryFieldKind(parameter.schema)) && materialsError" class="entry-hint">{{ materialsError }}</div>
       <div v-else-if="parameter.description" class="entry-hint">{{ parameter.description }}</div>
     </div>
   </div>

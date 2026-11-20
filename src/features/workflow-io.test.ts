@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { BackendBusinessError, type BackendWorkflowInputParameter, type BackendWorkflowTask } from "@openlab/protocol";
 import {
+  allowedResourceTemplates,
   buildEntryInput,
   describeEntryInputError,
   describeEntryParameter,
@@ -64,6 +65,36 @@ describe("入口参数表单", () => {
     expect(built.changed).toEqual(["mode"]);
     expect(built.input).toEqual({ mode: "slow" });
     expect(buildEntryInput(PARAMS, initialEntryValues(PARAMS, current), { baseline: current }).changed).toEqual([]);
+  });
+});
+
+describe("物料入口参数（ResourceSlot）", () => {
+  const SAMPLE: BackendWorkflowInputParameter = { name: "sample", schema: { $slot: "ResourceSlot" }, required: true };
+  const TARGETS: BackendWorkflowInputParameter = { name: "targets", schema: { type: "array", items: { $slot: "ResourceSlot" } }, required: true };
+  const PICKED = { id: "sample", uuid: "5c2e7d90-4b1f-4a83-9e6a-000000003002" };
+
+  it("$slot: ResourceSlot 走物料选择器（单个 / 数组 / 可空），其余形状不变", () => {
+    expect(entryFieldKind(SAMPLE.schema)).toBe("resource");
+    expect(entryFieldKind(TARGETS.schema)).toBe("resources");
+    expect(entryFieldKind({ anyOf: [{ $slot: "ResourceSlot" }, { type: "null" }] })).toBe("resource");
+    expect(entryFieldKind({ anyOf: [{ type: "number" }, { type: "null" }] })).toBe("json");
+    expect(describeEntryParameter(SAMPLE)).toBe("sample · 物料 · 必填");
+    expect(allowedResourceTemplates({ $slot: "ResourceSlot", allowed_resource_template_uuids: ["t-1", ""] })).toEqual(["t-1"]);
+    expect(allowedResourceTemplates({ type: "array", items: { $slot: "ResourceSlot", allowed_resource_template_uuids: ["t-2"] } })).toEqual(["t-2"]);
+    expect(allowedResourceTemplates(SAMPLE.schema)).toEqual([]);
+  });
+
+  it("表单值是引用对象（不是 JSON 文本）；提交 {id: resource_id, uuid}，空着报必填", () => {
+    expect(initialEntryValues([SAMPLE], { sample: PICKED })).toEqual({ sample: PICKED });
+    expect(buildEntryInput([SAMPLE, TARGETS], { sample: null, targets: [] }).errors).toEqual({ sample: "必填", targets: "必填" });
+    expect(buildEntryInput([SAMPLE, TARGETS], { sample: PICKED, targets: [PICKED] })).toMatchObject({
+      errors: {},
+      input: { sample: PICKED, targets: [PICKED] },
+    });
+    // 物料目录读不到时退回 JSON 文本
+    expect(parseEntryValue(SAMPLE, '{"uuid": "u-1"}')).toEqual({ value: { uuid: "u-1" } });
+    expect(parseEntryValue(SAMPLE, { id: "sample" })).toEqual({ error: "请选择物料" });
+    expect(parseEntryValue(TARGETS, [PICKED, { uuid: "" }])).toEqual({ error: "请选择物料" });
   });
 });
 

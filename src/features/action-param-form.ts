@@ -33,7 +33,8 @@ import {
   type ParameterField,
 } from "./workflow-variables";
 import { describeError } from "./errors";
-import { compareMaterialLabels, materialLabel } from "./material-label";
+import { materialLabel } from "./material-label";
+import { materialOptionsFrom } from "./material-options";
 import { SiteIndex, confirmSite, siteBindingStatus, siteParamValue, type SiteBindings, type SiteContext } from "./site-bindings";
 
 export interface PlaceholderOption {
@@ -209,16 +210,9 @@ export function useActionParamForm(options: ActionParamFormOptions) {
     try {
       const data = await options.api().domains.inventory.instances();
       if (seq !== loadSeq) return;
-      const index = new Map<string, { label: string; resourceId: string }>();
-      const opts = [...data].sort((a, b) => compareMaterialLabels(a.material, b.material)).map((item) => {
-        const label = materialLabel(item.material);
-        index.set(item.material.material_uuid, { label, resourceId: item.material.resource_id });
-        return {
-          label: item.material.resource_type ? `${label} · ${item.material.resource_type}` : label,
-          value: item.material.material_uuid,
-        };
-      });
-      materialRefByUuid.value = index;
+      // 与运行时入口参数的物料字段同源（features/material-options.ts）
+      const { options: opts, refs } = materialOptionsFrom(data);
+      materialRefByUuid.value = refs;
       materialOptionState.value = { ...emptyOptionState(), options: opts };
     } catch {
       if (seq !== loadSeq) return;
