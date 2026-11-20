@@ -116,8 +116,9 @@ V1 合同里还有一批浏览器可调用、但 OpenLabSite 目前没有页面�
 | 同一 `GET /api/v1/events` | `runtime.logs.changed` | 日志来源索引；不写 SSE id，重连按 HTTP 日志游标补读 |
 | `GET /api/v1/materials/events` | `materials.changed` | 物料账本推进；首连不重放，重连按游标补齐 |
 
-`stores/connection.ts` 为持久数据通知维护 `revision` 计数；日志通知按来源定向重拉，不触发工作流刷新。没有 SSE
-的域（telemetry / runtime / decisions / device-processes）按 3–8 秒轮询，可见性恢复时立即刷新。
+`stores/connection.ts` 为持久数据通知维护 `revision` 计数；日志通知按来源定向重拉，不触发工作流刷新；
+`station.error_handling.changed` 单独计数，只让人工决策面板重读动作异常与干预（通知流断开时退回轮询）。没有 SSE
+的域（telemetry / runtime / 状态告警 / device-processes）按 3–8 秒轮询，可见性恢复时立即刷新。
 Host 子进程启动 / 重启期间 Host 专有路由返回 HTTP 200 + 信封 5001 + `Retry-After`：GET 由传输层有限退避重试，
 仍不可用时页面显示「暂不可用」降级态，Host 恢复后下一轮轮询自动收敛。
 

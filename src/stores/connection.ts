@@ -31,6 +31,7 @@ import {
 } from "@openlab/protocol";
 import { readinessView, type ReadinessSupport } from "../features/readiness";
 import { bindWorkflowInvalidations, WORKFLOW_INVALIDATION_EVENT_TYPES } from "../features/workflow-invalidation";
+import { bindDecisionInvalidations, DECISION_INVALIDATION_EVENT_TYPES } from "../features/decision-invalidation";
 import { openNoticeSource, type NoticeSource } from "../features/shared-notice";
 import { describeError, isOfflineError } from "../features/errors";
 import { classifyTarget } from "../features/insecure-target";
@@ -206,10 +207,22 @@ export const useConnectionStore = defineStore("connection", () => {
     logListeners.add(listener);
     return () => { logListeners.delete(listener); };
   }
+  // 人工决策（动作异常 / 干预）单独计数：station.error_handling.changed 只让决策面板重读，
+  // 不触发整份工作流投影刷新；同一条 /events 连接，建连 / 重连后同样校准一次（去抖 100ms）。
+  const decisionNoticeRevision = ref(0);
+  let decisionDebounce: ReturnType<typeof setTimeout> | null = null;
+  function signalDecisions() {
+    if (decisionDebounce !== null) return;
+    decisionDebounce = setTimeout(() => {
+      decisionDebounce = null;
+      decisionNoticeRevision.value += 1;
+    }, 100);
+  }
   const workflowChannel = createNoticeChannel(
     () => api.value.domains.workflowBackend.eventsUrl(),
     (source, invalidate) => {
       const unbind = bindWorkflowInvalidations(source, invalidate);
+      const unbindDecisions = bindDecisionInvalidations(source, signalDecisions);
       const logs: EventListener = (event) => {
         try {
           const notice = JSON.parse((event as MessageEvent<string>).data) as RuntimeLogNotice;
@@ -218,10 +231,13 @@ export const useConnectionStore = defineStore("connection", () => {
         } catch { /* 非法通知不当作日志正文；重连会重新校准。 */ }
       };
       source.addEventListener(RUNTIME_LOG_NOTICE_EVENT, logs);
-      return () => { unbind(); source.removeEventListener(RUNTIME_LOG_NOTICE_EVENT, logs); };
+      return () => { unbind(); unbindDecisions(); source.removeEventListener(RUNTIME_LOG_NOTICE_EVENT, logs); };
     },
-    [...WORKFLOW_INVALIDATION_EVENT_TYPES, RUNTIME_LOG_NOTICE_EVENT],
-    () => publishLogs({ source_ids: [], sources_changed: true, all_sources: true }),
+    [...WORKFLOW_INVALIDATION_EVENT_TYPES, ...DECISION_INVALIDATION_EVENT_TYPES, RUNTIME_LOG_NOTICE_EVENT],
+    () => {
+      publishLogs({ source_ids: [], sources_changed: true, all_sources: true });
+      signalDecisions();
+    },
   );
   const materialsChannel = createNoticeChannel(
     () => api.value.domains.materialsV1.eventsUrl(),
@@ -414,6 +430,8 @@ export const useConnectionStore = defineStore("connection", () => {
     lastCheckedAt,
     workflowNoticeRevision,
     workflowNoticeState,
+    /** station.error_handling.changed（及 /events 建连 / 重连）计数：人工决策面板据此重读。 */
+    decisionNoticeRevision,
     materialsNoticeRevision,
     materialsNoticeState,
     logsNoticeState: workflowChannel.state,
