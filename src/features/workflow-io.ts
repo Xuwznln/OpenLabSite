@@ -21,10 +21,21 @@ import {
 
 /**
  * `resource` / `resources`：物料入口参数（值 Schema `{"$slot": "ResourceSlot"}` / 它的数组），表单用与
- * 节点参数同源的物料选择器，值写成 `{id: resource_id, uuid}`。核心的值 Schema 子集只认
- * `$slot: ResourceSlot`；Site / 设备在入口参数里就是普通字符串。
+ * 节点参数同源的物料选择器，值写成 `{id: resource_id, uuid}`。
+ * `device` / `site`：设备 / 库位入口参数（`{"$slot": "DeviceSlot"}` / `{"$slot": "SiteSlot"}`，与节点参数同一槽位），
+ * 值就是字符串：设备 id / ResourceSite uuid，表单用在线设备 / 物料树上的库位选择器。
  */
-export type EntryFieldKind = "number" | "integer" | "string" | "boolean" | "enum" | "resource" | "resources" | "json";
+export type EntryFieldKind =
+  | "number"
+  | "integer"
+  | "string"
+  | "boolean"
+  | "enum"
+  | "resource"
+  | "resources"
+  | "device"
+  | "site"
+  | "json";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -44,6 +55,18 @@ function resourceSlotKind(record: Record<string, unknown>): "resource" | "resour
     const members = record.anyOf.filter((member) => asRecord(member)?.type !== "null");
     const member = asRecord(members[0]);
     if (members.length === 1 && member) return resourceSlotKind(member);
+  }
+  return null;
+}
+
+/** 设备 / 库位入口参数（可为 `anyOf: [槽位, null]`）：值是字符串，不是物料引用。 */
+function stringSlotKind(record: Record<string, unknown>): "device" | "site" | null {
+  if (record.$slot === "DeviceSlot") return "device";
+  if (record.$slot === "SiteSlot") return "site";
+  if (Array.isArray(record.anyOf)) {
+    const members = record.anyOf.filter((member) => asRecord(member)?.type !== "null");
+    const member = asRecord(members[0]);
+    if (members.length === 1 && member) return stringSlotKind(member);
   }
   return null;
 }
@@ -74,7 +97,7 @@ function refUuid(value: unknown): string {
 export function entryFieldKind(schema: BackendWorkflowValueSchema | null | undefined): EntryFieldKind {
   const record = asRecord(schema) ?? {};
   if (Array.isArray(record.enum) && record.enum.length) return "enum";
-  const slot = resourceSlotKind(record);
+  const slot = resourceSlotKind(record) ?? stringSlotKind(record);
   if (slot) return slot;
   switch (record.type) {
     case "number":
@@ -98,8 +121,15 @@ const KIND_LABEL: Record<EntryFieldKind, string> = {
   enum: "选项",
   resource: "物料",
   resources: "物料（多个）",
+  device: "设备",
+  site: "库位",
   json: "JSON",
 };
+
+/** 设备 / 库位入口参数（选择器，值是字符串）。 */
+export function isSlotEntryKind(kind: EntryFieldKind): kind is "device" | "site" {
+  return kind === "device" || kind === "site";
+}
 
 /** 物料入口参数（选择器）。 */
 export function isResourceEntryKind(kind: EntryFieldKind): kind is "resource" | "resources" {
@@ -229,6 +259,12 @@ export function parseEntryValue(
       return { error: "请选择是或否" };
     case "string":
       return { value: String(raw) };
+    case "device":
+    case "site": {
+      const text = typeof raw === "string" ? raw.trim() : "";
+      if (!text) return { error: kind === "device" ? "请选择设备" : "请选择库位" };
+      return { value: text };
+    }
     case "enum": {
       const options = enumOptions(parameter.schema);
       const hit = options.find((option) => sameJson(option, raw));

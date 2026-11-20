@@ -98,6 +98,32 @@ describe("物料入口参数（ResourceSlot）", () => {
   });
 });
 
+describe("设备 / 库位入口参数（DeviceSlot / SiteSlot）", () => {
+  const DEVICE: BackendWorkflowInputParameter = { name: "device", schema: { $slot: "DeviceSlot" }, default: "pump-1" };
+  const SITE: BackendWorkflowInputParameter = { name: "site", schema: { $slot: "SiteSlot" }, required: true };
+  const SITE_UUID = "5c2e7d90-4b1f-4a83-9e6a-000000004001";
+
+  it("与节点参数同一槽位：设备 / 库位选择器，可空成员同样识别；不是物料", () => {
+    expect(entryFieldKind(DEVICE.schema)).toBe("device");
+    expect(entryFieldKind(SITE.schema)).toBe("site");
+    expect(entryFieldKind({ anyOf: [{ $slot: "SiteSlot" }, { type: "null" }] })).toBe("site");
+    expect(describeEntryParameter(DEVICE)).toBe("device · 设备 · 默认 pump-1");
+    expect(describeEntryParameter(SITE)).toBe("site · 库位 · 必填");
+    expect(allowedResourceTemplates(SITE.schema)).toEqual([]);
+  });
+
+  it("值就是字符串：去掉首尾空白提交，空着的必填报错，有默认值的可不填", () => {
+    expect(initialEntryValues([DEVICE, SITE])).toEqual({ device: "pump-1", site: null });
+    expect(buildEntryInput([DEVICE, SITE], { device: null, site: null }).errors).toEqual({ site: "必填" });
+    expect(buildEntryInput([DEVICE, SITE], { device: " pump-2 ", site: SITE_UUID })).toMatchObject({
+      errors: {},
+      input: { device: "pump-2", site: SITE_UUID },
+    });
+    expect(parseEntryValue(SITE, { uuid: SITE_UUID })).toEqual({ error: "请选择库位" });
+    expect(parseEntryValue(DEVICE, 3)).toEqual({ error: "请选择设备" });
+  });
+});
+
 describe("入口参数的后端错误", () => {
   it("合同诊断码译成人话并指回字段", () => {
     expect(describeEntryInputError(business(1000, "参数无效：workflow_input_required（/input/volume）"), PARAMS))
