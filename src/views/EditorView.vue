@@ -154,6 +154,7 @@ import {
 import {
   MISSING_PARAM_COUNTS_KEY,
   PARAM_VALIDATION_PENDING_KEY,
+  inventoryRequirementKeys,
   missingParamEntries,
 } from "../features/param-completeness";
 import {
@@ -812,6 +813,7 @@ const missingParamCounts = computed<Map<string, number>>(() => {
         siteOwners: (node.data.siteBindingOwners ?? {}) as Record<string, string>,
         paramJson: String(node.data.paramJson ?? "{}"),
         mappedPaths: mappedPathsByNode.value.get(node.id) ?? [],
+        inventoryKeys: inventoryRequirementKeys(node.data.requirementsJson),
       }).length,
     );
   }
@@ -824,6 +826,7 @@ provide(PARAM_VALIDATION_PENDING_KEY, computed(() => new Set(liteNodes.value.fil
   return !detail || missingParamEntries({ detail, paramJson: String(node.data.paramJson ?? "{}"),
     mappedPaths: mappedPathsByNode.value.get(node.id) ?? [], sites: siteDirectory.index,
     siteBindings: (node.data.siteBindings ?? {}) as SiteBindings,
+    inventoryKeys: inventoryRequirementKeys(node.data.requirementsJson),
   }).some((entry) => entry.reason === "site-unavailable");
 }).map((node) => node.id))));
 

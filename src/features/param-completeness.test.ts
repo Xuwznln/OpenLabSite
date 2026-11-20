@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { DeviceActionSchemaDetail } from "@openlab/protocol";
 import {
+  inventoryRequirementKeys,
+  isDeferredParamValue,
   missingParamEntries,
   pathCoveredByMappings,
 } from "./param-completeness";
@@ -43,6 +45,31 @@ const RESOURCE_SHAPE_PROPS = {
     },
   },
 };
+
+describe("运行时才确定的参数", () => {
+  it("inventoryRequirementKeys 读后端数组或画布 requirementsJson 文本，忽略坏条目", () => {
+    const requirements = [
+      { key: "solvent", kind: "lot", lot_uuid: "l-1", quantity: 10, unit: "ul" },
+      { key: " tips ", kind: "material", template_uuid: "t-1" },
+      { kind: "lot" },
+      "garbage",
+      { key: "solvent", kind: "lot" },
+    ];
+    expect(inventoryRequirementKeys(requirements)).toEqual(["solvent", "tips"]);
+    expect(inventoryRequirementKeys(JSON.stringify(requirements))).toEqual(["solvent", "tips"]);
+    expect(inventoryRequirementKeys("{oops")).toEqual([]);
+    expect(inventoryRequirementKeys(undefined)).toEqual([]);
+  });
+
+  it("isDeferredParamValue 识别 node_output（可嵌套）与 {{loop.}}", () => {
+    expect(isDeferredParamValue({ kind: "node_output", node_key: "step-3", data_key: "lot" })).toBe(true);
+    expect(isDeferredParamValue({ lots: [{ kind: "node_output", workflow_node_uuid: "u", data_key: "" }] })).toBe(true);
+    expect(isDeferredParamValue("S-{{loop.iteration}}")).toBe(true);
+    expect(isDeferredParamValue({ kind: "workflow_input", parameter: "lot" })).toBe(false);
+    expect(isDeferredParamValue("plain")).toBe(false);
+    expect(isDeferredParamValue(0)).toBe(false);
+  });
+});
 
 describe("pathCoveredByMappings", () => {
   it("精确、父路径、子路径三向覆盖", () => {
@@ -206,6 +233,35 @@ describe("missingParamEntries", () => {
       missingParamEntries({
         detail: null,
         paramJson: JSON.stringify({ speed: 300, name: "ok" }),
+        mappedPaths: [],
+      }),
+    ).toEqual([]);
+  });
+
+  it("库存需求注入的参数（inventory_requirements[].key）派发时由调度器写入，不计未填", () => {
+    // 联合演示「实际分装」：aliquot(source, target, solvent)，solvent 由 inventory=[{key: "solvent", …}] 注入
+    const detail = makeDetail({
+      required: ["source", "target", "solvent"],
+      goalProps: { source: { type: "object" }, target: { type: "object" }, solvent: { type: "object" } },
+      placeholderKeys: { source: "unilabos_resources", target: "unilabos_resources" },
+    });
+    const ref = (parameter: string) => ({ kind: "workflow_input", parameter });
+    const paramJson = JSON.stringify({ source: ref("source"), target: ref("sample") });
+    expect(missingParamEntries({ detail, paramJson, mappedPaths: [] }).map((entry) => entry.path)).toEqual(["solvent"]);
+    expect(missingParamEntries({ detail, paramJson, mappedPaths: [], inventoryKeys: ["solvent"] })).toEqual([]);
+  });
+
+  it("值引用上游输出（node_output）或循环变量的参数派发时才确定，不计未填", () => {
+    const detail = makeDetail({
+      required: ["lot", "sample"],
+      goalProps: { lot: { type: "string" }, sample: { type: "object" } },
+      placeholderKeys: { sample: "unilabos_resources" },
+    });
+    const output = (dataKey: string) => ({ kind: "node_output", workflow_node_uuid: "u-1", data_key: dataKey });
+    expect(
+      missingParamEntries({
+        detail,
+        paramJson: JSON.stringify({ lot: output(""), sample: output("sample") }),
         mappedPaths: [],
       }),
     ).toEqual([]);

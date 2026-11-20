@@ -10,7 +10,10 @@
  * - 被上游 @@@ 映射覆盖的参数路径不算未填（提交前调度器会写回）：映射
  *   targetKey 的最后一段是 sjson 写入路径，与参数路径按前缀双向匹配；
  * - 参数 JSON 不合法时整体计一项（invalid-json）；
- * - 顶层值是工作流入口参数引用（`{"kind": "workflow_input", ...}`）的参数由任务 input 给值，不计未填。
+ * - 顶层值是工作流入口参数引用（`{"kind": "workflow_input", ...}`）的参数由任务 input 给值，不计未填；
+ * - 派发时才确定的参数不计未填（与核心 run_preflight `deferred_parameters` 同一口径）：库存需求
+ *   （`inventory_requirements[].key`）注入的参数，以及值里引用上游输出（`node_output`）或循环变量
+ *   （`{{loop.`）的参数。
  *
  * 本模块保持纯函数（无网络/无组件依赖），供单测与画布/试运行共用。
  */
@@ -45,12 +48,47 @@ export interface MissingParamInput {
   siteOwners?: Record<string, string>;
   deviceId?: string;
   actionName?: string;
+  /**
+   * 节点库存需求注入的参数名（{@link inventoryRequirementKeys}）：调度器预留库存后把需求按 `key`
+   * 写进动作参数（如 `aliquot` 的 `solvent`），节点 param 里本来就没有它们。
+   */
+  inventoryKeys?: readonly string[];
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+/**
+ * 库存需求（后端图 `meta_data.inventory_requirements`，或画布节点的 `requirementsJson` 文本）
+ * 注入的参数名：每条需求的 `key`。形状不对的条目忽略。
+ */
+export function inventoryRequirementKeys(raw: unknown): string[] {
+  let value = raw;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value || "[]");
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(value)) return [];
+  const keys = value
+    .map((item) => asRecord(item)?.key)
+    .filter((key): key is string => typeof key === "string" && key.trim() !== "")
+    .map((key) => key.trim());
+  return [...new Set(keys)];
+}
+
+/** 值在派发时才确定：引用上游节点输出（`{kind: "node_output"}`，可嵌套）或循环变量（`{{loop.`）。 */
+export function isDeferredParamValue(value: unknown): boolean {
+  if (typeof value === "string") return value.includes("{{loop.");
+  if (Array.isArray(value)) return value.some(isDeferredParamValue);
+  const record = asRecord(value);
+  if (!record) return false;
+  return record.kind === "node_output" || Object.values(record).some(isDeferredParamValue);
 }
 
 /** 映射写入路径与参数路径按 dot 前缀双向覆盖（写 vessel 覆盖 vessel.id，反之亦然）。 */
@@ -119,7 +157,14 @@ export function missingParamEntries(input: MissingParamInput): MissingParamEntry
   }
 
   const entries: MissingParamEntry[] = [];
-  const entryBound = new Set(entryReferencesOf(param).keys());
+  // 运行时才有值的顶层参数：入口参数引用、库存需求注入、上游输出 / 循环变量引用
+  const entryBound = new Set([
+    ...entryReferencesOf(param).keys(),
+    ...(input.inventoryKeys ?? []),
+    ...Object.entries(param)
+      .filter(([, value]) => isDeferredParamValue(value))
+      .map(([key]) => key),
+  ]);
   const placeholders = detectPlaceholderFields(input.detail, param).filter((field) => !entryBound.has(field.param));
   // unsupported placeholder 回退原始字段编辑（与共享表单 placeholderUsable 一致），
   // 其空值走下方叶子统计；其余 placeholder 由选择器接管，不再计叶子。
@@ -174,7 +219,7 @@ export function missingParamEntries(input: MissingParamInput): MissingParamEntry
   if (required !== null) {
     for (const name of required) {
       if (name in param) continue;
-      if (handledParams.has(name)) continue;
+      if (handledParams.has(name) || entryBound.has(name)) continue;
       if (pathCoveredByMappings(name, input.mappedPaths)) continue;
       entries.push({
         path: name,

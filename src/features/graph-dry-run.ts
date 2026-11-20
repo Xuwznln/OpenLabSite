@@ -25,6 +25,7 @@
 import type { DeviceActionSchemaDetail } from "@openlab/protocol";
 import type { SiteIndex, SiteBindings } from "./site-bindings";
 import {
+  inventoryRequirementKeys,
   missingParamEntries,
   type MissingParamEntry,
 } from "./param-completeness";
@@ -376,6 +377,7 @@ export function dryRunWorkflow(input: DryRunInput): DryRunReport {
       detail: input.schemas.get(schemaKey(node)) ?? null,
       paramJson: node.paramJson,
       mappedPaths: mappedPaths.get(node.id) ?? [],
+      inventoryKeys: inventoryRequirementKeys(node.requirementsJson),
     });
     for (const entry of entries) issues.push(missingEntryIssue(node, entry));
   }
