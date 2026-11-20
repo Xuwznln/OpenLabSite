@@ -17,6 +17,7 @@ import {
 } from "@openlab/protocol";
 import EntryParamFields from "./EntryParamFields.vue";
 import { describeError } from "../features/errors";
+import { reloadOnNotice } from "../features/notice-reload";
 import {
   buildEntryInput,
   describeEntryParameter,
@@ -60,9 +61,12 @@ const candidates = computed(() =>
 const blockedCount = computed(() => others.value.length - candidates.value.length);
 const staticInputs = computed(() => (selected.value?.inputs ?? []).filter((item) => modes.value[item.name] === "static"));
 
-async function load() {
-  loading.value = true;
-  loadError.value = "";
+/** quiet：打开期间的通知重读，不闪加载态；失败时保留已显示的列表。 */
+async function load(quiet = false) {
+  if (!quiet) {
+    loading.value = true;
+    loadError.value = "";
+  }
   try {
     const api = conn.api.domains.workflowBackend;
     const [latest, operations] = await Promise.all([
@@ -71,18 +75,23 @@ async function load() {
     ]);
     publications.value = latest;
     insertable.value = new Map(operations.items.map((item) => [item.uuid, item.revision]));
+    loadError.value = "";
   } catch (error) {
-    publications.value = [];
-    insertable.value = new Map();
-    loadError.value = describeError(error);
+    if (!quiet) {
+      publications.value = [];
+      insertable.value = new Map();
+      loadError.value = describeError(error);
+    }
   } finally {
-    loading.value = false;
+    if (!quiet) loading.value = false;
   }
 }
 
 watch(show, (open) => {
   if (open) void load();
 });
+// 打开期间别处发布 / 改了定义（workflow.authoring.changed 等失效通知）：重读列表，已选的发布仍在就保留
+reloadOnNotice(() => conn.workflowNoticeRevision, () => show.value && !props.busy && !loading.value, () => void load(true));
 
 function hasDefault(parameter: BackendWorkflowInputParameter): boolean {
   return Object.prototype.hasOwnProperty.call(parameter, "default");
