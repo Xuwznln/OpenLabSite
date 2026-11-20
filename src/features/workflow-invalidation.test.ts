@@ -45,6 +45,22 @@ describe("Workflow 轻通知与 HTTP 正文边界", () => {
     expect(invalidate).toHaveBeenCalledTimes(WORKFLOW_INVALIDATION_EVENT_TYPES.length);
   });
 
+  it("workflow.authoring.changed（定义 / 作者态变更）让定义列表重新经 HTTP 读取", async () => {
+    const api: WorkflowSnapshotApi = {
+      workflows: vi.fn(async () => ({ items: [] })),
+      tasks: vi.fn(async () => ({ items: [] })),
+      taskJobs: vi.fn(async () => []),
+    };
+    const source = new NoticeMock();
+    let snapshot: Promise<unknown> | undefined;
+    bindWorkflowInvalidations(source, () => {
+      snapshot = loadWorkflowHttpSnapshot(api);
+    });
+    source.emit("workflow.authoring.changed");
+    await snapshot;
+    expect(api.workflows).toHaveBeenCalledWith({ page: 1, page_size: 100 });
+  });
+
   it("一次 notice 只触发固定 typed HTTP GET 投影，不消费 payload 或任意 URL", async () => {
     const calls: string[] = [];
     const api: WorkflowSnapshotApi = {

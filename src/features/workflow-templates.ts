@@ -15,8 +15,10 @@
  *   出边接自子图出口；slot 保留为画布上的占位节点，可用设备动作或
  *   另一个模板继续填充（因此空位天然支持再嵌套）；循环体成员带 parent。
  * - 提交前画布不允许残留 slot 节点，提交体是平铺 DAG + 循环容器的 parent_uuid。
+ * - 模板声明的入口参数（及绑定到步骤返回值的输出）随展开结果给出（{@link ExpandedGraph.io}）：
+ *   步骤参数里的 `workflow_input` 引用原样落到画布，插入方要把这些声明并进画布的入口参数。
  */
-import type { RegistryWorkflowTemplate } from "@openlab/protocol";
+import type { BackendWorkflowInputParameter, JsonObject, RegistryWorkflowTemplate } from "@openlab/protocol";
 import { describeMaterialIo, MATERIAL_IO_NODE_TYPE } from "./material-io";
 import { describeLoopSpec, loopSpecFromNodeData, type LoopNodeData } from "./workflow-loops";
 import { describeCondition, sourceOnlyFeatures } from "./workflow-node-kinds";
@@ -89,6 +91,24 @@ export type TemplateEdgeSpec = {
   mappings?: TemplateParamMapping[];
 };
 
+/** 绑定到模板步骤返回值的输出：`nodeKey` 是步骤 key，`dataKey` 是返回值路径（空串 = 整个返回值）。 */
+export interface TemplateOutput {
+  name: string;
+  schema: JsonObject;
+  title?: string;
+  nodeKey: string;
+  dataKey: string;
+}
+
+/**
+ * 模板声明的入口参数与输出（设备包 `@workflow` 的 `io.input_contract` / `output_contract`；
+ * 用户模板保存时的画布声明）。物料入口参数的透传输出（`implicit`）不在这里：画布声明时自动补齐。
+ */
+export interface TemplateIo {
+  inputs: BackendWorkflowInputParameter[];
+  outputs: TemplateOutput[];
+}
+
 /**
  * 设备角色：展开时把 role 映射到具体 device_id。
  * matches 用于按设备 id 子串模糊预选；deviceClass（`ctx.run_template` 的设备类）
@@ -121,6 +141,60 @@ export interface WorkflowTemplate {
   registryUuid?: string;
   /** 画布不能无损编辑的源码写法（非空时不展开进画布） */
   sourceOnly?: string[];
+  /** 入口参数与输出声明；步骤参数用 `{"kind": "workflow_input"}` 引用这里的入口参数 */
+  io?: TemplateIo;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function cloneJson<T>(value: T): T {
+  return value === undefined ? value : (JSON.parse(JSON.stringify(value)) as T);
+}
+
+/** PUT /io 接受的入口参数字段（核心拒绝未知字段）。 */
+const INPUT_KEYS = ["name", "schema", "title", "description", "unit", "required", "default"] as const;
+
+function contractInput(raw: unknown): BackendWorkflowInputParameter | null {
+  const record = asRecord(raw);
+  if (!record || typeof record.name !== "string" || !record.name || !asRecord(record.schema)) return null;
+  const picked = Object.fromEntries(
+    INPUT_KEYS.filter((key) => record[key] !== undefined).map((key) => [key, cloneJson(record[key])]),
+  );
+  return picked as unknown as BackendWorkflowInputParameter;
+}
+
+/**
+ * 设备包模板的 `io`（`input_contract` / `output_contract` / `output_bindings`）→ {@link TemplateIo}。
+ * 输出只收 `node_output` + `node_key` 绑定（指向模板步骤）；物料透传输出与其他绑定形状跳过。
+ */
+export function templateIoFromRegistry(raw: unknown): TemplateIo | undefined {
+  const io = asRecord(raw);
+  if (!io) return undefined;
+  const rawInputs = asRecord(io.input_contract)?.parameters;
+  const inputs = (Array.isArray(rawInputs) ? rawInputs : [])
+    .map(contractInput)
+    .filter((item): item is BackendWorkflowInputParameter => item !== null);
+  const bindings = asRecord(io.output_bindings) ?? {};
+  const rawOutputs = asRecord(io.output_contract)?.outputs;
+  const outputs = (Array.isArray(rawOutputs) ? rawOutputs : []).flatMap((item): TemplateOutput[] => {
+    const output = asRecord(item);
+    if (!output || typeof output.name !== "string" || !output.name || output.implicit === true) return [];
+    const schema = asRecord(output.schema);
+    const binding = asRecord(bindings[output.name]);
+    if (!schema || binding?.kind !== "node_output" || typeof binding.node_key !== "string") return [];
+    return [{
+      name: output.name,
+      schema: cloneJson(schema) as JsonObject,
+      ...(typeof output.title === "string" && output.title ? { title: output.title } : {}),
+      nodeKey: binding.node_key,
+      dataKey: typeof binding.data_key === "string" ? binding.data_key : "",
+    }];
+  });
+  return inputs.length || outputs.length ? { inputs, outputs } : undefined;
 }
 
 export function templateSource(tpl: WorkflowTemplate): TemplateSource {
@@ -243,6 +317,11 @@ export interface ExpandedEdge {
 export interface ExpandedGraph {
   nodes: ExpandedNode[];
   edges: ExpandedEdge[];
+  /**
+   * 展开用到的模板声明的入口参数（含嵌套模板，同名取先出现的）与根模板绑定到步骤返回值的输出
+   * （`nodeKey` 已换成展开后的 key）；都没有时省略。
+   */
+  io?: TemplateIo;
 }
 
 /**
@@ -281,10 +360,12 @@ export function templateFromRegistry(entry: RegistryWorkflowTemplate): WorkflowT
     entry.nodes.map((node) => ({ type: node.kind, param: node.param, condition_guards: node.condition_guards })),
     entry.resource_scopes ?? [],
   );
+  const io = templateIoFromRegistry(entry.io);
   return {
     id: `${REGISTRY_TEMPLATE_ID_PREFIX}${entry.uuid}`,
     registryUuid: entry.uuid,
     ...(sourceOnly.length ? { sourceOnly } : {}),
+    ...(io ? { io } : {}),
     name: entry.display_name,
     description: entry.description || `设备包模板 · ${entry.id}`,
     source: "registry",
@@ -368,6 +449,8 @@ export function expandTemplate(
   const nodes: ExpandedNode[] = [];
   const edges: ExpandedEdge[] = [];
   const expanding: string[] = [];
+  const inputs = new Map<string, BackendWorkflowInputParameter>();
+  const outputs: TemplateOutput[] = [];
 
   function walk(
     tid: string,
@@ -383,6 +466,18 @@ export function expandTemplate(
     expanding.push(tid);
 
     const keyOf = (spec: TemplateNodeSpec) => (prefix ? `${prefix}.${spec.key}` : spec.key);
+    // 入口参数：展开到的每个模板都要声明（嵌套模板的步骤引用的是它自己的入口参数名），同名取先
+    // 出现的（根模板在前）；输出：只有根模板的才是这次插入的输出，且只认指向本模板动作 / 人工物料步骤的绑定
+    for (const input of tpl.io?.inputs ?? []) {
+      if (!inputs.has(input.name)) inputs.set(input.name, cloneJson(input));
+    }
+    if (expanding.length === 1) {
+      for (const output of tpl.io?.outputs ?? []) {
+        const spec = tpl.nodes.find((node) => node.key === output.nodeKey);
+        if (spec?.kind !== "action" && spec?.kind !== "material_io") continue;
+        outputs.push({ ...cloneJson(output), nodeKey: keyOf(spec) });
+      }
+    }
     // 循环体成员的父级：本模板里的 loop 节点（展开后的 key）；分组只是展示，跳过它取分组自己的父级；
     // 模板自身在别的循环体里时继承
     const parentOf = (spec: TemplateNodeSpec, seen = new Set<string>()): string | undefined => {
@@ -472,7 +567,9 @@ export function expandTemplate(
   }
 
   walk(templateId, "", undefined);
-  return { nodes, edges };
+  return inputs.size || outputs.length
+    ? { nodes, edges, io: { inputs: [...inputs.values()], outputs } }
+    : { nodes, edges };
 }
 
 /** 循环 LoopSpec 里 node_output 条件的 `node_key`（模板步骤 key）换成展开后的 key。 */
@@ -573,7 +670,8 @@ export function suggestDeviceForRole(
 
 /**
  * 把当前画布（含 slot 节点）保存为用户模板。
- * 同一设备归并为同一角色，换实验室时一次映射即可整体迁移。
+ * 同一设备归并为同一角色，换实验室时一次映射即可整体迁移；画布声明的入口参数与绑定到这些
+ * 节点的输出一起存下（节点里的 `workflow_input` 引用要靠它们才能再次提交）。
  */
 export function templateFromCanvas(
   meta: { id: string; name: string; description: string },
@@ -589,6 +687,10 @@ export function templateFromCanvas(
     target: string;
     mappings?: TemplateParamMapping[];
   }[],
+  io?: {
+    inputs: readonly BackendWorkflowInputParameter[];
+    outputs: readonly { name: string; schema: JsonObject; title?: string; nodeId: string; dataKey: string }[];
+  } | null,
 ): WorkflowTemplate {
   const roles = new Map<string, TemplateRole>();
   const nodeIds = new Set(nodes.map((n) => n.id));
@@ -653,11 +755,24 @@ export function templateFromCanvas(
       parent,
     };
   });
+  const templateIo: TemplateIo = {
+    inputs: (io?.inputs ?? []).map((item) => cloneJson(item) as BackendWorkflowInputParameter),
+    outputs: (io?.outputs ?? [])
+      .filter((item) => nodeIds.has(item.nodeId))
+      .map((item) => ({
+        name: item.name,
+        schema: cloneJson(item.schema),
+        ...(item.title ? { title: item.title } : {}),
+        nodeKey: item.nodeId,
+        dataKey: item.dataKey,
+      })),
+  };
   return {
     id: meta.id,
     name: meta.name,
     description: meta.description,
     source: "user",
+    ...(templateIo.inputs.length || templateIo.outputs.length ? { io: templateIo } : {}),
     roles: [...roles.values()],
     nodes: specs,
     edges: edges.map((e) => ({

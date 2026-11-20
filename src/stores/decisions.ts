@@ -1,13 +1,17 @@
 /**
  * 人工决策面板态：动作异常（error-decisions）、状态联锁（status-incidents）
- * 与工作流干预（interventions）。REST 快照为权威，页面以轮询 + 可见性恢复收敛。
+ * 与工作流干预（interventions）。REST 快照为权威。
+ *
+ * - 动作异常与干预：`station.error_handling.changed`（经 /events，见 features/decision-invalidation.ts）
+ *   到达即重读；轮询退为兜底——通知流不在线时 5 s 一读，在线时只做低频校准。
+ * - 状态联锁没有 SSE 事件，照旧 5 s 轮询；页面可见性恢复时全部重读。
  *
  * 不可用语义：GET 503（本进程没有执行面，如 `--role backend`）或 404 → 整面板
  * 置灰而不弹错误；其余错误保留文案给页面提示。
  */
 
 import { defineStore } from "pinia";
-import { computed, ref, shallowRef } from "vue";
+import { computed, ref, shallowRef, watch } from "vue";
 import {
   type BackendIntervention,
   type BackendManualConfirmation,
@@ -23,6 +27,7 @@ import {
 import { useConnectionStore } from "./connection";
 import { describeError } from "../features/errors";
 import { describeTask } from "../features/task-jobs";
+import { errorDecisionPollDue } from "../features/decision-invalidation";
 
 export type PanelSupport = "unknown" | "available" | "unsupported";
 
@@ -84,8 +89,12 @@ export const useDecisionsStore = defineStore("decisions", () => {
     lastError.value = describeError(error);
   }
 
+  /** 上一次读 /error-decisions 的时刻（轮询兜底按它判定是否到期）。 */
+  let errorDecisionsReadAt = 0;
+
   async function refreshErrorDecisions() {
     if (!conn.online) return;
+    errorDecisionsReadAt = Date.now();
     try {
       const resp = await conn.api.domains.decisions.errorDecisions();
       errorDecisions.value = resp.decisions;
@@ -94,6 +103,8 @@ export const useDecisionsStore = defineStore("decisions", () => {
     } catch (error) {
       errorDecisions.value = [];
       classify(error, errorSupport, errorLastError);
+      // 读失败（如 Host 重启期间 5001）不算校准过：下一拍照常重试
+      errorDecisionsReadAt = 0;
     }
   }
 
@@ -212,11 +223,31 @@ export const useDecisionsStore = defineStore("decisions", () => {
 
   let pollTimer: ReturnType<typeof setInterval> | null = null;
 
+  /** 轮询一拍：联锁与干预照旧；动作异常只在通知流不在线或兜底间隔到期时读。 */
+  function pollTick() {
+    void refreshIncidents();
+    void refreshInterventions();
+    if (errorDecisionPollDue(conn.workflowNoticeState === "live", errorDecisionsReadAt, Date.now())) {
+      void refreshErrorDecisions();
+    }
+  }
+
+  // 工站错误开出 / 收口（station.error_handling.changed）或 /events 重连：动作异常与镜像它的干预一起重读，
+  // 避免已处理的异常在干预列表里多挂一拍
+  watch(
+    () => conn.decisionNoticeRevision,
+    () => {
+      if (pollTimer === null) return;
+      void refreshErrorDecisions();
+      void refreshInterventions();
+    },
+  );
+
   function startPolling(intervalMs = 5000) {
     if (pollTimer !== null) return;
     void refresh();
     document.addEventListener("visibilitychange", onVisible);
-    pollTimer = setInterval(() => void refresh(), intervalMs);
+    pollTimer = setInterval(pollTick, intervalMs);
   }
 
   function stopPolling() {

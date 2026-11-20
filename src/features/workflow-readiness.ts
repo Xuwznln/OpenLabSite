@@ -1,6 +1,6 @@
 /** 参数完整度汇总：定义卡片、详情与运行前使用同一口径。 */
 import type { BackendWorkflowGraph, DeviceActionSchemaDetail } from "@openlab/protocol";
-import { missingParamEntries, type MissingParamEntry } from "./param-completeness";
+import { inventoryRequirementKeys, missingParamEntries, type MissingParamEntry } from "./param-completeness";
 import type { SiteBindings, SiteIndex } from "./site-bindings";
 
 export interface WorkflowReadiness {
@@ -33,6 +33,7 @@ export function workflowReadiness(graph: BackendWorkflowGraph,
     }).filter((path) => path && path !== "ready");
     const entries = missingParamEntries({ detail: detail ?? null, deviceId, actionName: node.action_name,
       paramJson: JSON.stringify(node.param ?? {}), mappedPaths, sites,
+      inventoryKeys: inventoryRequirementKeys(node.meta_data?.inventory_requirements),
       siteBindings: (node.meta_data?.site_bindings ?? {}) as unknown as SiteBindings,
       siteOwners: (node.meta_data?.site_binding_owners ?? {}) as Record<string, string> });
     if (entries.some((entry) => entry.reason === "site-unavailable")) result.pending = true;

@@ -28,7 +28,7 @@ import {
   type EditorOutput,
   type EditorWorkflowIo,
 } from "../features/editor-workflow-io";
-import { enumOptions } from "../features/workflow-io";
+import { enumOptions, schemaTypeLabel } from "../features/workflow-io";
 
 const props = defineProps<{
   nodeOptions: { label: string; value: string }[];
@@ -150,7 +150,7 @@ const unusedCount = computed(() => io.value.inputs.filter((item) => !props.usage
               size="small"
               @update:value="setKind(index, $event)"
             />
-            <NInput v-else value="JSON（保留原样）" size="small" disabled />
+            <NInput v-else :value="`${schemaTypeLabel(item.schema)}（保留原样）`" size="small" disabled />
           </label>
           <label class="inline">必填<NSwitch :value="Boolean(item.required)" size="small" @update:value="patchInput(index, { required: $event })" /></label>
         </div>

@@ -118,6 +118,7 @@ import {
   templateFromRegistry,
   TemplateSourceOnlyError,
   type ExpandedEdge,
+  type ExpandedGraph,
   type ExpandedNode,
   type RoleDeviceCandidate,
   type TemplateRole,
@@ -144,7 +145,7 @@ import {
   setDragPayload,
   type SpecialKind,
 } from "../features/canvas-dnd";
-import { actionSchemaDetailFromCapability, type BackendWorkflowType } from "@openlab/protocol";
+import { actionGoalKeys, actionSchemaDetailFromCapability, type BackendWorkflowType } from "@openlab/protocol";
 import { useActionParamForm } from "../features/action-param-form";
 import {
   actionParamSummary,
@@ -154,6 +155,7 @@ import {
 import {
   MISSING_PARAM_COUNTS_KEY,
   PARAM_VALIDATION_PENDING_KEY,
+  inventoryRequirementKeys,
   missingParamEntries,
 } from "../features/param-completeness";
 import {
@@ -199,9 +201,9 @@ import {
   declarationOf,
   editorIoFromDeclared,
   emptyEditorIo,
-  emptyValueOf,
   entryUsage,
   inferEntryKind,
+  mergeTemplateIo,
   normalizeEditorIo,
   referencedEntryNames,
   schemaOfKind,
@@ -812,6 +814,7 @@ const missingParamCounts = computed<Map<string, number>>(() => {
         siteOwners: (node.data.siteBindingOwners ?? {}) as Record<string, string>,
         paramJson: String(node.data.paramJson ?? "{}"),
         mappedPaths: mappedPathsByNode.value.get(node.id) ?? [],
+        inventoryKeys: inventoryRequirementKeys(node.data.requirementsJson),
       }).length,
     );
   }
@@ -824,6 +827,7 @@ provide(PARAM_VALIDATION_PENDING_KEY, computed(() => new Set(liteNodes.value.fil
   return !detail || missingParamEntries({ detail, paramJson: String(node.data.paramJson ?? "{}"),
     mappedPaths: mappedPathsByNode.value.get(node.id) ?? [], sites: siteDirectory.index,
     siteBindings: (node.data.siteBindings ?? {}) as SiteBindings,
+    inventoryKeys: inventoryRequirementKeys(node.data.requirementsJson),
   }).some((entry) => entry.reason === "site-unavailable");
 }).map((node) => node.id))));
 
@@ -2404,13 +2408,37 @@ function templateEdgeProps(mappings: ParamMapping[]) {
   };
 }
 
+/**
+ * 模板的入口参数（及绑定到步骤返回值的输出）并进画布声明：节点照搬了模板步骤里的
+ * `workflow_input` 引用，没有声明时保存 / 提交会被拦下。已绑定定义时先接管权威里的声明。
+ */
+async function adoptTemplateIo(
+  templateIo: ExpandedGraph["io"],
+  nodeIdOf: (nodeKey: string) => string | undefined,
+  templateName: string,
+) {
+  if (!templateIo || (!templateIo.inputs.length && !templateIo.outputs.length)) return;
+  const current = await ensureWorkflowIo();
+  const merged = mergeTemplateIo(current, templateIo, nodeIdOf);
+  workflowIo.value = merged.io;
+  saveDraftSoon();
+  if (merged.conflicts.length) {
+    message.warning(
+      `模板「${templateName}」的${merged.conflicts.join("、")}与画布已有声明同名但定义不同，保留画布上的；请在「入口参数」里核对`,
+      { duration: 10_000 },
+    );
+  } else if (merged.addedInputs.length) {
+    message.info(`已带入模板声明的入口参数：${merged.addedInputs.join("、")}（运行时填写，可在「入口参数」里查看）`);
+  }
+}
+
 /** 把模板展开落到画布：fillSlotId 非空 = 替换该空位并重接其上下游。 */
 function materializeTemplate(
   templateId: string,
   mapping: Record<string, string>,
   fillSlotId: string,
 ) {
-  let graph: { nodes: ExpandedNode[]; edges: ExpandedEdge[] };
+  let graph: ExpandedGraph;
   try {
     graph = expandTemplate(templateId, templateRegistry.value);
   } catch (err) {
@@ -2592,6 +2620,7 @@ function materializeTemplate(
   message.success(
     slot ? `已用模板「${tplName}」填充空位` : `已插入模板「${tplName}」（成组）`,
   );
+  void adoptTemplateIo(graph.io, resolveExpandedRef, tplName);
 }
 
 // ── 分组：组框操作（GroupNode 经 provide 调回来） ──
@@ -3250,6 +3279,7 @@ function confirmSaveTemplate() {
         target: e.target,
         mappings: e.data?.mappings ?? [],
       })),
+    workflowIo.value,
   );
   userTemplates.value = [...userTemplates.value, tpl];
   persistUserTemplates();
@@ -3666,7 +3696,8 @@ function evalBranch(data: Record<string, unknown>): boolean | null {
   const variableIdText = String(data.variableId ?? "");
   if (!variableIdText) return null;
   const lhs = variableValueOf(variableIdText);
-  if (lhs === undefined) return null;
+  // 变量不存在或还没填值（null）：不能求值，不拿空值去比较
+  if (lhs === undefined || lhs === null) return null;
   const op = String(data.op ?? "==");
   const rhsRaw = String(data.value ?? "");
   const numeric =
@@ -3728,7 +3759,7 @@ function buildSubmitGraph():
     const verdict = evalBranch(branch.data);
     if (verdict === null) {
       return {
-        error: `条件分支 ${branch.id} 未配置条件或引用的变量不存在，先点击该节点完成配置`,
+        error: `条件分支 ${branch.id} 未配置条件，或引用的变量不存在 / 还没填值，先点击该节点完成配置`,
       };
     }
     const chosenHandle = verdict ? "out-true" : "out-false";
@@ -4450,7 +4481,8 @@ const panelEntryKeyOptions = computed(() => {
   const param = panelParamObject();
   if (!param) return [];
   const bound = new Set(panelEntryRefs.value.map(([key]) => key));
-  return Object.keys(param)
+  // 参数里还没有值的 schema 参数（必填未填）也可以直接改为入口参数
+  return [...new Set([...Object.keys(param), ...actionGoalKeys({ schema: paramForm.schemaDetail.value?.schema ?? null })])]
     .filter((key) => !bound.has(key))
     .map((key) => {
       const title = paramForm.fieldMeta(key).title;
@@ -4505,13 +4537,11 @@ async function bindPanelParamToEntry() {
   message.success(`参数 ${key} 已改为引用入口参数「${name}」：每次运行时填写（可在「入口参数」里改类型 / 默认值）`);
 }
 
+/** 解除入口参数引用：入口参数有默认值就写回它，否则参数留空待填（不编 0 / 空串 / {}）。 */
 function unbindPanelParam(key: string, name: string) {
   const parameter = workflowIo.value?.inputs.find((item) => item.name === name);
-  const value: JsonValue = parameter
-    ? Object.prototype.hasOwnProperty.call(parameter, "default")
-      ? (parameter.default ?? null)
-      : emptyValueOf(parameter.schema)
-    : "";
+  const value: JsonValue | undefined =
+    parameter && Object.prototype.hasOwnProperty.call(parameter, "default") ? (parameter.default ?? null) : undefined;
   try {
     editParam.value = unbindParamFromEntry(editParam.value, key, value);
   } catch {
@@ -4520,7 +4550,11 @@ function unbindPanelParam(key: string, name: string) {
   }
   applyPanelParamToNode();
   commitHistory();
-  message.info(`参数 ${key} 已改回固定值 ${JSON.stringify(value)}`);
+  message.info(
+    value === undefined
+      ? `参数 ${key} 已解除引用，入口参数没有默认值：请在参数里填写`
+      : `参数 ${key} 已改回固定值 ${JSON.stringify(value)}（入口参数的默认值）`,
+  );
 }
 
 // ── 插入已发布的工作流（组合调用） ──

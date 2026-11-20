@@ -195,11 +195,12 @@ async function submitRun() {
     await runForm.reload();
     await siteDirectory.refresh();
     if (!runForm.schemaDetail.value) throw new Error("动作定义不可用，参数待校验");
+    // 必填参数空着 / 引用未选 / Site 未确认都在这里拦下：前端不替没给值的参数编 0、空串或 {}
     const issues = missingParamEntries({ detail: runForm.schemaDetail.value, paramJson: runParamJson.value,
       mappedPaths: [], sites: siteDirectory.index, siteBindings: runSiteBindings.value,
       deviceId: runDeviceId.value, actionName: runActionName.value,
-    }).filter((entry) => entry.reason.startsWith("site-"));
-    if (issues.length) throw new Error(issues.map((entry) => entry.label).join("；"));
+    });
+    if (issues.length) throw new Error(`参数未填完，不能提交：${issues.map((entry) => entry.label).join("；")}`);
     const param = JSON.parse(runParamJson.value) as JsonObject;
     const task = await conn.api.domains.workflowBackend.createTask({
       execution_kind: "ad_hoc_device_action",

@@ -333,6 +333,91 @@ describe("设备包模板里的人工物料 / 分组 / 源码写法", () => {
     expect(templateProcedure(tpl).map((step) => step.kind)).toEqual(["action", "loop", "condition", "action"]);
   });
 
+  it("入口参数声明随模板走：templateFromRegistry 读 io，展开结果带出声明（输出 key 换成展开后的）", () => {
+    // 「资源演示：样品托管」：sample 是物料入口参数（ResourceSlot），vessel 有默认值；sample 有隐式透传输出
+    const ref = (parameter: string) => ({ kind: "workflow_input", parameter });
+    const entry: RegistryWorkflowTemplate = {
+      ...base,
+      id: "complex_workflow_demo.workflows:sample_custody",
+      uuid: "db7d5882-b715-53d7-9580-bdfcd23ce410",
+      display_name: "资源演示：样品托管",
+      nodes: [
+        { key: "step-0", kind: "action", role: "robot", action_name: "load_sample", name: "装载样品", param: { sample: ref("sample"), vessel: ref("vessel") } },
+        { key: "step-1", kind: "action", role: "robot", action_name: "report", name: "汇总", param: {} },
+      ],
+      edges: [{ source: "step-0", target: "step-1" }],
+      io: {
+        input_contract: {
+          version: 1,
+          parameters: [
+            { name: "sample", schema: { $slot: "ResourceSlot" }, required: true },
+            { name: "vessel", schema: { type: "string" }, required: false, default: "reactor", unit: "", extra: "dropped" },
+          ],
+        },
+        output_contract: {
+          version: 1,
+          outputs: [
+            { name: "sample", schema: { $slot: "ResourceSlot" }, implicit: true },
+            { name: "summary", schema: { type: "object" }, title: "汇总", implicit: false },
+          ],
+        },
+        output_bindings: {
+          sample: ref("sample"),
+          summary: { kind: "node_output", node_key: "step-1", data_key: "" },
+        },
+      },
+    };
+    const tpl = templateFromRegistry(entry);
+    expect(tpl.io).toEqual({
+      inputs: [
+        { name: "sample", schema: { $slot: "ResourceSlot" }, required: true },
+        { name: "vessel", schema: { type: "string" }, required: false, default: "reactor", unit: "" },
+      ],
+      outputs: [{ name: "summary", schema: { type: "object" }, title: "汇总", nodeKey: "step-1", dataKey: "" }],
+    });
+
+    // 作为嵌套模板展开：步骤 key 带前缀；外层模板自己的声明在前
+    const outer: WorkflowTemplate = {
+      id: "user-outer",
+      name: "外层",
+      description: "",
+      roles: [],
+      nodes: [{ key: "inner", kind: "template", templateId: tpl.id }],
+      edges: [],
+      io: { inputs: [{ name: "vessel", schema: { type: "string" }, required: true }], outputs: [] },
+    };
+    const registry = buildTemplateRegistry([outer], [tpl]);
+    expect(expandTemplate(tpl.id, registry).io).toEqual(tpl.io);
+    const nested = expandTemplate(outer.id, registry);
+    expect(nested.nodes.map((n) => n.key)).toEqual(["inner.step-0", "inner.step-1"]);
+    expect(nested.io).toEqual({
+      inputs: [
+        { name: "vessel", schema: { type: "string" }, required: true },
+        { name: "sample", schema: { $slot: "ResourceSlot" }, required: true },
+      ],
+      outputs: [],
+    });
+
+    // 画布存为模板时声明一起存下，输出按节点 id（= 模板步骤 key）
+    const saved = templateFromCanvas(
+      { id: "user-2", name: "托管", description: "" },
+      [{ id: "n1", type: "action", data: { deviceId: "reactor", actionName: "load_sample", paramJson: JSON.stringify({ sample: ref("sample") }) } }],
+      [],
+      {
+        inputs: [{ name: "sample", schema: { $slot: "ResourceSlot" }, required: true }],
+        outputs: [
+          { name: "loaded", schema: { type: "boolean" }, nodeId: "n1", dataKey: "loaded" },
+          { name: "gone", schema: { type: "number" }, nodeId: "removed", dataKey: "" },
+        ],
+      },
+    );
+    expect(saved.io).toEqual({
+      inputs: [{ name: "sample", schema: { $slot: "ResourceSlot" }, required: true }],
+      outputs: [{ name: "loaded", schema: { type: "boolean" }, nodeKey: "n1", dataKey: "loaded" }],
+    });
+    expect(expandTemplate(saved.id, buildTemplateRegistry([saved], [])).io).toEqual(saved.io);
+  });
+
   it("画布存为模板：人工物料节点带参数原样保存", () => {
     const tpl = templateFromCanvas({ id: "user-1", name: "我的", description: "" }, [
       { id: "n1", type: "material_io", data: { label: "补量", param: { mode: "refill", mount: "deck", site: "B1", material: "bottle", reagent: { quantity: 5, quantity_unit: "mL" }, assignee_user_ids: [] } } },

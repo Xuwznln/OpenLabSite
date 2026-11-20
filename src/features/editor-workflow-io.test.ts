@@ -6,6 +6,8 @@ import {
   editorIoFromDeclared,
   entryUsage,
   inferEntryKind,
+  isResourceSlotSchema,
+  mergeTemplateIo,
   normalizeEditorIo,
   planIoSave,
   referencedEntryNames,
@@ -29,6 +31,8 @@ describe("画布入口参数的引用", () => {
     const bound = bindParamToEntry('{"volume": 1, "speed": 2}', "volume", "volume");
     expect(JSON.parse(bound)).toEqual({ volume: { kind: "workflow_input", parameter: "volume" }, speed: 2 });
     expect(JSON.parse(unbindParamFromEntry(bound, "volume", 5))).toEqual({ volume: 5, speed: 2 });
+    // 入口参数没有默认值：解除引用后参数留空待填，不编 0 / 空串 / {}
+    expect(JSON.parse(unbindParamFromEntry(bound, "volume", undefined))).toEqual({ speed: 2 });
     expect(() => bindParamToEntry("[1]", "x", "y")).toThrow();
   });
 
@@ -111,5 +115,68 @@ describe("声明与校验", () => {
     expect(plan.before?.input_contract.parameters.map((item) => item.name)).toEqual(["volume", "speed", "old"]);
     expect(plan.before?.output_contract.outputs).toEqual([]);
     expect(plan.before?.output_bindings).toEqual({});
+  });
+});
+
+describe("从画布插入模板：带入模板的入口参数声明", () => {
+  const SAMPLE: BackendWorkflowInputParameter = { name: "sample", schema: { $slot: "ResourceSlot" }, required: true };
+  const VESSEL: BackendWorkflowInputParameter = { name: "vessel", schema: { type: "string" }, required: false, default: "reactor" };
+  const passthrough = { name: "sample", schema: { $slot: "ResourceSlot" }, implicit: true };
+
+  it("合并：新参数并入、同名同定义跳过、同名不同定义保留画布的并报告；输出按展开 key 找画布节点", () => {
+    const template = {
+      inputs: [SAMPLE, VESSEL],
+      outputs: [
+        { name: "loaded", schema: { type: "boolean" }, nodeKey: "step-0", dataKey: "loaded" },
+        { name: "orphan", schema: { type: "number" }, nodeKey: "missing", dataKey: "" },
+      ],
+    };
+    const ids = new Map([["step-0", "n7"]]);
+    const first = mergeTemplateIo({ inputs: [], outputs: [] }, template, (key) => ids.get(key));
+    expect(first.io).toEqual({
+      inputs: [SAMPLE, VESSEL],
+      outputs: [{ name: "loaded", schema: { type: "boolean" }, nodeId: "n7", dataKey: "loaded" }],
+    });
+    expect([first.addedInputs, first.addedOutputs, first.conflicts]).toEqual([["sample", "vessel"], ["loaded"], []]);
+
+    // 同一模板再插一次：入口参数共用，输出名已占用
+    const again = mergeTemplateIo(first.io, template, (key) => (key === "step-0" ? "n9" : undefined));
+    expect(again.io.inputs).toEqual([SAMPLE, VESSEL]);
+    expect(again.addedInputs).toEqual([]);
+    expect(again.conflicts).toEqual(["输出「loaded」"]);
+
+    const clash = mergeTemplateIo({ inputs: [{ ...VESSEL, schema: { type: "number" } }], outputs: [] }, { inputs: [VESSEL], outputs: [] }, () => undefined);
+    expect(clash.io.inputs[0].schema).toEqual({ type: "number" });
+    expect(clash.conflicts).toEqual(["入口参数「vessel」"]);
+  });
+
+  it("物料入口参数自动带同名透传输出（核心要求），读回时不当成被丢掉的输出", () => {
+    expect(isResourceSlotSchema({ $slot: "ResourceSlot" })).toBe(true);
+    expect(isResourceSlotSchema({ type: "array", items: { $slot: "ResourceSlot" } })).toBe(true);
+    expect(isResourceSlotSchema({ anyOf: [{ $slot: "ResourceSlot" }, { type: "null" }] })).toBe(true);
+    expect(isResourceSlotSchema({ type: "string" })).toBe(false);
+
+    const declaration = declarationOf({ inputs: [SAMPLE, VESSEL], outputs: [] }, () => undefined);
+    expect(declaration.output_contract.outputs).toEqual([passthrough]);
+    expect(declaration.output_bindings).toEqual({ sample: { kind: "workflow_input", parameter: "sample" } });
+
+    // 显式同名输出优先，不再补透传
+    const explicit = declarationOf(
+      { inputs: [SAMPLE], outputs: [{ name: "sample", schema: { $slot: "ResourceSlot" }, nodeId: "n1", dataKey: "sample" }] },
+      () => "uuid-1",
+    );
+    expect(explicit.output_contract.outputs).toEqual([{ name: "sample", schema: { $slot: "ResourceSlot" } }]);
+
+    // 存图前的过渡合同同样带透传输出，否则核心按 workflow_io_invalid 拒绝
+    const plan = planIoSave(declaredWorkflowIo({ meta_data: {} }), declaration, new Set(["sample", "vessel"]));
+    expect(plan.before?.output_contract.outputs).toEqual([passthrough]);
+    expect(plan.before?.output_bindings).toEqual({ sample: { kind: "workflow_input", parameter: "sample" } });
+
+    // 「从模板创建」的工作流读回编辑器：透传输出不报 dropped，再次声明时原样补回
+    const declared = declaredWorkflowIo({ meta_data: { unilab: { ...declaration } } });
+    const { io: back, droppedOutputs } = editorIoFromDeclared(declared, () => undefined);
+    expect(droppedOutputs).toEqual([]);
+    expect(back).toEqual({ inputs: [SAMPLE, VESSEL], outputs: [] });
+    expect(sameDeclaration(declared, declarationOf(back, () => undefined))).toBe(true);
   });
 });

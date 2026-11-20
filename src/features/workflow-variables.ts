@@ -67,11 +67,13 @@ export function alignListGroups(
   });
 }
 
+/**
+ * 新建 / 读回时没有值的变量：标量留空（null，同步进节点时不写这个参数），列表是空表。
+ * 不编 0 / false / ""——必填参数空着由提交前校验拦下。
+ */
 export function defaultVariableValue(type: WorkflowVariableType): unknown {
-  if (type === "number") return 0;
-  if (type === "boolean") return false;
   if (type.startsWith("list:")) return [];
-  return "";
+  return null;
 }
 
 export function variableId(nodeId: string, path: string): string {
@@ -141,6 +143,21 @@ export function writePath(
   current[segments[segments.length - 1]] = value;
 }
 
+/** 删掉点路径上的叶子（参数「未填」= 键不存在，不写 null / 空值）。路径不存在时什么也不做。 */
+export function deletePath(root: Record<string, unknown>, path: string): void {
+  const segments = path.split(".").filter(Boolean);
+  if (!segments.length) return;
+  let current: unknown = root;
+  for (const segment of segments.slice(0, -1)) {
+    if (current === null || typeof current !== "object" || Array.isArray(current)) return;
+    current = (current as Record<string, unknown>)[segment];
+  }
+  if (current !== null && typeof current === "object" && !Array.isArray(current)) {
+    delete (current as Record<string, unknown>)[segments[segments.length - 1]];
+  }
+}
+
+/** 标量变量：空值（null / undefined；数字与是否还包括空串）一律为 null = 未填，不当成 0 / false。 */
 export function coerceVariableValue(
   type: WorkflowVariableType,
   value: unknown,
@@ -151,6 +168,7 @@ export function coerceVariableValue(
     return Number.isFinite(parsed) ? parsed : null;
   }
   if (type === "boolean") {
+    if (value === "" || value === null || value === undefined) return null;
     if (typeof value === "string") {
       return ["true", "1", "yes", "是"].includes(value.trim().toLowerCase());
     }
@@ -168,7 +186,7 @@ export function coerceVariableValue(
       item === null || item === undefined ? "" : String(item),
     );
   }
-  return value === null || value === undefined ? "" : String(value);
+  return value === null || value === undefined ? null : String(value);
 }
 
 export function parseNodeParam(paramJson: string): Record<string, unknown> {
@@ -185,11 +203,10 @@ export function applyVariablesToParam(
 ): Record<string, unknown> {
   const param = parseNodeParam(paramJson);
   for (const variable of variables) {
-    writePath(
-      param,
-      variable.path,
-      coerceVariableValue(variable.type, variable.value),
-    );
+    const value = coerceVariableValue(variable.type, variable.value);
+    // 未填的标量变量不写进参数（键不存在 = 未填，提交前校验按必填口径拦下）
+    if (value === null) deletePath(param, variable.path);
+    else writePath(param, variable.path, value);
   }
   return param;
 }

@@ -1,5 +1,21 @@
 # Changelog
 
+## 4.0.1：快照对齐 unilabos 0.13.0a2；动作初始参数不再编空值
+
+### OpenAPI 快照
+
+- `openapi/unilabos-openapi.json` 由 `pnpm --filter @openlab/protocol openapi:sync` 从 unilabos 0.13.0a2 的
+  `python -m unilabos.server.openapi_export` 重新导出（发行版 0.13.0a2 与 dev `d56c1809` 的导出逐字节相同）。
+  相对 0.13.0rc1 的快照只有 `info.version` / `x-openlab-protocol.unilabos_version` 变化：路由、operation、角色与
+  schema 都不变，仍是 355 条操作 = 237 浏览器目录 + 36 控制面 + 82 暂未采用；生成类型不变。
+
+### 客户端修复
+
+- `actionParameterTemplate(detail)` 只放后端声明过的默认值（goal schema 属性的 `default`，再叠加注册表的
+  `goal_default`），返回拷贝。此前没有默认值的属性按类型补成 `0` / `""` / `false` / `[]` / `{}`，这些值会被当成
+  操作员填的参数提交给设备；现在它们不出现，必填参数由调用方留空并在提交前按 `schema.properties.goal.required` 校验。
+  依赖「模板里包含全部 goal 键」的调用方需要改为按 schema 列字段。
+
 ## 4.0.0：跟上合并进 dev 的 Uni-Lab-OS 核心（破坏性）
 
 面向合并进 Uni-Lab-OS `dev` 的统一核心（deepmodeling/Uni-Lab-OS#361 squash 合并后的 `dev`，unilabos 0.13.0rc1）。
@@ -233,6 +249,8 @@
 
 | @openlab/protocol | 线上协议 | 最低 unilabos | 说明 |
 | --- | --- | --- | --- |
+| 4.0.1 | `/api/v1`（V1.0 合同）+ `/v1/*` 进程管理 | 0.13.0rc1（合并进 `dev` 的统一核心，deepmodeling/Uni-Lab-OS#361） | 不鉴权 / 全路由 V1 信封 / 物料 name = uuid；快照对应 0.13.0a2（路由与 schema 同 0.13.0rc1） |
+| 4.0.0 | `/api/v1`（V1.0 合同）+ `/v1/*` 进程管理 | 0.13.0rc1（合并进 `dev` 的统一核心，deepmodeling/Uni-Lab-OS#361） | 不鉴权 / 全路由 V1 信封 / 物料 name = uuid；快照对应 0.13.0rc1 |
 | 3.0.0 | `/api/v1`（V1.0 合同）+ `/v1/*` 进程管理 | 0.13.0rc1（统一分支，deepmodeling/Uni-Lab-OS#361） | V1 信封 / `X-UniLab-Token` / 库存命令；快照对应 0.13.0rc1，不兼容 0.12.x |
 | 2.0.0 | `/api/v1` | 0.12.3（第一个包含 Site 导入策略、逐步执行与统一日志接口的发行版） | 首个按微后端四库 + 权威模型重写的版本；快照 `openapi/unilabos-openapi.json` 对应 unilabos 0.12.3 |
 

@@ -3,7 +3,10 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  applyVariablesToParam,
   buildParameterTableMeta,
+  coerceVariableValue,
+  defaultVariableValue,
   parseParameterTableMeta,
   type WorkflowVariable,
 } from "./workflow-variables";
@@ -67,6 +70,28 @@ describe("parameter_table 序列化与恢复", () => {
     });
     expect(restored).toHaveLength(1);
     expect(restored[0].id).toBe("ok");
-    expect(restored[0].value).toBe("");
+    // 没有值的标量变量是「未填」，不补空串
+    expect(restored[0].value).toBeNull();
+  });
+});
+
+describe("参数表变量不替参数编值", () => {
+  it("没有值的标量变量是 null（不是 0 / false / 空串），列表是空表", () => {
+    expect(["number", "boolean", "string", "list:number"].map((type) => defaultVariableValue(type as WorkflowVariable["type"])))
+      .toEqual([null, null, null, []]);
+    expect(coerceVariableValue("boolean", "")).toBeNull();
+    expect(coerceVariableValue("number", "")).toBeNull();
+    expect(coerceVariableValue("string", null)).toBeNull();
+    expect(coerceVariableValue("boolean", "是")).toBe(true);
+  });
+
+  it("同步进节点：未填的变量删掉参数里的键，填了的照写", () => {
+    const pinned = (path: string, type: WorkflowVariable["type"], value: unknown): WorkflowVariable =>
+      ({ id: `n1_${path}`, label: path, nodeId: "n1", path, type, value });
+    const param = applyVariablesToParam(
+      JSON.stringify({ temp: 60, active: true, note: "x", nested: { volume: 1 } }),
+      [pinned("temp", "number", null), pinned("active", "boolean", null), pinned("note", "string", "y"), pinned("nested.volume", "number", "")],
+    );
+    expect(param).toEqual({ note: "y", nested: {} });
   });
 });
