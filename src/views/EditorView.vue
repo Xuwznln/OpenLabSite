@@ -118,6 +118,7 @@ import {
   templateFromRegistry,
   TemplateSourceOnlyError,
   type ExpandedEdge,
+  type ExpandedGraph,
   type ExpandedNode,
   type RoleDeviceCandidate,
   type TemplateRole,
@@ -203,6 +204,7 @@ import {
   emptyValueOf,
   entryUsage,
   inferEntryKind,
+  mergeTemplateIo,
   normalizeEditorIo,
   referencedEntryNames,
   schemaOfKind,
@@ -2407,13 +2409,37 @@ function templateEdgeProps(mappings: ParamMapping[]) {
   };
 }
 
+/**
+ * 模板的入口参数（及绑定到步骤返回值的输出）并进画布声明：节点照搬了模板步骤里的
+ * `workflow_input` 引用，没有声明时保存 / 提交会被拦下。已绑定定义时先接管权威里的声明。
+ */
+async function adoptTemplateIo(
+  templateIo: ExpandedGraph["io"],
+  nodeIdOf: (nodeKey: string) => string | undefined,
+  templateName: string,
+) {
+  if (!templateIo || (!templateIo.inputs.length && !templateIo.outputs.length)) return;
+  const current = await ensureWorkflowIo();
+  const merged = mergeTemplateIo(current, templateIo, nodeIdOf);
+  workflowIo.value = merged.io;
+  saveDraftSoon();
+  if (merged.conflicts.length) {
+    message.warning(
+      `模板「${templateName}」的${merged.conflicts.join("、")}与画布已有声明同名但定义不同，保留画布上的；请在「入口参数」里核对`,
+      { duration: 10_000 },
+    );
+  } else if (merged.addedInputs.length) {
+    message.info(`已带入模板声明的入口参数：${merged.addedInputs.join("、")}（运行时填写，可在「入口参数」里查看）`);
+  }
+}
+
 /** 把模板展开落到画布：fillSlotId 非空 = 替换该空位并重接其上下游。 */
 function materializeTemplate(
   templateId: string,
   mapping: Record<string, string>,
   fillSlotId: string,
 ) {
-  let graph: { nodes: ExpandedNode[]; edges: ExpandedEdge[] };
+  let graph: ExpandedGraph;
   try {
     graph = expandTemplate(templateId, templateRegistry.value);
   } catch (err) {
@@ -2595,6 +2621,7 @@ function materializeTemplate(
   message.success(
     slot ? `已用模板「${tplName}」填充空位` : `已插入模板「${tplName}」（成组）`,
   );
+  void adoptTemplateIo(graph.io, resolveExpandedRef, tplName);
 }
 
 // ── 分组：组框操作（GroupNode 经 provide 调回来） ──
@@ -3253,6 +3280,7 @@ function confirmSaveTemplate() {
         target: e.target,
         mappings: e.data?.mappings ?? [],
       })),
+    workflowIo.value,
   );
   userTemplates.value = [...userTemplates.value, tpl];
   persistUserTemplates();
