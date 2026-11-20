@@ -1,4 +1,4 @@
-export const OPENLAB_PROTOCOL_VERSION = "4.0.0" as const;
+export const OPENLAB_PROTOCOL_VERSION = "4.0.1" as const;
 export const OPENLAB_API_PREFIX = "/api/v1" as const;
 /** V1 进程管理路由（原 Workspace Host 合同）不带 `/api` 前缀，与其它路由一样是 V1 信封。 */
 export const OPENLAB_PROCESS_MANAGEMENT_PREFIX = "/v1" as const;

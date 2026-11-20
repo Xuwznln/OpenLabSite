@@ -7,7 +7,7 @@
 视角，`python -m unilabos.server.openapi_export` 离线导出两种角色的路由全集（带 `x-openlab-role`）。
 导出快照提交在协议包（`packages/protocol/openapi/unilabos-openapi.json`）并生成 TypeScript 类型；
 `catalog.ts` 登记浏览器会调用的子集，契约校验保证目录 ⊆ 导出、导出 = 目录 ∪ 控制面清单 ∪「浏览器暂未采用」
-清单（当前快照 unilabos 0.13.0rc1：355 条操作 = 237 浏览器 + 36 控制面 + 82 暂未采用）；
+清单（当前快照 unilabos 0.13.0a2：355 条操作 = 237 浏览器 + 36 控制面 + 82 暂未采用）；
 协议测试把客户端方法与目录双向比对。任一环变更必须同一变更集内对齐
 （[conventions.md §11](./conventions.md#11-契约治理新增或修改一个端点)）。
 
