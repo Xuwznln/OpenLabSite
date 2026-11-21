@@ -1,8 +1,10 @@
 <script setup lang="ts">
 /**
- * 按入口参数合同生成的表单：数字 / 整数 / 文本 / 是否 / 选项 / 物料，不认识的 Schema 走 JSON 文本。
+ * 按入口参数合同生成的表单：数字 / 整数 / 文本 / 是否 / 选项 / 物料 / 设备 / 库位，不认识的 Schema 走 JSON 文本。
  * 物料（`$slot: ResourceSlot`）用与节点参数浮层同源的物料选择器（features/material-options.ts），
  * 值写成 `{id: resource_id, uuid}`；物料目录读不到时退回 JSON 文本。
+ * 设备（`$slot: DeviceSlot`）选在线设备 id，库位（`$slot: SiteSlot`）选物料树上的 Site uuid，数据源与节点参数浮层相同；
+ * 读不到目录时退回文本输入。
  * 表单值语义见 features/workflow-io.ts（null = 未填；JSON 存文本）。
  */
 import { computed, ref, shallowRef, watch } from "vue";
@@ -11,12 +13,14 @@ import type { BackendWorkflowInputParameter, MaterialsV1Aggregate } from "@openl
 import { useConnectionStore } from "../stores/connection";
 import { resourceRefLabel, resourceRefUuid, resourceRefValue } from "../features/action-placeholders";
 import { materialOptionsFrom, type MaterialOption } from "../features/material-options";
+import { SiteIndex } from "../features/site-bindings";
 import {
   allowedResourceTemplates,
   entryFieldKind,
   entryValueText,
   enumOptions,
   isResourceEntryKind,
+  isSlotEntryKind,
   schemaTypeLabel,
   type EntryFormValues,
 } from "../features/workflow-io";
@@ -80,7 +84,13 @@ const conn = useConnectionStore();
 const materials = shallowRef<readonly MaterialsV1Aggregate[]>([]);
 const materialsLoading = ref(false);
 const materialsError = ref("");
-const needsMaterials = computed(() => props.parameters.some((parameter) => isResourceEntryKind(entryFieldKind(parameter.schema))));
+// 库位选项来自同一份物料聚合（sites），所以库位参数也要读物料目录
+const needsMaterials = computed(() =>
+  props.parameters.some((parameter) => {
+    const kind = entryFieldKind(parameter.schema);
+    return isResourceEntryKind(kind) || kind === "site";
+  }),
+);
 
 async function loadMaterials() {
   materialsLoading.value = true;
@@ -138,6 +148,65 @@ function resourceText(name: string): string {
   const value = values.value[name];
   if (value === null || value === undefined) return "";
   return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+// ── 设备 / 库位入口参数：值是字符串（设备 id / Site uuid），选项与节点参数浮层同源 ──
+
+const devices = shallowRef<string[]>([]);
+const devicesLoading = ref(false);
+const devicesError = ref("");
+const needsDevices = computed(() => props.parameters.some((parameter) => entryFieldKind(parameter.schema) === "device"));
+
+async function loadDevices() {
+  devicesLoading.value = true;
+  try {
+    const endpoints = await conn.api.domains.runtimeV1.endpoints();
+    devices.value = [
+      ...new Set(
+        endpoints
+          .filter((endpoint) => endpoint.state === "online")
+          .flatMap((endpoint) => endpoint.device_routes)
+          .filter((route) => route.enabled && route.selected)
+          .map((route) => route.device_uuid),
+      ),
+    ].sort();
+    devicesError.value = "";
+  } catch {
+    devices.value = [];
+    devicesError.value = "在线设备拉取失败，请直接填写设备 id";
+  } finally {
+    devicesLoading.value = false;
+  }
+}
+
+watch(needsDevices, (need) => {
+  if (need) void loadDevices();
+}, { immediate: true });
+
+const siteIndex = computed(() => new SiteIndex(materials.value));
+
+function slotValue(name: string): string | null {
+  const value = values.value[name];
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+/** 选项：设备 = 在线设备 id；库位 = 物料树上的 Site（「物料 · 标签」）。当前值不在目录里时补一条「（当前值）」。 */
+function slotOptions(parameter: BackendWorkflowInputParameter): { label: string; value: string }[] {
+  const options =
+    entryFieldKind(parameter.schema) === "device"
+      ? devices.value.map((id) => ({ label: id, value: id }))
+      : siteIndex.value.sites.map((site) => ({ label: site.label, value: site.value }));
+  const current = slotValue(parameter.name);
+  if (current && !options.some((option) => option.value === current)) options.unshift({ label: `${current}（当前值）`, value: current });
+  return options;
+}
+
+function slotError(parameter: BackendWorkflowInputParameter): string {
+  return entryFieldKind(parameter.schema) === "device" ? devicesError.value : materialsError.value ? "库位目录拉取失败，请直接填写 Site uuid" : "";
+}
+
+function slotLoading(parameter: BackendWorkflowInputParameter): boolean {
+  return entryFieldKind(parameter.schema) === "device" ? devicesLoading.value : materialsLoading.value;
 }
 </script>
 
@@ -223,6 +292,29 @@ function resourceText(name: string): string {
           @update:value="setResource(parameter, $event)"
         />
       </template>
+      <template v-else-if="isSlotEntryKind(entryFieldKind(parameter.schema))">
+        <NInput
+          v-if="slotError(parameter)"
+          :value="String(values[parameter.name] ?? '')"
+          :placeholder="placeholderOf(parameter)"
+          :disabled="props.disabled"
+          size="small"
+          @update:value="set(parameter.name, $event)"
+        />
+        <NSelect
+          v-else
+          class="entry-resource"
+          :value="slotValue(parameter.name)"
+          :options="slotOptions(parameter)"
+          :loading="slotLoading(parameter)"
+          :placeholder="`${entryFieldKind(parameter.schema) === 'device' ? '选择设备' : '选择库位'} · ${placeholderOf(parameter)}`"
+          :disabled="props.disabled"
+          filterable
+          clearable
+          size="small"
+          @update:value="set(parameter.name, $event ?? null)"
+        />
+      </template>
       <NInput
         v-else
         :value="String(values[parameter.name] ?? '')"
@@ -237,6 +329,7 @@ function resourceText(name: string): string {
       <div v-if="props.fieldErrors[parameter.name]" class="entry-error">{{ props.fieldErrors[parameter.name] }}</div>
       <div v-else-if="props.hints[parameter.name]" class="entry-hint">{{ props.hints[parameter.name] }}</div>
       <div v-else-if="isResourceEntryKind(entryFieldKind(parameter.schema)) && materialsError" class="entry-hint">{{ materialsError }}</div>
+      <div v-else-if="isSlotEntryKind(entryFieldKind(parameter.schema)) && slotError(parameter)" class="entry-hint">{{ slotError(parameter) }}</div>
       <div v-else-if="parameter.description" class="entry-hint">{{ parameter.description }}</div>
     </div>
   </div>
