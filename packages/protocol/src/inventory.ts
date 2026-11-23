@@ -246,6 +246,17 @@ export function materialDataWrite(value: MaterialsV1DataWrite): JsonObject {
   };
 }
 
+/**
+ * MaterialTreeCreate 写入体：节点原样（调用方给全字段），树级 `placement` 补成后端 dump 的形状
+ * （`null`，或 `{parent_material_uuid, site}` 且 `site` 缺省为 `null`）。
+ */
+export function materialTreeCreateWrite(value: MaterialsV1TreeCreate): JsonObject {
+  const placement = value.placement
+    ? { parent_material_uuid: value.placement.parent_material_uuid, site: value.placement.site ?? null }
+    : null;
+  return { nodes: value.nodes as unknown as JsonValue[], placement };
+}
+
 /** MaterialPosition 完整写入体（PUT 语义：没给的字段回到缺省值；position_x/y/z 要么全给要么全空）。 */
 export function materialPositionWrite(value: MaterialsV1PositionWrite): JsonObject {
   return {
@@ -468,10 +479,11 @@ export function createInventoryApi(http: HttpTransport) {
       ),
     /**
      * 直接提交一棵完整的创建树（本地已有草稿时使用；出库请用 instantiate）。命令入口按类型化请求体的
-     * 完整 dump 比对，节点的 identity / position / data / sites 须带全字段（与后端缺省值一致）。
+     * 完整 dump 比对，节点的 identity / position / data / sites 须带全字段（与后端缺省值一致）；树级的
+     * `placement`（建树同一事务里落位）由这里补齐：省略即 `null`，给了落位则 `site` 缺省补 `null`。
      */
     createTree: (value: MaterialsV1TreeCreate, options?: MaterialsV1MutationOptions) =>
-      mutate<MaterialsV1Tree>("create_material_tree", value, options),
+      mutate<MaterialsV1Tree>("create_material_tree", materialTreeCreateWrite(value), options),
     /**
      * 标识字段局部更新。服务端把 payload 与 MaterialPatch 的完整 dump 逐字段比对，
      * 未设置的字段必须显式为 null，这里统一补齐（只传 {barcode} 也能通过）。`name`（= uuid）不可改，

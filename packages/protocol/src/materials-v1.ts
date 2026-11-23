@@ -280,9 +280,20 @@ export interface MaterialsV1NodeCreate {
   sites?: MaterialsV1SiteCreate[];
 }
 
-/** 一棵待创建的物料树：parent-first，恰好一个根。 */
+/**
+ * 新建根物料的落位（`MaterialPlacement`）：挂到哪个父物料、占它的哪个库位，与建树在同一事务里提交。
+ * `site` 是父物料上的库位选择器（Site uuid、label 或数字索引）；省略 / `null` 只落父子关系、不占库位。
+ * 落位规则与 move 相同（库位占用、模板类别、入口预留、设备子树只收 PLR 物料），不满足时整棵树一起回滚。
+ */
+export interface MaterialsV1Placement {
+  parent_material_uuid: string;
+  site?: string | number | null;
+}
+
+/** 一棵待创建的物料树：parent-first，恰好一个根；`placement` 省略 / `null` 时根物料不挂任何父物料。 */
 export interface MaterialsV1TreeCreate {
   nodes: MaterialsV1NodeCreate[];
+  placement?: MaterialsV1Placement | null;
 }
 
 /** 标识字段局部更新；`name`（= uuid）不可修改，改人读标签用 `display_name`。 */

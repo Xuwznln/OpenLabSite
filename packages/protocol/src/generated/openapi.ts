@@ -12959,6 +12959,12 @@ export interface operations {
         parameters: {
             query?: {
                 barcode?: string;
+                /** @description material = 非设备物料；device = 设备 */
+                category?: string | null;
+                /** @description 只要没有任何内容登记的物料 */
+                empty_containers_only?: boolean;
+                /** @description current | history（离站物料，本后端恒为空） */
+                inventory_scope?: string;
                 name?: string;
                 page?: number;
                 page_size?: number;
@@ -13638,7 +13644,12 @@ export interface operations {
     };
     material_graph_api_v1_materials_graph_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description current | history（本后端恒为空） */
+                inventory_scope?: string;
+                /** @description 增量重读：只要这些物料（连同库位所属祖先） */
+                material_uuid?: string[];
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -13652,6 +13663,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Envelope_Any_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

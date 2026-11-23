@@ -168,6 +168,25 @@ describe("UniLabOS 四库 v1 浏览器接口", () => {
     });
   });
 
+  it("建树带树级 placement：省略即 null，给了落位则 site 缺省补 null（命令入口按完整 dump 比对）", async () => {
+    const mock = createMockHttp();
+    const api = createInventoryApi(mock.http);
+    const ok = () => {
+      mock.nextResponse = { status: 200, data: { code: 0, data: { command_id: "c", status: "completed", result: { data: {} } } } };
+    };
+    const nodes = [{ client_ref: "root", identity: { resource_id: "r", name: "r", template_name: "t" } }];
+    ok();
+    await api.createTree({ nodes });
+    ok();
+    await api.createTree({ nodes, placement: { parent_material_uuid: "deck" } });
+    ok();
+    await api.createTree({ nodes, placement: { parent_material_uuid: "deck", site: "A1" } });
+    const [bare, parentOnly, onSite] = mock.calls.map((call) => call.data as { operation: string; payload: unknown });
+    expect(bare).toMatchObject({ operation: "create_material_tree", payload: { nodes, placement: null } });
+    expect(parentOnly!.payload).toEqual({ nodes, placement: { parent_material_uuid: "deck", site: null } });
+    expect(onSite!.payload).toEqual({ nodes, placement: { parent_material_uuid: "deck", site: "A1" } });
+  });
+
   it("库存命令使用 materials.v1 幂等信封；完成信封解出 MutationResult，失败信封抛 InventoryCommandRejectedError", async () => {
     const mock = createMockHttp();
     const api = createInventoryApi(mock.http);

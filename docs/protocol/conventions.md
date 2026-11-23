@@ -351,6 +351,7 @@ GET  /driver-packages/operations/{operation_id} ──轮询（1–2 s）──�
 | `GET /api/v1/events` | `workflow.runtime.changed`（`data.kind`：`task` / `node_run` / `node_job` / `manual_confirmation` / `resource`，原载荷字段保留）、`workflow.authoring.changed`（`data.kind`：`workflow` / `definition`）、`station.error_handling.changed`（`data.station_id`） | `Last-Event-ID`；首连不重放，先发水位帧；显式 `0` 回放保留历史 |
 | 同一 `GET /api/v1/events` | `stream.reset`（`data.reason`：`cursor_ahead` / `cursor_expired`） | 新水位写在 `id`；客户端必须重读 HTTP，不能当成业务变更 |
 | 同一 `GET /api/v1/events` | `runtime.logs.changed` | 瞬时通知，不写 SSE id；重连按 HTTP 日志游标补读（不在 V1 合同里，保持原名） |
+| 同一 `GET /api/v1/events` | `material.changed`（`data`：`{sequence, material_uuids?}`；变更超过 500 条、涉及模板或账本重置时不带 uuid） | 瞬时通知，不写 SSE id；约每秒检查一次账本。OpenLabSite 不监听（物料失效走 `/materials/events`） |
 | `GET /api/v1/materials/events` | `materials.changed`（携带 ledger sequence） | `Last-Event-ID`；首连不重放（不在 V1 合同里，保持原名） |
 
 - 事件名常量：`WORKFLOW_RUNTIME_CHANGED_EVENT` / `WORKFLOW_AUTHORING_CHANGED_EVENT` /

@@ -5326,6 +5326,48 @@
               ],
               "title": "Resource Template Uuid"
             }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "material = 非设备物料；device = 设备",
+              "title": "Category"
+            },
+            "description": "material = 非设备物料；device = 设备"
+          },
+          {
+            "name": "inventory_scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "current | history（离站物料，本后端恒为空）",
+              "default": "current",
+              "title": "Inventory Scope"
+            },
+            "description": "current | history（离站物料，本后端恒为空）"
+          },
+          {
+            "name": "empty_containers_only",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "只要没有任何内容登记的物料",
+              "default": false,
+              "title": "Empty Containers Only"
+            },
+            "description": "只要没有任何内容登记的物料"
           }
         ],
         "responses": {
@@ -5681,6 +5723,35 @@
         ],
         "summary": "Material Graph",
         "operationId": "material_graph_api_v1_materials_graph_get",
+        "parameters": [
+          {
+            "name": "inventory_scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "current | history（本后端恒为空）",
+              "default": "current",
+              "title": "Inventory Scope"
+            },
+            "description": "current | history（本后端恒为空）"
+          },
+          {
+            "name": "material_uuid",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "增量重读：只要这些物料（连同库位所属祖先）",
+              "default": [],
+              "title": "Material Uuid"
+            },
+            "description": "增量重读：只要这些物料（连同库位所属祖先）"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -5688,6 +5759,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Envelope_Any_"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }

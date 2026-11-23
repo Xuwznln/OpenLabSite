@@ -1,5 +1,28 @@
 # Changelog
 
+## 未发布：建树的树级落位；跟上核心的物料改动
+
+对应 Uni-Lab-OS 核心的统一 PLR 物料改动（建树同事务落位、物料 class 改为注册表名、`/api/v1/events` 物料通知、
+V1 物料记录的库存事实与过滤参数）。都是加法，已有页面行为不变。
+
+### 客户端修复
+
+- `inventory.createTree(value)`：核心给 `MaterialTreeCreate` 加了可选的树级 `placement`（根物料在建树的同一事务里
+  落到父物料的库位上）。命令入口按完整 dump 逐字段比对，只发 `{nodes}` 的旧请求会被 1000
+  `mutation.payload differs from the typed request body` 拒绝。现在由新的 `materialTreeCreateWrite()` 补齐：省略即
+  `placement: null`，给了落位则 `site` 缺省补 `null`。新增类型 `MaterialsV1Placement`，`MaterialsV1TreeCreate.placement`。
+
+### OpenAPI 快照
+
+- 重新导出（`info.version` 仍是 0.13.0a2，操作数不变，仍是 355 条）：`GET /api/v1/materials` 多了 `category`、
+  `inventory_scope`、`empty_containers_only`，`GET /api/v1/materials/graph` 多了 `inventory_scope` 与可重复的
+  `material_uuid`（及 422 响应）。这两条都在「暂未采用的 V1 控制台」里，页面不受影响。
+
+### 文档
+
+- `docs/protocol`：`/api/v1/events` 上的 `material.changed`（瞬时、无 id、`{sequence, material_uuids?}`；站点不监听，
+  仍用 `/materials/events`）；物料 `class_name` 是注册表名、PLR 类名在 `config.type`；`createTree` 的 `placement`。
+
 ## 4.0.1：快照对齐 unilabos 0.13.0a2；动作初始参数不再编空值
 
 ### OpenAPI 快照

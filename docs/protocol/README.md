@@ -114,6 +114,7 @@ V1 合同里还有一批浏览器可调用、但 OpenLabSite 目前没有页面�
 | `GET /api/v1/events` | `workflow.runtime.changed`（`data.kind`：`task` / `node_run` / `node_job` / `manual_confirmation` / `resource`）`workflow.authoring.changed` `station.error_handling.changed` | Workflow Authority 变更（V1 事件名，常量 `WORKFLOW_EVENT_NAMES`）；首连不重放（先收到只含 `id` 的水位帧），`Last-Event-ID` 续传，显式 `0` 回放 |
 | 同一 `GET /api/v1/events` | `stream.reset` | 游标过期或超前；`id` 为新水位（可能回退），客户端重读 HTTP |
 | 同一 `GET /api/v1/events` | `runtime.logs.changed` | 日志来源索引；不写 SSE id，重连按 HTTP 日志游标补读 |
+| 同一 `GET /api/v1/events` | `material.changed` | 物料账本推进（瞬时，不写 SSE id）；`data` 是 `{sequence, material_uuids?}`，列不准时省略 uuid。OpenLabSite 不监听，仍用下一行的物料流 |
 | `GET /api/v1/materials/events` | `materials.changed` | 物料账本推进；首连不重放，重连按游标补齐 |
 
 `stores/connection.ts` 为持久数据通知维护 `revision` 计数；日志通知按来源定向重拉，不触发工作流刷新；
