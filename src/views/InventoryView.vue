@@ -2,7 +2,7 @@
 /**
  * 物料工作台：materials.v1 权威的树形浏览与人工操作。
  *
- * - 左侧：根物料（设备 / 台面）→ 子物料树；右侧：选中物料的标识、位点、内容物；
+ * - 左侧：根物料（设备 / 台面）→ 子物料树；右侧：选中物料的标识、自身数据（`data.data`）、位点、内容物；
  * - 操作：出库实例化、移动到位点、跨设备转运、编辑标识、删除；
  * - 下方：库存批次 / 预留 / 变更账本；模板目录按需加载（registry 全量定义体积大）。
  *
@@ -67,6 +67,7 @@ import { aggregatePrecondition, dataWriteWithLink, describeLinkError } from "../
 import { actorTypeLabel } from "../features/actor-type";
 import { describeError } from "../features/errors";
 import { compareMaterialLabels, materialLabel, materialMatches } from "../features/material-label";
+import { materialDataCount, materialDataRows } from "../features/material-data";
 import { createRefreshQueue } from "../features/refresh-queue";
 import { useConnectionStore } from "../stores/connection";
 import { useDomainThemeStore } from "../stores/domain-theme";
@@ -1042,6 +1043,9 @@ const templateColumns: DataTableColumns<MaterialsV1Template> = [
 
 const selectedSite = computed(() => (selected.value ? siteOf(selected.value.material.material_uuid) : null));
 const selectedDevice = computed(() => rootDeviceOf(selected.value));
+/** 物料自身数据（加热样品的温度、孔位 / 枪头的体积…）：嵌套对象缩进展开，不整段贴 JSON。 */
+const selectedDataRows = computed(() => (selected.value ? materialDataRows(selected.value.data.data) : []));
+const selectedDataCount = computed(() => (selected.value ? materialDataCount(selected.value.data.data) : 0));
 </script>
 
 <template>
@@ -1117,7 +1121,7 @@ const selectedDevice = computed(() => rootDeviceOf(selected.value));
           </NSpace>
         </template>
 
-        <NEmpty v-if="!selected" description="在左侧选择一个物料查看标识、位点与内容物" style="padding: 48px 0" />
+        <NEmpty v-if="!selected" description="在左侧选择一个物料查看标识、数据、位点与内容物" style="padding: 48px 0" />
         <template v-else>
           <div class="kv-grid">
             <div class="kv"><span class="k">类型</span><span class="v">{{ selected.material.resource_type }}</span></div>
@@ -1149,6 +1153,22 @@ const selectedDevice = computed(() => rootDeviceOf(selected.value));
             <div class="kv"><span class="k">版本</span><span class="v">v{{ selected.material.version }} · 内容 v{{ selected.data.content_version }}</span></div>
           </div>
           <p v-if="selected.material.description" class="desc">{{ selected.material.description }}</p>
+
+          <div class="section-title">数据（{{ selectedDataCount }}）</div>
+          <div v-if="selectedDataRows.length" class="data-list">
+            <div
+              v-for="row in selectedDataRows"
+              :key="row.path"
+              class="data-row"
+              :class="`data-${row.kind}`"
+              :title="row.path"
+            >
+              <span class="data-key mono" :style="{ paddingLeft: `${row.depth * 14}px` }">{{ row.label }}</span>
+              <code v-if="row.kind === 'json'" class="data-json mono">{{ row.text }}</code>
+              <span v-else class="data-value" :class="{ mono: row.tone === 'number', dim: row.kind === 'group' || row.tone === 'empty' }">{{ row.text }}</span>
+            </div>
+          </div>
+          <p v-else class="dim small">该物料没有自身数据。</p>
 
           <div class="section-title">位点（{{ selected.sites.length }}）</div>
           <NDataTable
@@ -1546,6 +1566,56 @@ const selectedDevice = computed(() => rootDeviceOf(selected.value));
 .child-chip:hover {
   border-color: var(--domain-accent);
   color: var(--domain-accent);
+}
+
+.data-list {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+}
+
+.data-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 38%) minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+  padding: 3px 0;
+  font-size: 12.5px;
+}
+
+.data-row + .data-row {
+  border-top: 1px dashed var(--hairline);
+}
+
+.data-key {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #8b929c;
+}
+
+.data-group .data-key {
+  color: #3d4650;
+  font-weight: 600;
+}
+
+.data-value,
+.data-json {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #101418;
+}
+
+.data-value.dim {
+  color: #8b929c;
+}
+
+.data-json {
+  white-space: pre-wrap;
+  color: #3d4650;
 }
 
 .link {
