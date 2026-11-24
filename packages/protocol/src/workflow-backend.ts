@@ -44,8 +44,16 @@ export const WORKFLOW_RUNTIME_CHANGED_EVENT = "workflow.runtime.changed" as cons
 export const WORKFLOW_AUTHORING_CHANGED_EVENT = "workflow.authoring.changed" as const;
 /** 工站异常处置状态变化（`data.station_id`）。 */
 export const STATION_ERROR_HANDLING_CHANGED_EVENT = "station.error_handling.changed" as const;
-/** 游标超前（`cursor_ahead`）或过期（`cursor_expired`）：id 为新水位，客户端必须重读 REST。 */
+/**
+ * 游标无法续传：id 为新水位，连接保持，客户端必须重读 REST。`/api/v1/events` 与 `/api/v1/materials/events`
+ * 同名同形，原因见 {@link StreamResetReason}。
+ */
 export const STREAM_RESET_EVENT = "stream.reset" as const;
+/**
+ * `stream.reset` 的 `data.reason`：`cursor_ahead` = 游标超过最新序号（两条流）；`cursor_expired` = 游标早于保留窗口
+ * （工作流流）；`epoch_changed` = 游标来自另一个库（物料流，换了数据目录或全量重置）。
+ */
+export type StreamResetReason = "cursor_ahead" | "cursor_expired" | "epoch_changed" | (string & {});
 /** `/api/v1/events` 上全部持久通知事件名（不含无 id 的 `runtime.logs.changed`）。 */
 export const WORKFLOW_EVENT_NAMES = [
   WORKFLOW_RUNTIME_CHANGED_EVENT,

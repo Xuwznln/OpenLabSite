@@ -14,7 +14,8 @@ scope.onconnect = ({ ports }) => {
       return;
     }
     if (data.action === "subscribe") {
-      release = hub.subscribe(data.url, port, data.types, (type, payload) => port.postMessage({ type, payload }));
+      release = hub.subscribe(data.url, port, data.types, (type, payload, lastEventId) =>
+        port.postMessage({ type, payload, lastEventId }));
     }
   };
   port.start();

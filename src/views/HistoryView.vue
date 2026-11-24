@@ -318,6 +318,8 @@ const columns: DataTableColumns<HistoryV1Event> = [
 watch([selectedTypes, deviceFilter], () => void load(true));
 watch(() => conn.online, (online) => online && void load(true));
 watch(() => conn.workflowNoticeRevision, () => void loadNewer());
+// 后端换了一份数据：旧游标对新库无意义（可能超前，追不到新事件），从头重读
+watch(() => conn.resyncRevision, () => void load(true));
 
 onMounted(() => {
   devices.startPolling(15000);

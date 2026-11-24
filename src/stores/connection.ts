@@ -22,8 +22,8 @@ import {
   ApiError,
   createEdgeApi,
   isCapabilityUnavailable,
-  MATERIALS_CHANGED_EVENT,
   RUNTIME_LOG_NOTICE_EVENT,
+  STREAM_RESET_EVENT,
   type EdgeApi,
   type HealthResponse,
   type ReadinessResponse,
@@ -33,6 +33,11 @@ import { readinessView, type ReadinessSupport } from "../features/readiness";
 import { bindWorkflowInvalidations, WORKFLOW_INVALIDATION_EVENT_TYPES } from "../features/workflow-invalidation";
 import { bindDecisionInvalidations, DECISION_INVALIDATION_EVENT_TYPES } from "../features/decision-invalidation";
 import { openNoticeSource, type NoticeSource } from "../features/shared-notice";
+import {
+  bindMaterialsInvalidations,
+  createLedgerEpochTracker,
+  MATERIALS_INVALIDATION_EVENT_TYPES,
+} from "../features/materials-invalidation";
 import { describeError, isOfflineError } from "../features/errors";
 import { classifyTarget } from "../features/insecure-target";
 import type { ConnectionLink } from "../features/connection-link";
@@ -102,17 +107,6 @@ function createNoticeChannel(
   }
 
   return { revision, state, start, stop, signal };
-}
-
-const MATERIALS_INVALIDATION_EVENT = MATERIALS_CHANGED_EVENT;
-
-function bindMaterialsInvalidations(
-  source: NoticeSource,
-  invalidate: () => void,
-): () => void {
-  const listener: EventListener = () => invalidate();
-  source.addEventListener(MATERIALS_INVALIDATION_EVENT, listener);
-  return () => source.removeEventListener(MATERIALS_INVALIDATION_EVENT, listener);
 }
 
 const CONFIGURED_BASE_URL = normalizeBaseUrl(
@@ -218,6 +212,25 @@ export const useConnectionStore = defineStore("connection", () => {
       decisionNoticeRevision.value += 1;
     }, 100);
   }
+  /**
+   * 后端换了一份数据（任一 SSE 流收到 `stream.reset`，或重连后物料流的账本纪元变了）时 +1（去抖 100ms，
+   * 同一次重启的多个信号只算一次）。全部失效通道同时各重读一次；按序号增量维护缓存的页面（运行监控的
+   * 事件流与账本、执行历史）据此清空缓存后整体重读。不刷新整页。
+   */
+  const resyncRevision = ref(0);
+  let resyncDebounce: ReturnType<typeof setTimeout> | null = null;
+  const ledgerEpochs = createLedgerEpochTracker();
+  function resyncAll() {
+    if (resyncDebounce === null) {
+      resyncDebounce = setTimeout(() => {
+        resyncDebounce = null;
+        resyncRevision.value += 1;
+      }, 100);
+    }
+    for (const channel of noticeChannels) channel.signal();
+    signalDecisions();
+    publishLogs({ source_ids: [], sources_changed: true, all_sources: true });
+  }
   const workflowChannel = createNoticeChannel(
     () => api.value.domains.workflowBackend.eventsUrl(),
     (source, invalidate) => {
@@ -230,8 +243,16 @@ export const useConnectionStore = defineStore("connection", () => {
             && typeof notice.sources_changed === "boolean" && typeof notice.all_sources === "boolean") publishLogs(notice);
         } catch { /* 非法通知不当作日志正文；重连会重新校准。 */ }
       };
+      // 工作流库的游标失效（例如换了数据目录）：物料与其他页面同样要重读
+      const reset: EventListener = () => resyncAll();
       source.addEventListener(RUNTIME_LOG_NOTICE_EVENT, logs);
-      return () => { unbind(); unbindDecisions(); source.removeEventListener(RUNTIME_LOG_NOTICE_EVENT, logs); };
+      source.addEventListener(STREAM_RESET_EVENT, reset);
+      return () => {
+        unbind();
+        unbindDecisions();
+        source.removeEventListener(RUNTIME_LOG_NOTICE_EVENT, logs);
+        source.removeEventListener(STREAM_RESET_EVENT, reset);
+      };
     },
     [...WORKFLOW_INVALIDATION_EVENT_TYPES, ...DECISION_INVALIDATION_EVENT_TYPES, RUNTIME_LOG_NOTICE_EVENT],
     () => {
@@ -241,8 +262,8 @@ export const useConnectionStore = defineStore("connection", () => {
   );
   const materialsChannel = createNoticeChannel(
     () => api.value.domains.materialsV1.eventsUrl(),
-    bindMaterialsInvalidations,
-    [MATERIALS_INVALIDATION_EVENT],
+    (source, invalidate) => bindMaterialsInvalidations(source, invalidate, ledgerEpochs, resyncAll),
+    [...MATERIALS_INVALIDATION_EVENT_TYPES],
   );
   const noticeChannels = [workflowChannel, materialsChannel];
 
@@ -400,6 +421,7 @@ export const useConnectionStore = defineStore("connection", () => {
     registryStatusAt = 0;
     readiness.value = null;
     readinessSupport.value = "unknown";
+    ledgerEpochs.clear();
     if (pollTimer === null) return;
     for (const channel of noticeChannels) {
       channel.stop();
@@ -434,6 +456,8 @@ export const useConnectionStore = defineStore("connection", () => {
     decisionNoticeRevision,
     materialsNoticeRevision,
     materialsNoticeState,
+    /** 后端换了一份数据（`stream.reset` / 账本纪元变化）的计数：增量缓存（按序号续读）据此清空后整体重读。 */
+    resyncRevision,
     logsNoticeState: workflowChannel.state,
     onLogNotice,
     api,

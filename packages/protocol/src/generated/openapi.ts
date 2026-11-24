@@ -1984,8 +1984,17 @@ export type paths = {
          *
          *     以 inventory_ledger 的 sequence 为游标推送 ``materials.changed``；
          *     浏览器只把事件当失效信号并回 HTTP 重取，payload 不承载业务正文。
-         *     首连（无 Last-Event-ID）静默追平账本尾部，只推送此后的增量；
-         *     重连带 Last-Event-ID 时从该游标续传，补齐离线期间的变更。
+         *
+         *     - 首连（无 Last-Event-ID）在响应头之前固定账本尾部，先发一个只含 ``id`` 的水位帧，
+         *       只推送此后的增量；
+         *     - 重连带 Last-Event-ID 时从该游标续传，补齐离线期间的变更；
+         *     - 游标无法续传时发 ``stream.reset``（``id`` 为新水位，连接保持，客户端必须重读 HTTP）：
+         *       游标大于账本尾部为 ``cursor_ahead``；游标带的账本纪元与当前库不同（换了数据目录、
+         *       库被重置）为 ``epoch_changed``。
+         *
+         *     SSE id 是 ``<sequence>:<epoch>``（纪元见 ``MaterialsRepository.ledger_epoch``），账本为空时只有
+         *     ``<sequence>``。旧格式的纯数字游标照常接受，只做 ``cursor_ahead`` 检查；续传后发出的 id
+         *     都带纪元，浏览器的 EventSource 自动换成新格式。
          */
         get: operations["events_api_v1_materials_events_get"];
         put?: never;
@@ -13430,6 +13439,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
+                /** @description 不填时只接收新通知；填上次收到的 id（`<sequence>:<epoch>`，或旧格式 `<sequence>`）从其之后续传，无法续传时收到 stream.reset。 */
                 "Last-Event-ID"?: string | null;
             };
             path?: never;

@@ -203,7 +203,7 @@ export const OPERATIONS = [
   { id: "materials-v1.links.upsert", domain: "materials-v1", method: "POST", path: "/api/v1/materials/links", summary: "拓扑边 upsert（幂等）", mutates: true, role: "any" },
   { id: "materials-v1.links.delete", domain: "materials-v1", method: "DELETE", path: "/api/v1/materials/links/{link_uuid}", summary: "删除拓扑边", mutates: true, role: "any" },
   { id: "materials-v1.reservations.by-job", domain: "materials-v1", method: "GET", path: "/api/v1/materials/reservations/by-job/{job_uuid}", summary: "按 Job 读取库存预留", mutates: false, role: "any" },
-  { id: "materials-v1.events", domain: "materials-v1", method: "SSE", path: "/api/v1/materials/events", summary: "materials.changed 失效通知流（Last-Event-ID 续传；不在 V1 合同里，保持原名）", mutates: false, role: "any" },
+  { id: "materials-v1.events", domain: "materials-v1", method: "SSE", path: "/api/v1/materials/events", summary: "materials.changed 失效通知流（Last-Event-ID 续传，id 带账本纪元；游标无法续传时 stream.reset；不在 V1 合同里，保持原名）", mutates: false, role: "any" },
   { id: "materials-v1.executions.list", domain: "materials-v1", method: "GET", path: "/api/v1/materials/executions", summary: "物理动作执行记录", mutates: false, role: "any" },
   { id: "materials-v1.executions.get", domain: "materials-v1", method: "GET", path: "/api/v1/materials/executions/{job_uuid}", summary: "单个作业的物理执行记录", mutates: false, role: "any" },
   { id: "materials-v1.inventory.preview", domain: "materials-v1", method: "POST", path: "/api/v1/materials/inventory/preview", summary: "库存预演（不落账）", mutates: false, role: "any" },

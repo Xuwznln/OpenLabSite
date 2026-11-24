@@ -72,7 +72,7 @@ dev 时代按操作分路由的读写（`/materials/templates`、`/instances`、
 | GET | `/materials/reservations/by-job/{job_uuid}` | `materialsV1.reservationByJob()` | 调度器为作业冻结的库存需求 |
 | GET | `/materials/executions[/{job_uuid}]` | `materialsV1.executions()` / `execution()` | 物理动作执行记录（只读） |
 | POST | `/materials/inventory/preview` | `materialsV1.previewInventory()` | 库存预演（不落账，`mutates: false`） |
-| SSE | `/materials/events` | `materialsV1.eventsUrl()` | `materials.changed` 失效通知（`MATERIALS_CHANGED_EVENT`） |
+| SSE | `/materials/events` | `materialsV1.eventsUrl()` | `materials.changed` 失效通知（`MATERIALS_CHANGED_EVENT`）；游标无法续传时 `stream.reset`（`MATERIALS_EVENT_NAMES`；id 带账本纪元，`materialsEventEpoch()`） |
 
 ## 3. 写接口：`POST /inventory/commands`
 

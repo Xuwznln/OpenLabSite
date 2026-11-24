@@ -352,11 +352,17 @@ GET  /driver-packages/operations/{operation_id} ──轮询（1–2 s）──�
 | 同一 `GET /api/v1/events` | `stream.reset`（`data.reason`：`cursor_ahead` / `cursor_expired`） | 新水位写在 `id`；客户端必须重读 HTTP，不能当成业务变更 |
 | 同一 `GET /api/v1/events` | `runtime.logs.changed` | 瞬时通知，不写 SSE id；重连按 HTTP 日志游标补读（不在 V1 合同里，保持原名） |
 | 同一 `GET /api/v1/events` | `material.changed`（`data`：`{sequence, material_uuids?}`；变更超过 500 条、涉及模板或账本重置时不带 uuid） | 瞬时通知，不写 SSE id；约每秒检查一次账本。OpenLabSite 不监听（物料失效走 `/materials/events`） |
-| `GET /api/v1/materials/events` | `materials.changed`（携带 ledger sequence） | `Last-Event-ID`；首连不重放（不在 V1 合同里，保持原名） |
+| `GET /api/v1/materials/events` | `materials.changed`（携带 ledger sequence） | `Last-Event-ID`；首连不重放，先发水位帧（不在 V1 合同里，保持原名） |
+| 同一 `GET /api/v1/materials/events` | `stream.reset`（`data.reason`：`cursor_ahead` / `epoch_changed`） | 新水位写在 `id`；客户端必须重读 HTTP，不能当成业务变更 |
 
 - 事件名常量：`WORKFLOW_RUNTIME_CHANGED_EVENT` / `WORKFLOW_AUTHORING_CHANGED_EVENT` /
   `STATION_ERROR_HANDLING_CHANGED_EVENT` / `STREAM_RESET_EVENT`（合集 `WORKFLOW_EVENT_NAMES`）、
-  `RUNTIME_LOG_NOTICE_EVENT`、`MATERIALS_CHANGED_EVENT`。dev 时代的 `workflow.task.changed` 等细粒度名不再发出。
+  `RUNTIME_LOG_NOTICE_EVENT`、`MATERIALS_CHANGED_EVENT`（物料流合集 `MATERIALS_EVENT_NAMES`）；重置原因类型
+  `StreamResetReason`。dev 时代的 `workflow.task.changed` 等细粒度名不再发出。
+- 物料流的 SSE id 是 `<sequence>:<epoch>`：纪元是由该库第一条账本记录派生的不透明标识，同一个库不变，换库即变；
+  账本为空时 id 只有 `<sequence>`。重连时纪元对不上（`epoch_changed`）或序号超过账本末尾（`cursor_ahead`）都收到
+  `stream.reset`。账本序号读 `data.sequence`，不要解析 id；需要纪元时用 `materialsEventEpoch(lastEventId)`。
+  旧格式的纯数字 `Last-Event-ID` 照常续传，只做 `cursor_ahead` 检查。
 - 事件**只是失效通知**：正文不含业务数据（`data.kind` 只用于粗分，页面不得据此跳过 HTTP 重读）。
 - 没有 SSE 的域按 3–8 s 轮询，页面可见性恢复时立即刷新。
 - 实时日志页复用 `/events`，收到来源索引后有界增量读取；空闲不查询，隐藏/暂停不读取。

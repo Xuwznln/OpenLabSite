@@ -8,7 +8,8 @@
  *
  * 管理 API 不鉴权：请求不带任何令牌。
  *
- * 读路径：每个域的列表接口都要 2xx + 信封 code 0，且形状符合类型的关键字段。
+ * 读路径：每个域的列表接口都要 2xx + 信封 code 0，且形状符合类型的关键字段。物料 SSE 首连有带账本纪元的水位帧，
+ * 超前或来自另一个库的游标收到 `stream.reset`。
  * --write：写请求不需要令牌；逐步 / V1 暂停任务；Workflow 定义增删；
  * 库存命令出库一件物料、改条码、移动到空位点、删除，被拒命令是失败信封（InventoryCommandRejectedError）；
  * 对在线设备提交一个 always_free 动作并等待任务终态。
@@ -341,6 +342,72 @@ await step("inventory.instances(roots) / relations / lots / reservations / ledge
   }
   return `ledger_seq=${health.ledger_sequence} roots=${roots.length} all=${all.length} relations=${relations.relations.length} links=${relations.links.length} lots=${lots.length} reservations=${reservations.reservations.length} ledger=${ledger.length} contents=${contents.length} classes=${classes.length}`;
 });
+/** 读一条 SSE 直到 `until(帧列表)` 为真或超时；帧是 `{id?, event?, data?}`，注释帧不计。 */
+async function readSse(url, headers, until, timeoutMs = 4000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const frames = [];
+  try {
+    const stream = await fetch(url, { headers, signal: controller.signal });
+    if (!stream.ok || !stream.headers.get("content-type")?.includes("text/event-stream")) {
+      throw new Error(`SSE 不可用: ${stream.status}`);
+    }
+    const reader = stream.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (!until(frames)) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const blocks = buffer.split("\n\n");
+      buffer = blocks.pop() ?? "";
+      for (const block of blocks) {
+        const frame = {};
+        for (const line of block.split("\n")) {
+          const match = /^(id|event|data): ?(.*)$/.exec(line);
+          if (match) frame[match[1]] = match[2];
+        }
+        if (Object.keys(frame).length) frames.push(frame);
+      }
+    }
+    await reader.cancel().catch(() => {});
+  } catch (error) {
+    if (!controller.signal.aborted) throw error;
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
+  return frames;
+}
+
+await step("materialsV1.events: 水位帧（id 带账本纪元）与 stream.reset（cursor_ahead / epoch_changed）", async () => {
+  const url = api.materialsV1.eventsUrl();
+  const watermark = (await readSse(url, {}, (frames) => frames.some((frame) => frame.id !== undefined)))
+    .find((frame) => frame.id !== undefined && frame.event === undefined);
+  if (!watermark) throw new Error("首连没有只含 id 的水位帧");
+  const match = /^(\d+)(?::([0-9A-Za-z_-]+))?$/.exec(watermark.id);
+  if (!match) throw new Error(`水位 id 不是 <sequence>[:<epoch>]：${watermark.id}`);
+  const sequence = Number(match[1]);
+  const epoch = match[2] ?? null;
+  const resetOf = async (lastEventId) => {
+    const frames = await readSse(url, { "Last-Event-ID": lastEventId }, (items) => items.some((frame) => frame.event === "stream.reset"));
+    const reset = frames.find((frame) => frame.event === "stream.reset");
+    if (!reset) throw new Error(`Last-Event-ID ${lastEventId} 没有收到 stream.reset`);
+    return { id: reset.id, reason: JSON.parse(reset.data ?? "{}").reason };
+  };
+  const ahead = await resetOf(epoch ? `${sequence + 1000}:${epoch}` : String(sequence + 1000));
+  if (ahead.reason !== "cursor_ahead") throw new Error(`超前游标的 reason 应为 cursor_ahead，实际 ${ahead.reason}`);
+  // 另一个库的游标：纪元对不上，即使序号落在账本范围内也要重置
+  const foreign = await resetOf(`${Math.min(sequence, 1)}:smoke-foreign-epoch`);
+  if (foreign.reason !== "epoch_changed") throw new Error(`外库游标的 reason 应为 epoch_changed，实际 ${foreign.reason}`);
+  // 重置帧的 id 是新水位（重读期间账本可能前进，不早于首连水位）
+  for (const reset of [ahead, foreign]) {
+    const at = /^(\d+)/.exec(reset.id ?? "");
+    if (!at || Number(at[1]) < sequence) throw new Error(`重置帧 id 不是新水位：${reset.id}`);
+  }
+  return `水位 ${watermark.id} · 超前 → ${ahead.reason}（id ${ahead.id}）· 外库 → ${foreign.reason}`;
+});
+
 await step("inventory.templates (heavy, on-demand)", async () => {
   const started = Date.now();
   const templates = await api.inventory.templates({ includeDefinition: true });

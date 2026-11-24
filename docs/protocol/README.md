@@ -115,9 +115,12 @@ V1 合同里还有一批浏览器可调用、但 OpenLabSite 目前没有页面�
 | 同一 `GET /api/v1/events` | `stream.reset` | 游标过期或超前；`id` 为新水位（可能回退），客户端重读 HTTP |
 | 同一 `GET /api/v1/events` | `runtime.logs.changed` | 日志来源索引；不写 SSE id，重连按 HTTP 日志游标补读 |
 | 同一 `GET /api/v1/events` | `material.changed` | 物料账本推进（瞬时，不写 SSE id）；`data` 是 `{sequence, material_uuids?}`，列不准时省略 uuid。OpenLabSite 不监听，仍用下一行的物料流 |
-| `GET /api/v1/materials/events` | `materials.changed` | 物料账本推进；首连不重放，重连按游标补齐 |
+| `GET /api/v1/materials/events` | `materials.changed` | 物料账本推进；首连不重放（先收到只含 `id` 的水位帧），重连按游标补齐。id 是 `<sequence>:<账本纪元>`（空账本只有 `<sequence>`），常量合集 `MATERIALS_EVENT_NAMES` |
+| 同一 `GET /api/v1/materials/events` | `stream.reset` | 游标超前于账本（`cursor_ahead`）或来自另一个库（`epoch_changed`：换了数据目录、全量重置）；`id` 为新水位，客户端重读 HTTP |
 
 `stores/connection.ts` 为持久数据通知维护 `revision` 计数；日志通知按来源定向重拉，不触发工作流刷新；
+任一流的 `stream.reset`，或物料流 id 里的账本纪元与上次不同，说明后端换了一份数据：`resyncRevision` +1，全部通道各重读
+一次（去抖合并，不刷新整页），按序号增量缓存的页面（运行监控、执行历史）清空后整体重读；
 `station.error_handling.changed` 单独计数，只让人工决策面板重读动作异常与干预（通知流断开时退回轮询）。没有 SSE
 的域（telemetry / runtime / 状态告警 / device-processes）按 3–8 秒轮询，可见性恢复时立即刷新。
 Host 子进程启动 / 重启期间 Host 专有路由返回 HTTP 200 + 信封 5001 + `Retry-After`：GET 由传输层有限退避重试，
