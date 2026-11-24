@@ -12,6 +12,9 @@
 import { computed, ref, watch } from "vue";
 import { Handle, Position, VueFlow, useVueFlow, type Edge, type Node } from "@vue-flow/core";
 import { Background } from "@vue-flow/background";
+// Vue Flow 的基础样式随画布组件加载：任务详情可以直接打开或刷新，不能依赖先进过编排器（它也导入同一份）。
+import "@vue-flow/core/dist/style.css";
+import "@vue-flow/core/dist/theme-default.css";
 import dagre from "@dagrejs/dagre";
 import { compoundLayoutEdges } from "../features/compound-layout";
 import type {
