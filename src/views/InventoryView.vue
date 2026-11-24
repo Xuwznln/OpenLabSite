@@ -68,6 +68,7 @@ import { actorTypeLabel } from "../features/actor-type";
 import { describeError } from "../features/errors";
 import { compareMaterialLabels, materialLabel, materialMatches } from "../features/material-label";
 import { materialDataCount, materialDataRows } from "../features/material-data";
+import { recentLedger } from "../features/ledger-tail";
 import { createRefreshQueue } from "../features/refresh-queue";
 import { useConnectionStore } from "../stores/connection";
 import { useDomainThemeStore } from "../stores/domain-theme";
@@ -265,7 +266,8 @@ const refresh = createRefreshQueue(async () => {
     api.instances(),
     api.lots(),
     api.reservations(),
-    api.ledger(0, 300),
+    // 最近 300 条（ledger(0, 300) 是最早的 300 条）
+    recentLedger(api, 300),
   ]);
   if (api !== conn.api.domains.inventory) {
     loading.value = false;

@@ -16,6 +16,7 @@ import {
 import type { BackendWorkflowNodeJob, BackendWorkflowTask } from "@openlab/protocol";
 import EntityRef from "../components/EntityRef.vue";
 import { actorTypeLabel } from "../features/actor-type";
+import { recentLedger } from "../features/ledger-tail";
 import { ACTIVE_JOB_STATUSES, declaredTimeoutS, describeNodeJob, describeTask, parseIsoMs } from "../features/task-jobs";
 import { useSchedulerStore } from "../stores/scheduler";
 
@@ -173,7 +174,8 @@ async function resync() {
   try {
     const [states, materialChanges, historyEvents, backendEvents] = await Promise.all([
       conn.api.domains.telemetryV1.states(),
-      conn.api.domains.inventory.ledger(0, 500),
+      // 最近 500 条：ledger(0, 500) 是最早的 500 条，账本长了之后新变更不会出现
+      recentLedger(conn.api.domains.inventory, 500),
       conn.api.domains.historyV1.events({ limit: 500 }),
       conn.api.domains.runtimeV1.backendEvents({ limit: 500 }).catch(() => []),
       sched.refresh(),
