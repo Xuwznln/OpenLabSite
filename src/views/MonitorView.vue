@@ -16,6 +16,7 @@ import {
 import type { BackendWorkflowNodeJob, BackendWorkflowTask } from "@openlab/protocol";
 import EntityRef from "../components/EntityRef.vue";
 import { actorTypeLabel } from "../features/actor-type";
+import { recentLedger } from "../features/ledger-tail";
 import { ACTIVE_JOB_STATUSES, declaredTimeoutS, describeNodeJob, describeTask, parseIsoMs } from "../features/task-jobs";
 import { useSchedulerStore } from "../stores/scheduler";
 
@@ -173,7 +174,8 @@ async function resync() {
   try {
     const [states, materialChanges, historyEvents, backendEvents] = await Promise.all([
       conn.api.domains.telemetryV1.states(),
-      conn.api.domains.inventory.ledger(0, 500),
+      // 最近 500 条：ledger(0, 500) 是最早的 500 条，账本长了之后新变更不会出现
+      recentLedger(conn.api.domains.inventory, 500),
       conn.api.domains.historyV1.events({ limit: 500 }),
       conn.api.domains.runtimeV1.backendEvents({ limit: 500 }).catch(() => []),
       sched.refresh(),
@@ -350,15 +352,24 @@ onUnmounted(() => {
   if (resyncDebounce) clearTimeout(resyncDebounce);
 });
 
-watch(
-  () => conn.baseUrl,
-  () => {
-    seenSeqs.clear();
-    feeds.material.length = feeds.action.length = feeds.scheduler.length = 0;
-    devices.clear();
-    void resync();
-  },
-);
+/**
+ * 换了后端，或后端换了一份数据（`conn.resyncRevision`：stream.reset / 账本纪元变化）：事件去重键与账本游标都按
+ * 旧库的序号记，新库的序号会与它们重叠或更小，必须清空后整体重读，否则新事件被当成「已见过」而不显示。
+ */
+function resetFeeds() {
+  seenSeqs.clear();
+  feeds.material.length = feeds.action.length = feeds.scheduler.length = 0;
+  devices.clear();
+  ledgerEntries.value = [];
+  ledgerCursor = 0;
+  ledgerPendingHint.value = false;
+  ledgerLoadedOnce = false;
+  void resync();
+  if (materialView.value === "ledger") void loadLedger();
+}
+
+watch(() => conn.baseUrl, resetFeeds);
+watch(() => conn.resyncRevision, resetFeeds);
 
 // 物料失效通知到达时立即同步（走去抖合并，通知不可用时由周期轮询兜底）
 watch(

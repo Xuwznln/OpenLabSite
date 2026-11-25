@@ -27,6 +27,17 @@ describe("跨标签页通知连接", () => {
     closeA(); closeB();
   });
 
+  it("带 SSE id 的事件把 lastEventId 一并转发（物料流据此比对账本纪元）", () => {
+    const { hub, sources } = fixture();
+    const a = vi.fn();
+    const close = hub.subscribe("http://backend/materials/events", {}, ["materials.changed", "stream.reset"], a);
+    sources[0].dispatchEvent(new MessageEvent("materials.changed", { data: "{}", lastEventId: "42:aaaa" }));
+    expect(a).toHaveBeenLastCalledWith("materials.changed", "{}", "42:aaaa");
+    sources[0].dispatchEvent(new MessageEvent("stream.reset", { data: "{\"reason\":\"epoch_changed\"}", lastEventId: "7:bbbb" }));
+    expect(a).toHaveBeenLastCalledWith("stream.reset", "{\"reason\":\"epoch_changed\"}", "7:bbbb");
+    close();
+  });
+
   it("同地址只建一次连接，广播给所有页面，最后一个离开才关闭", () => {
     const { hub, sources, create } = fixture();
     const a = vi.fn(), b = vi.fn();

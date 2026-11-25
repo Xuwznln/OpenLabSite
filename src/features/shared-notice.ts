@@ -25,10 +25,10 @@ export function openNoticeSource(url: string, types: string[]): NoticeSource {
       window.removeEventListener("pagehide", source.close);
     },
   });
-  worker.port.onmessage = ({ data: { type, payload } }) => {
+  worker.port.onmessage = ({ data: { type, payload, lastEventId } }) => {
     if (type === "open") source.onopen?.(new Event("open"));
     else if (type === "error") source.onerror?.(new Event("error"));
-    else source.dispatchEvent(new MessageEvent(type, { data: payload }));
+    else source.dispatchEvent(new MessageEvent(type, { data: payload, lastEventId: lastEventId ?? "" }));
   };
   worker.onerror = () => source.onerror?.(new Event("error"));
   worker.port.start();

@@ -1,5 +1,45 @@
 # Changelog
 
+## 未发布：建树的树级落位；跟上核心的物料改动；物料流的游标重置
+
+对应 Uni-Lab-OS 核心的统一 PLR 物料改动（建树同事务落位、物料 class 改为注册表名、`/api/v1/events` 物料通知、
+V1 物料记录的库存事实与过滤参数），以及物料 SSE 的游标重置。都是加法，已有页面行为不变。
+
+### 物料流的游标重置（`/api/v1/materials/events`）
+
+后端换了数据目录后，浏览器带着旧的 `Last-Event-ID` 重连：旧游标超前于新账本时流一直不发事件，只靠这条流的页面
+不再更新；新账本已经长过旧游标时则从另一个库的历史中途续传。核心现在与 `/api/v1/events` 一致：
+
+- 首连先发只含 `id` 的水位帧；
+- id 改为 `<sequence>:<epoch>`，纪元由该库第一条账本记录派生，同一个库不变，换库即变；空账本只有 `<sequence>`；
+- 无法续传时发 `stream.reset`（`data.reason`：`cursor_ahead` / `epoch_changed`），`id` 为新水位，连接保持。
+
+旧客户端不用改：浏览器原样回传 id；不监听 `stream.reset` 的页面也会从这一帧拿到新水位，之后的 `materials.changed`
+照常到达。纯数字 `Last-Event-ID` 照常续传，只做 `cursor_ahead` 检查。需要账本序号读 `data.sequence`，不要解析 id。
+
+- 新增 `MATERIALS_EVENT_NAMES`（`materials.changed`、`stream.reset`）、`materialsEventEpoch(lastEventId)`、
+  `StreamResetReason`（`cursor_ahead` / `cursor_expired` / `epoch_changed`）；`STREAM_RESET_EVENT` 的说明覆盖两条流。
+- live smoke 新增一步：物料流首连的水位帧、超前游标 → `cursor_ahead`、外库游标 → `epoch_changed`。
+- OpenAPI 快照重新导出：只有 `GET /api/v1/materials/events` 的说明与 `Last-Event-ID` 描述变化，操作数不变。
+
+### 客户端修复
+
+- `inventory.createTree(value)`：核心给 `MaterialTreeCreate` 加了可选的树级 `placement`（根物料在建树的同一事务里
+  落到父物料的库位上）。命令入口按完整 dump 逐字段比对，只发 `{nodes}` 的旧请求会被 1000
+  `mutation.payload differs from the typed request body` 拒绝。现在由新的 `materialTreeCreateWrite()` 补齐：省略即
+  `placement: null`，给了落位则 `site` 缺省补 `null`。新增类型 `MaterialsV1Placement`，`MaterialsV1TreeCreate.placement`。
+
+### OpenAPI 快照
+
+- 重新导出（`info.version` 仍是 0.13.0a2，操作数不变，仍是 355 条）：`GET /api/v1/materials` 多了 `category`、
+  `inventory_scope`、`empty_containers_only`，`GET /api/v1/materials/graph` 多了 `inventory_scope` 与可重复的
+  `material_uuid`（及 422 响应）。这两条都在「暂未采用的 V1 控制台」里，页面不受影响。
+
+### 文档
+
+- `docs/protocol`：`/api/v1/events` 上的 `material.changed`（瞬时、无 id、`{sequence, material_uuids?}`；站点不监听，
+  仍用 `/materials/events`）；物料 `class_name` 是注册表名、PLR 类名在 `config.type`；`createTree` 的 `placement`。
+
 ## 4.0.1：快照对齐 unilabos 0.13.0a2；动作初始参数不再编空值
 
 ### OpenAPI 快照

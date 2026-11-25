@@ -21,6 +21,7 @@ import {
 import { createDeviceProcessesApi } from "../src/device-processes";
 import { createDriverPackagesApi } from "../src/driver-packages";
 import { createLabV1Api } from "../src/lab-v1";
+import { MATERIALS_EVENT_NAMES, materialsEventEpoch } from "../src/materials-v1";
 import { createProcessManagementApi } from "../src/process-management";
 import { catalogOps, collectCalls, createMockHttp, DUMMY_ID } from "./helpers";
 
@@ -319,6 +320,15 @@ describe("system 协议与传输层", () => {
     expect(api.health).toBe(api.domains.system.health);
     expect(api.domains.workflowBackend.eventsUrl()).toBe("http://edge.local/api/v1/events");
     expect(api.domains.materialsV1.eventsUrl()).toBe("http://edge.local/api/v1/materials/events");
+    expect(MATERIALS_EVENT_NAMES).toEqual(["materials.changed", "stream.reset"]);
+  });
+
+  it("物料流 SSE id 的账本纪元：`<sequence>:<epoch>` 取纪元，纯数字或空值没有纪元", () => {
+    expect(materialsEventEpoch("42:3f9c0a1b7d2e4c55")).toBe("3f9c0a1b7d2e4c55");
+    expect(materialsEventEpoch(" 0:abc ")).toBe("abc");
+    for (const value of ["42", "0", "", null, undefined, "x:abc", "42:", ":abc", "42:ab cd"]) {
+      expect(materialsEventEpoch(value), String(value)).toBeNull();
+    }
   });
 
   it("覆盖 driver-packages 域全部 HTTP 操作，install 缺省 enable=true / upgrade=false", async () => {

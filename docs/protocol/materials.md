@@ -25,6 +25,8 @@ dev 时代按操作分路由的读写（`/materials/templates`、`/instances`、
   `parent_material_uuid` `name` `display_name` `resource_type` `class_name`
   `template_uuid` `template_name` `machine_name` `barcode` `lifecycle_status`
   （`active reserved in_use quarantined consumed retired`）`version`。
+- `class_name` 是初始化这个物料用的注册表名（注册表资源名，与 `template_name` 相同；设备是注册表设备名；没有注册表
+  条目的子节点如孔位是 PLR 类名）。PyLabRobot 类名在 `config.type`。页面把 `class_name` 显示为「registry 类」。
 - **`name` 恒等于 `material_uuid`**（所有物料，包括设备；核心 2026-11-17 起，与 V1 有意不同），不是给人看的名字。
   人读标签是 `display_name`（孔位是 ordering 标识如 `A1`；权威保证非空，缺省依次回退旧名、PLR 键、`resource_id`），
   PyLabRobot 树里用的名字（PLR 键）在 `config.name`，唯一的人可读键是 `resource_id`（显示名可以重名）。
@@ -70,7 +72,7 @@ dev 时代按操作分路由的读写（`/materials/templates`、`/instances`、
 | GET | `/materials/reservations/by-job/{job_uuid}` | `materialsV1.reservationByJob()` | 调度器为作业冻结的库存需求 |
 | GET | `/materials/executions[/{job_uuid}]` | `materialsV1.executions()` / `execution()` | 物理动作执行记录（只读） |
 | POST | `/materials/inventory/preview` | `materialsV1.previewInventory()` | 库存预演（不落账，`mutates: false`） |
-| SSE | `/materials/events` | `materialsV1.eventsUrl()` | `materials.changed` 失效通知（`MATERIALS_CHANGED_EVENT`） |
+| SSE | `/materials/events` | `materialsV1.eventsUrl()` | `materials.changed` 失效通知（`MATERIALS_CHANGED_EVENT`）；游标无法续传时 `stream.reset`（`MATERIALS_EVENT_NAMES`；id 带账本纪元，`materialsEventEpoch()`） |
 
 ## 3. 写接口：`POST /inventory/commands`
 
@@ -114,7 +116,7 @@ dev 变更的正文仍是 `InventoryMutation`（materials.v1 幂等信封），�
 | SDK（`inventory.*`） | operation | payload |
 | --- | --- | --- |
 | `instantiate(registryClass, displayName, barcode?)` | `instantiate_material` | `{registry_class, display_name, barcode?}` → 微后端按 registry 实例化并落库（显示名同时作 PLR 根名，缺省派生 `resource_id`），返回整棵树 |
-| `createTree(value)` | `create_material_tree` | `{nodes[]}` parent-first、恰一个根；节点 identity / position / data / sites 带全字段 |
+| `createTree(value)` | `create_material_tree` | `{nodes[], placement}` parent-first、恰一个根；节点 identity / position / data / sites 带全字段；`placement`（`{parent_material_uuid, site}`，SDK 缺省补 `null`）让根物料在建树的同一事务里落到父物料的库位上，规则同 move，不满足时整棵树回滚 |
 | `patch(uuid, value)` | `patch_material` + `target_uuid` | `display_name` / 条码 / 描述 / lifecycle_status 等标识字段；未改的字段显式 `null`；`MaterialPatch` 没有 `name`（= uuid，不可改） |
 | `putData(uuid, value)` | `put_data` + `target_uuid` | 整份替换 `substances[]` / `data` / `sites_initialized` / 状态（漏传即回缺省）；内容物只带可写字段 |
 | `putPosition(uuid, value)` | `put_position` + `target_uuid` | 位置 / 尺寸整份替换 |

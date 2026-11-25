@@ -81,7 +81,10 @@ in the diagnostics page.
 HTTP is the only source of truth. Two SSE streams (`/api/v1/events`,
 `/api/v1/materials/events`) carry invalidation notices; stores re-read HTTP on each notice
 and on a slow poll. Reconnection needs no replay: runtime jobs, telemetry latest state,
-history events and materials aggregates are all durable projections.
+history events and materials aggregates are all durable projections. When a cursor cannot be
+resumed (`stream.reset` on either stream), or the materials ledger epoch in the SSE id changes
+after a reconnect, the backend holds different data: every store re-reads once, and pages that
+keep sequence-based caches (monitor, history) drop them first. Nothing reloads the page.
 
 ## Build Graph
 

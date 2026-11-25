@@ -12,10 +12,11 @@
  *   成功回执仍是 `MutationResult`；
  * - 本域只保留 dev 独有的 `/api/v1/materials/*` 路由：物料树、按 resource_id 读取、registry
  *   资源类目录、拓扑边维护、设备通知、按 Job 读预留、物理动作结算读与库存预演，以及
- *   `materials.changed` SSE。调度器专用的预留状态机、快照对齐与执行结算写属于控制面。
+ *   `materials.changed` SSE（游标无法续传时发 `stream.reset`）。调度器专用的预留状态机、快照对齐与执行结算写属于控制面。
  */
 import type { ChemicalSummary } from "./chemicals-v1.js";
 import type { HttpTransport, JsonObject, JsonValue } from "./common.js";
+import { STREAM_RESET_EVENT } from "./workflow-backend.js";
 
 export interface MaterialsV1TemplateHandle {
   key: string;
@@ -280,9 +281,20 @@ export interface MaterialsV1NodeCreate {
   sites?: MaterialsV1SiteCreate[];
 }
 
-/** 一棵待创建的物料树：parent-first，恰好一个根。 */
+/**
+ * 新建根物料的落位（`MaterialPlacement`）：挂到哪个父物料、占它的哪个库位，与建树在同一事务里提交。
+ * `site` 是父物料上的库位选择器（Site uuid、label 或数字索引）；省略 / `null` 只落父子关系、不占库位。
+ * 落位规则与 move 相同（库位占用、模板类别、入口预留、设备子树只收 PLR 物料），不满足时整棵树一起回滚。
+ */
+export interface MaterialsV1Placement {
+  parent_material_uuid: string;
+  site?: string | number | null;
+}
+
+/** 一棵待创建的物料树：parent-first，恰好一个根；`placement` 省略 / `null` 时根物料不挂任何父物料。 */
 export interface MaterialsV1TreeCreate {
   nodes: MaterialsV1NodeCreate[];
+  placement?: MaterialsV1Placement | null;
 }
 
 /** 标识字段局部更新；`name`（= uuid）不可修改，改人读标签用 `display_name`。 */
@@ -558,6 +570,21 @@ export function materialsMutation<TPayload>(
 
 /** `/api/v1/materials/events` 的失效通知事件名（不在 V1 合同里，保持原名）。 */
 export const MATERIALS_CHANGED_EVENT = "materials.changed" as const;
+/**
+ * `/api/v1/materials/events` 上全部有名事件：账本前进的 {@link MATERIALS_CHANGED_EVENT}，以及游标无法续传时的
+ * {@link STREAM_RESET_EVENT}（`data.reason` 为 `cursor_ahead` / `epoch_changed`，id 为新水位，客户端整体重读 HTTP）。
+ */
+export const MATERIALS_EVENT_NAMES = [MATERIALS_CHANGED_EVENT, STREAM_RESET_EVENT] as const;
+
+/**
+ * 物料流 SSE id（`<sequence>:<epoch>`）里的账本纪元；没有纪元（账本为空时的 `<sequence>`、旧后端的纯数字 id）
+ * 返回 null。纪元是不透明标识：同一个库不变，换了库（新的数据目录、全量重置）就变。账本序号请读
+ * `data.sequence`，不要解析 id。
+ */
+export function materialsEventEpoch(lastEventId: string | null | undefined): string | null {
+  const match = /^\d+:([0-9A-Za-z_-]+)$/.exec((lastEventId ?? "").trim());
+  return match ? match[1]! : null;
+}
 
 /** 物理动作执行记录（materials.db material_execution）；字段随执行协议演进，前端只读展示。 */
 export type MaterialsV1Execution = JsonObject;
@@ -602,8 +629,8 @@ export function createMaterialsV1Api(http: HttpTransport) {
       http.request<JsonObject>({ method: "POST", path: `${base}/inventory/preview`, body }),
 
     /**
-     * SSE GET /api/v1/materials/events —— ledger sequence 游标流（Last-Event-ID 续传），
-     * 事件名 {@link MATERIALS_CHANGED_EVENT}。事件仅作失效通知，正文始终重新经 HTTP 读取。
+     * SSE GET /api/v1/materials/events —— ledger sequence 游标流（Last-Event-ID 续传，id 带账本纪元），
+     * 事件名见 {@link MATERIALS_EVENT_NAMES}。事件仅作失效通知，正文始终重新经 HTTP 读取。
      */
     eventsUrl: () => http.url(`${base}/events`),
   };
